@@ -1,0 +1,19 @@
+/node_modules
+/.next/
+/out/
+/build
+*.tsbuildinfo
+next-env.d.ts
+
+# env files — the example is committed as documentation
+.env*
+!.env.example
+
+# local database — runtime data, never in the repo
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-*
+
+*.log
+.DS_Store
