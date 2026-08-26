@@ -41,8 +41,9 @@ to final quality release. Arabic RTL UI, English data values.
 أو يدويًا:
 
 ```bash
+cp .env.example .env        # ملف الاعدادات — غير موجود في git
 npm install
-npx prisma migrate dev      # ينشئ prisma/dev.db
+npx prisma migrate deploy   # ينشئ prisma/dev.db
 npm run seed                # بيانات تجريبية تغطي كل المراحل (اختياري)
 npm run dev                 # http://localhost:3001
 ```
