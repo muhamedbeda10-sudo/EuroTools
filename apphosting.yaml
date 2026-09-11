@@ -1,0 +1,111 @@
+# Firebase App Hosting — runtime and build configuration.
+#
+# App Hosting builds this repository and runs it on Cloud Run. Every route in
+# this app is server-rendered on demand and the write paths are Server Actions,
+# so a static export is not an option and plain Firebase Hosting cannot serve
+# it. App Hosting is the product that can.
+#
+# Nothing secret belongs in this file. It is committed. Secrets are held in
+# Cloud Secret Manager and referenced by name below.
+#
+# See README.md → "النشر على Firebase App Hosting" for the one-time setup this
+# file assumes.
+
+runConfig:
+  # The shop floor should never wait for a cold start. Scaling to zero would
+  # save a little money and cost an inspector fifteen seconds in front of a
+  # machine, several times a shift.
+  minInstances: 1
+
+  # This ceiling is not arbitrary: it is half of the Prisma connection budget.
+  # Each instance opens up to `connection_limit` connections (set in
+  # DATABASE_URL, 5), so 10 instances can hold 50 at once. Keep
+  # maxInstances × connection_limit comfortably under the Cloud SQL tier's
+  # max_connections — the smallest shared-core tiers allow far fewer than you
+  # would expect. Raise both together, never one alone.
+  maxInstances: 10
+
+  concurrency: 80
+
+  cpu: 1
+  # Next.js with Prisma does not sit comfortably in 512 MiB.
+  memoryMiB: 1024
+
+  # ── Cloud SQL over private IP ──────────────────────────────────────────────
+  # Uncomment once the VPC exists, and fill in the network and subnetwork. Use
+  # direct VPC egress rather than a serverless connector: it is cheaper and has
+  # no VM to pay for.
+  #
+  # Note that VPC access is a *runtime* capability. The build step cannot reach
+  # a private-IP database, which is why migrations are a separate, deliberate
+  # step rather than something the build does — see the README.
+  #
+  # vpcAccess:
+  #   egress: PRIVATE_RANGES_ONLY
+  #   networkInterfaces:
+  #     - network: projects/PROJECT_ID/global/networks/default
+  #       subnetwork: projects/PROJECT_ID/regions/europe-west1/subnetworks/default
+
+env:
+  # ── Database ───────────────────────────────────────────────────────────────
+  # RUNTIME only, deliberately. The build was verified to succeed with no
+  # DATABASE_URL present at all, so the database credential never needs to
+  # enter the build environment.
+  #
+  # Create the secret with:
+  #   firebase apphosting:secrets:set qc-database-url
+  # and give the backend access with:
+  #   firebase apphosting:secrets:grantaccess qc-database-url --backend BACKEND_ID
+  #
+  # The value must carry `connection_limit`; see maxInstances above:
+  #   postgresql://USER:PASSWORD@PRIVATE_IP:5432/eurotools?schema=public&connection_limit=5&sslmode=require
+  - variable: DATABASE_URL
+    secret: qc-database-url
+    availability:
+      - RUNTIME
+
+  # ── Firebase Authentication, browser side ──────────────────────────────────
+  # These are not secrets. They name the project; they grant nothing. Every
+  # authorisation decision is made on the server against the User table.
+  #
+  # They are read by `next build` and inlined into the browser bundle, so they
+  # need BUILD availability — a RUNTIME-only value would reach the container
+  # and still leave the bundle holding `undefined`.
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: REPLACE_WITH_WEB_API_KEY
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: REPLACE_WITH_PROJECT_ID.firebaseapp.com
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: REPLACE_WITH_PROJECT_ID
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # ── Firebase Authentication, server side ───────────────────────────────────
+  # The Admin SDK takes its credentials from the Cloud Run runtime service
+  # account, so there is no key file. That service account needs the Service
+  # Account Token Creator role on itself, because minting a session cookie is a
+  # signing operation — without it, sign-in fails at the last step with a
+  # permission error. The README has the command.
+  - variable: FIREBASE_PROJECT_ID
+    value: REPLACE_WITH_PROJECT_ID
+    availability:
+      - RUNTIME
+
+  # ── Display ────────────────────────────────────────────────────────────────
+  # Read at build time and inlined, so changing it needs a rebuild, not a
+  # restart. The container's own clock is UTC; this is what dates are rendered
+  # in.
+  - variable: NEXT_PUBLIC_QC_TIME_ZONE
+    value: Africa/Cairo
+    availability:
+      - BUILD
+      - RUNTIME

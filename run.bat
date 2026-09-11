@@ -39,20 +39,20 @@ if not exist ".env" (
   )
 )
 
-rem No database file means the migrations have never been applied.
-if not exist "prisma\dev.db" (
-  echo Database not found - preparing it now...
-  call npx prisma migrate deploy
-  if errorlevel 1 (
-    echo [ERROR] Could not prepare the database - see the messages above.
-    pause
-    exit /b 1
-  )
-  echo.
-  echo The database is empty. Load demo data to try every stage?
-  echo WARNING: this wipes any data already in the database.
-  choice /c YN /n /m "Press Y to load or N to skip: "
-  if not errorlevel 2 call npm run seed
+rem The database is PostgreSQL now, so there is no local file to look for.
+rem `migrate deploy` is idempotent: it applies whatever is outstanding and does
+rem nothing when there is nothing to apply, so it is safe on every start.
+rem
+rem Seeding is deliberately NOT offered here. It wipes every table, and a
+rem prompt that appears each time the app starts is a prompt somebody will
+rem eventually answer wrongly on a live database. Run `npm run seed` by hand.
+echo Applying any outstanding database migrations...
+call npx prisma migrate deploy
+if errorlevel 1 (
+  echo [ERROR] Could not reach the database.
+  echo         Check DATABASE_URL in .env and that PostgreSQL is running.
+  pause
+  exit /b 1
 )
 
 rem A folder called .next is not enough - a valid build has BUILD_ID inside it.
