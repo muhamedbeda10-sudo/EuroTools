@@ -7,6 +7,7 @@ import {
   optionalNumber,
   optionalString,
   pct,
+  safeNextPath,
   todayInputValue,
   triState,
 } from "./format";
@@ -123,5 +124,51 @@ describe("form parsers", () => {
     expect(triState("")).toBeNull();
     expect(triState(null)).toBeNull();
     expect(triState("maybe")).toBeNull();
+  });
+});
+
+describe("safeNextPath", () => {
+  it("keeps a path inside the application, query string and all", () => {
+    expect(safeNextPath("/parts/42")).toBe("/parts/42");
+    expect(safeNextPath("/reports?stage=FINAL")).toBe("/reports?stage=FINAL");
+  });
+
+  it("refuses anything that could leave the origin", () => {
+    for (const hostile of [
+      "//evil.test",
+      "/\\evil.test",
+      "https://evil.test",
+      "http://evil.test",
+      "javascript:alert(1)",
+      "evil.test",
+      "../admin",
+    ])
+      expect(safeNextPath(hostile)).toBe("/");
+  });
+
+  it("refuses control characters used to smuggle a second line", () => {
+    // Built from char codes so this file stays free of the very characters it
+    // is testing for.
+    const ch = (code: number) => String.fromCharCode(code);
+    expect(safeNextPath("/parts" + ch(10) + "/../..")).toBe("/");
+    expect(safeNextPath("/parts" + ch(13) + ch(10) + "Location: https://evil.test")).toBe("/");
+    expect(safeNextPath("/parts" + ch(0))).toBe("/");
+    expect(safeNextPath("/parts" + ch(127))).toBe("/");
+  });
+
+  it("refuses the login page itself so a redirect cannot loop", () => {
+    expect(safeNextPath("/login")).toBe("/");
+    expect(safeNextPath("/login?next=/login")).toBe("/");
+  });
+
+  it("falls back for a missing, empty or non-string value", () => {
+    expect(safeNextPath(null)).toBe("/");
+    expect(safeNextPath(undefined)).toBe("/");
+    expect(safeNextPath("")).toBe("/");
+    expect(safeNextPath("   ")).toBe("/");
+  });
+
+  it("uses the fallback it was given", () => {
+    expect(safeNextPath("//evil.test", "/queue")).toBe("/queue");
   });
 });

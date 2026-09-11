@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/server/auth";
 import {
   analysisStatus,
   measurementResult,
@@ -9,8 +10,23 @@ import {
 } from "@/lib/domain/inspection";
 import { PART_STAGES, STAGE_DEFS, type Stage } from "@/lib/domain/stages";
 
+/** Every function below opens with this.
+ *
+ *  `proxy.ts` is an optimistic filter — it looks at whether a session cookie
+ *  exists, not at whether it is genuine — so a forged cookie gets past it. The
+ *  guard belongs next to the data, where it also covers any page written
+ *  later without anyone having to remember to add it. A signed-out caller is
+ *  redirected rather than shown an error, so the check costs nothing in
+ *  usability.
+ *
+ *  It is memoised for the render pass, so a page calling two of these still
+ *  resolves the session once.
+ */
+
 /** Everything the dashboard shows, in one pass. */
 export async function getDashboard() {
+  await requireUser();
+
   const [lots, parts, inspections] = await Promise.all([
     prisma.lot.findMany({
       include: { material: true, certificates: true, analyses: true },
@@ -75,6 +91,8 @@ export async function getDashboard() {
 }
 
 export async function getLots() {
+  await requireUser();
+
   const lots = await prisma.lot.findMany({
     include: {
       material: true,
@@ -92,6 +110,8 @@ export async function getLots() {
 }
 
 export async function getLot(id: number) {
+  await requireUser();
+
   const lot = await prisma.lot.findUnique({
     where: { id },
     include: {
@@ -117,6 +137,8 @@ export async function getLot(id: number) {
 }
 
 export async function getParts(filter?: { stage?: Stage; status?: string }) {
+  await requireUser();
+
   const parts = await prisma.part.findMany({
     where: {
       ...(filter?.stage ? { currentStage: filter.stage } : {}),
@@ -137,6 +159,8 @@ export async function getParts(filter?: { stage?: Stage; status?: string }) {
 }
 
 export async function getPart(id: number) {
+  await requireUser();
+
   const part = await prisma.part.findUnique({
     where: { id },
     include: {
@@ -158,6 +182,8 @@ export async function getPart(id: number) {
 
 /** Parts standing in each part-stage queue, waiting to be inspected. */
 export async function getQueues() {
+  await requireUser();
+
   const parts = await prisma.part.findMany({
     where: { status: { in: ["IN_PROCESS", "REWORK", "HOLD"] } },
     include: { material: true, lot: { select: { lotNumber: true } } },
@@ -171,6 +197,8 @@ export async function getQueues() {
 }
 
 export async function getMaterials() {
+  await requireUser();
+
   return prisma.material.findMany({
     include: {
       features: { orderBy: { sortOrder: "asc" } },
@@ -181,6 +209,8 @@ export async function getMaterials() {
 }
 
 export async function getMaterial(id: number) {
+  await requireUser();
+
   return prisma.material.findUnique({
     where: { id },
     include: { features: { orderBy: [{ stage: "asc" }, { sortOrder: "asc" }] } },
@@ -188,11 +218,15 @@ export async function getMaterial(id: number) {
 }
 
 export async function getSuppliers() {
+  await requireUser();
+
   return prisma.supplier.findMany({ orderBy: { name: "asc" } });
 }
 
 /** Rejection / rework analysis used by the reports page. */
 export async function getQualityReport() {
+  await requireUser();
+
   const inspections = await prisma.inspection.findMany({
     include: {
       checks: true,
@@ -260,6 +294,8 @@ export async function getQualityReport() {
 
 /** Re-derive an analysis verdict from its readings (used after an edit). */
 export async function recomputeAnalysisStatus(analysisId: number) {
+  await requireUser();
+
   const analysis = await prisma.analysis.findUnique({
     where: { id: analysisId },
     include: { results: true },

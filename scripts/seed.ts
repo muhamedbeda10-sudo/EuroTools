@@ -34,11 +34,65 @@ async function main() {
   await prisma.materialFeature.deleteMany();
   await prisma.material.deleteMany();
   await prisma.supplier.deleteMany();
+  await prisma.user.deleteMany();
 
-  // The id columns are AUTOINCREMENT, so SQLite keeps counting up across wipes
-  // and every re-seed would hand out new ids — and new URLs. Reset the
-  // counters so seeding twice gives exactly the same database.
-  await prisma.$executeRawUnsafe("DELETE FROM sqlite_sequence");
+  // Postgres sequences keep counting up across wipes, so every re-seed would
+  // hand out new ids — and new URLs. Restarting them makes seeding twice give
+  // exactly the same database. The table list is explicit rather than
+  // discovered, so adding a model is a deliberate edit here too.
+  for (const table of [
+    "User",
+    "Supplier",
+    "Material",
+    "MaterialFeature",
+    "Lot",
+    "Certificate",
+    "Analysis",
+    "AnalysisResult",
+    "Part",
+    "PartEvent",
+    "Inspection",
+    "CheckResult",
+    "Measurement",
+  ])
+    await prisma.$executeRawUnsafe(
+      `ALTER SEQUENCE "${table}_id_seq" RESTART WITH 1`
+    );
+
+  // ── the people the demo history is signed by ──
+  //
+  // Seeded inactive and with synthetic Firebase UIDs on purpose: this is
+  // historical data, not a set of accounts anyone can sign in with. Create the
+  // real first account with `npm run create-admin`.
+  const STAFF = [
+    { displayName: "م. هالة فؤاد", email: "hala@example.invalid", role: "INSPECTOR" },
+    { displayName: "م. كريم عادل", email: "karim@example.invalid", role: "INSPECTOR" },
+    { displayName: "م. أحمد سالم", email: "ahmed@example.invalid", role: "INSPECTOR" },
+    { displayName: "م. طارق سليم", email: "tarek@example.invalid", role: "SUPERVISOR" },
+    { displayName: "م. منى رشاد", email: "mona@example.invalid", role: "QUALITY_MANAGER" },
+  ] as const;
+
+  const staff = new Map<string, number>();
+  for (const person of STAFF) {
+    const row = await prisma.user.create({
+      data: {
+        firebaseUid: `seed:${person.email}`,
+        email: person.email,
+        displayName: person.displayName,
+        role: person.role,
+        active: false,
+      },
+    });
+    staff.set(person.displayName, row.id);
+  }
+
+  /** The id behind a demo inspector's name. Throws rather than guessing: a
+   *  typo here would otherwise seed a record signed by nobody. */
+  const uid = (name: string): number => {
+    const id = staff.get(name);
+    if (id == null) throw new Error(`seed: unknown inspector "${name}"`);
+    return id;
+  };
 
   const [bohler, dorrenberg] = await Promise.all([
     prisma.supplier.create({
@@ -304,6 +358,7 @@ async function main() {
       data: {
         stage: "RAW_RECEIVING",
         lotId,
+        inspectorId: uid(inspector),
         inspector,
         inspectedAt: at,
         status: verdict,
@@ -323,6 +378,7 @@ async function main() {
       method: "Spectro",
       performedAt: daysAgo(20),
       performedBy: "معمل التحاليل",
+      recordedById: uid("م. منى رشاد"),
       results: {
         create: [
           { property: "C %", requiredMin: 1.45, requiredMax: 1.6, actual: 1.52, unit: "%", sortOrder: 0 },
@@ -352,6 +408,7 @@ async function main() {
       method: "Spectro",
       performedAt: daysAgo(8),
       performedBy: "معمل التحاليل",
+      recordedById: uid("م. منى رشاد"),
       status: "PENDING",
       results: {
         create: [
@@ -396,6 +453,8 @@ async function main() {
         stage: "POST_ROUGHING",
         toValue: "POST_ROUGHING/IN_PROCESS",
         note: `صدر من التشغيلة ${lotA.lotNumber}`,
+        actorId: uid("م. طارق سليم"),
+        actor: "م. طارق سليم",
         at: daysAgo(18),
       },
     });
@@ -454,6 +513,7 @@ async function main() {
         data: {
           stage: step.stage,
           partId: part.id,
+          inspectorId: uid(step.inspector),
           inspector: step.inspector,
           inspectedAt: step.at,
           status: verdict,
@@ -487,6 +547,7 @@ async function main() {
           fromValue: `${currentStage}/${status}`,
           toValue: `${transition.stage}/${transition.status}`,
           note: `${def.ar} — ${verdict}`,
+          actorId: uid(step.inspector),
           actor: step.inspector,
           at: step.at,
         },

@@ -7,6 +7,7 @@ import { PrintButton } from "@/components/PrintButton";
 import { Card, Empty, Kv, PageHeader, StatusPill } from "@/components/ui";
 import { returnPartToQueue, submitPartInspection } from "@/lib/server/actions";
 import { getPart } from "@/lib/server/queries";
+import { requireUser } from "@/lib/server/auth";
 import { canInspect, measurementResult } from "@/lib/domain/inspection";
 import { GROUP_LABELS, PART_STAGES, stageDef, type Stage } from "@/lib/domain/stages";
 import { fmtDate, fmtDateTime, fmtNum, fmtTolerance, pct } from "@/lib/format";
@@ -14,6 +15,7 @@ import { fmtDate, fmtDateTime, fmtNum, fmtTolerance, pct } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
+  const user = await requireUser();
   const { id } = await params;
   const part = await getPart(Number(id));
   if (!part) notFound();
@@ -160,6 +162,7 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
                 stage={stage}
                 action={submitPartInspection}
                 hiddenFields={{ partId: part.id, stage }}
+                signatory={{ displayName: user.displayName, role: user.role }}
                 features={features}
                 hardnessRange={
                   stage === "HEAT_TREATMENT"
@@ -205,7 +208,6 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
                     submitClassName="btn-primary"
                   >
                     <input type="hidden" name="partId" value={part.id} />
-                    <input className="input" name="actor" placeholder="الاسم (اختياري)" />
                   </ActionForm>
                 </div>
               )}

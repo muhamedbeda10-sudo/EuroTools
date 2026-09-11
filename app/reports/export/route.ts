@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/server/auth";
 import { measurementResult } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
 
@@ -16,6 +17,11 @@ function cell(value: unknown): string {
 /** One row per checklist answer and per measurement, so the export can be
  *  pivoted in Excel without going back to the app. */
 export async function GET() {
+  // This route reads straight from Prisma rather than through `queries.ts`, so
+  // it carries its own guard. The whole quality history leaves the building in
+  // one file here.
+  await requireUser();
+
   const inspections = await prisma.inspection.findMany({
     orderBy: { inspectedAt: "desc" },
     include: {

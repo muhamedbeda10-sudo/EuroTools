@@ -4,17 +4,62 @@
 // Heat Treatment → Visual + Hardness → Grinding → Post-Grinding Inspection →
 // Finishing → Final Inspection + CMM → Final Quality Release.
 //
-// SQLite has no native enums, so stage/status are strings constrained by the
-// domain layer (`lib/domain/stages.ts`) — the single source of truth for the
-// allowed values and for every checklist label.
+// Stage, status and role are stored as strings constrained by the domain layer
+// (`lib/domain/stages.ts`, `lib/domain/roles.ts`) rather than by native Postgres
+// enums. The domain layer stays the single source of truth for the allowed
+// values and for every checklist label, and re-wording a vocabulary entry never
+// needs a schema migration.
+//
+// All timestamps are `timestamptz` so an auditor querying the database directly
+// reads the same instant the application recorded, whatever the server locale.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── people ─────────────────────────
+
+/// A person allowed to sign records.
+///
+/// Firebase Authentication proves *who* someone is; this table decides *what
+/// they may do*. Authorisation is read from here on every request, so clearing
+/// `active` locks an account out immediately instead of waiting for a token to
+/// expire. `role` is validated against `lib/domain/roles.ts`.
+///
+/// Accounts are created by an administrator — there is no self sign-up — and a
+/// user is never deleted, only deactivated. Every record they signed keeps
+/// pointing at them, which is the whole point of an audit trail.
+model User {
+  id          Int     @id @default(autoincrement())
+  /// The Firebase Authentication UID; the only link to the identity provider.
+  firebaseUid String  @unique
+  email       String  @unique
+  displayName String
+  /// ADMIN | QUALITY_MANAGER | SUPERVISOR | INSPECTOR | VIEWER
+  role        String
+  /// Badge or payroll number, printed on inspection reports.
+  employeeNo  String?
+  active      Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// Which administrator opened the account. Granting someone the authority to
+  /// release parts is itself an auditable act.
+  createdById  Int?
+  createdBy    User?  @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdUsers User[] @relation("UserCreatedBy")
+
+  inspections      Inspection[]
+  analysesRecorded Analysis[]
+  partEvents       PartEvent[]
+
+  @@index([role, active])
 }
 
 // ───────────────────────── catalog ─────────────────────────
@@ -25,7 +70,7 @@ model Supplier {
   code      String?
   contact   String?
   notes     String?
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
   lots      Lot[]
 }
 
@@ -53,7 +98,7 @@ model Material {
   /// Roughing allowance that must remain for the later stages (mm).
   roughingAllowance Float?
 
-  createdAt DateTime          @default(now())
+  createdAt DateTime          @default(now()) @db.Timestamptz(3)
   features  MaterialFeature[]
   lots      Lot[]
   parts     Part[]
@@ -96,7 +141,7 @@ model Lot {
   supplierId Int?
   supplier   Supplier? @relation(fields: [supplierId], references: [id])
 
-  receivedAt  DateTime @default(now())
+  receivedAt  DateTime @default(now()) @db.Timestamptz(3)
   poNumber    String?
   heatNumber  String?
   receivedQty Float
@@ -106,7 +151,7 @@ model Lot {
   status String  @default("PENDING")
   notes  String?
 
-  createdAt    DateTime      @default(now())
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
   certificates Certificate[]
   analyses     Analysis[]
   inspections  Inspection[]
@@ -121,7 +166,7 @@ model Certificate {
   lot      Lot       @relation(fields: [lotId], references: [id], onDelete: Cascade)
   type     String // Mill Test Certificate / Heat Treatment / RoHS …
   number   String?
-  issuedAt DateTime?
+  issuedAt DateTime? @db.Timestamptz(3)
   received Boolean   @default(false)
   verified Boolean   @default(false)
   notes    String?
@@ -136,8 +181,15 @@ model Analysis {
   lot         Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
   sampleRef   String
   method      String? // Spectro / Tensile / Hardness / Metallography
-  performedAt DateTime @default(now())
+  performedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// Who physically ran the test. May be an outside laboratory, so it stays
+  /// free text and is deliberately not an account.
   performedBy String?
+
+  /// Who entered the result into the system. Always an account: this is the
+  /// person the audit trail holds answerable for the record.
+  recordedById Int
+  recordedBy   User @relation(fields: [recordedById], references: [id], onDelete: Restrict)
 
   /// PENDING | ACCEPTED | REJECTED
   status      String  @default("PENDING")
@@ -148,6 +200,7 @@ model Analysis {
   results AnalysisResult[]
 
   @@index([lotId])
+  @@index([recordedById])
 }
 
 model AnalysisResult {
@@ -188,8 +241,8 @@ model Part {
   /// IN_PROCESS | REWORK | RELEASED | REJECTED | HOLD
   status       String @default("IN_PROCESS")
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
   inspections Inspection[]
   events      PartEvent[]
 
@@ -201,16 +254,22 @@ model PartEvent {
   id        Int      @id @default(autoincrement())
   partId    Int
   part      Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
-  at        DateTime @default(now())
+  at        DateTime @default(now()) @db.Timestamptz(3)
   /// INSPECTION | STAGE_ADVANCED | STATUS_CHANGE | CREATED
   kind      String
   stage     String?
   fromValue String?
   toValue   String?
   note      String?
-  actor     String?
+
+  /// Who caused the event. The relation is the audit link; `actor` is the name
+  /// snapshotted at the time, so the trail stays readable after a rename.
+  actorId   Int
+  actorUser User   @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actor     String
 
   @@index([partId])
+  @@index([actorId])
 }
 
 /// One filled-in checklist. Raw-material stages hang off `lot`, part stages
@@ -223,8 +282,15 @@ model Inspection {
   lotId  Int?
   lot    Lot?   @relation(fields: [lotId], references: [id], onDelete: Cascade)
 
-  inspector   String
-  inspectedAt DateTime @default(now())
+  /// Who signed this inspection. The relation proves identity; `inspector` is
+  /// the name snapshotted at signing time so a later rename cannot rewrite a
+  /// record that is already signed — the same reason the hardness window below
+  /// is snapshotted.
+  inspectorId   Int
+  inspectorUser User   @relation(fields: [inspectorId], references: [id], onDelete: Restrict)
+  inspector     String
+
+  inspectedAt DateTime @default(now()) @db.Timestamptz(3)
   /// PENDING | ACCEPTED | REWORK | REJECTED | FURTHER_INVESTIGATION | RELEASED
   status      String   @default("PENDING")
   notes       String?
@@ -248,6 +314,7 @@ model Inspection {
   @@index([stage, status])
   @@index([partId])
   @@index([lotId])
+  @@index([inspectorId])
 }
 
 /// One line of the stage checklist. `key` resolves to the AR/EN label in

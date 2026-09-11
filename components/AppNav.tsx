@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { ThemeToggle } from "./ThemeToggle";
+import { ROLE_LABELS, can, type Role } from "@/lib/domain/roles";
+import { endSession } from "@/lib/server/session-actions";
 
 const LINKS = [
   { href: "/", label: "لوحة المتابعة" },
@@ -14,9 +16,20 @@ const LINKS = [
   { href: "/reports", label: "التقارير" },
 ];
 
-export function AppNav() {
+export interface NavUser {
+  displayName: string;
+  role: Role;
+}
+
+export function AppNav({ user }: { user: NavUser }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+
+  // Hiding a link the account cannot use is a courtesy, not a control: the
+  // page behind it checks the same permission again on the server.
+  const links = can(user.role, "user.manage")
+    ? [...LINKS, { href: "/admin/users", label: "المستخدمون" }]
+    : LINKS;
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -35,7 +48,7 @@ export function AppNav() {
         </Link>
 
         <nav className="hidden flex-1 items-center gap-1 md:flex">
-          {LINKS.map((l) => (
+          {links.map((l) => (
             <Link
               key={l.href}
               href={l.href}
@@ -51,6 +64,17 @@ export function AppNav() {
         </nav>
 
         <div className="ms-auto flex items-center gap-2 md:ms-0">
+          <div className="hidden text-end leading-tight sm:block">
+            <div className="text-sm font-semibold">{user.displayName}</div>
+            <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].ar}</div>
+          </div>
+
+          <form action={endSession}>
+            <button type="submit" className="btn" title="تسجيل الخروج">
+              خروج
+            </button>
+          </form>
+
           <ThemeToggle />
           <button
             type="button"
@@ -65,7 +89,7 @@ export function AppNav() {
 
       {open && (
         <nav className="grid gap-1 border-t border-[var(--border)] px-4 py-2 md:hidden">
-          {LINKS.map((l) => (
+          {links.map((l) => (
             <Link
               key={l.href}
               href={l.href}

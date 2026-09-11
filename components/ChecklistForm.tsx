@@ -17,8 +17,16 @@ import {
   type Stage,
   type Status,
 } from "@/lib/domain/stages";
+import { ROLE_LABELS, can, verdictPermission, type Role } from "@/lib/domain/roles";
 import { fmtNum, fmtTolerance } from "@/lib/format";
 import type { ActionResult } from "@/lib/server/actions";
+
+/** The account that will sign this sheet. Resolved on the server and passed
+ *  down, never typed. */
+export interface Signatory {
+  displayName: string;
+  role: Role;
+}
 
 export interface FeatureRow {
   id: number;
@@ -50,6 +58,7 @@ export function ChecklistForm({
   stage,
   action,
   hiddenFields,
+  signatory,
   features = [],
   hardnessRange,
   requiredRa,
@@ -58,6 +67,7 @@ export function ChecklistForm({
   stage: Stage;
   action: (formData: FormData) => Promise<ActionResult>;
   hiddenFields: Record<string, string | number>;
+  signatory: Signatory;
   features?: FeatureRow[];
   hardnessRange?: { min: number | null; max: number | null; unit: string };
   requiredRa?: number | null;
@@ -103,6 +113,24 @@ export function ChecklistForm({
       }),
     [stage, checks, specs, hardness, hardnessRange]
   );
+
+  // Which verdicts this account may actually file, decided by the same pure
+  // rules the action re-applies on submit. Showing a choice that would be
+  // refused on the server wastes a filled-in sheet.
+  const selectable = useMemo(
+    () =>
+      def.outcomes.filter((o) =>
+        can(signatory.role, verdictPermission(o, verdict.suggested))
+      ),
+    [def.outcomes, signatory.role, verdict.suggested]
+  );
+
+  // Anything beyond agreeing with the suggestion is an override.
+  const canOverride = selectable.some((o) => o !== verdict.suggested);
+
+  // A selection can stop being available when the answers change the
+  // suggestion underneath it; fall back rather than post something stale.
+  const effectiveOverride = selectable.includes(override as Status) ? override : "";
 
   const hv = hardnessRange
     ? hardnessVerdict(
@@ -350,8 +378,8 @@ export function ChecklistForm({
       <div className="rounded-[var(--radius-sm)] border border-[var(--border-strong)] bg-[var(--surface-2)] p-3">
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <span className="text-sm font-bold">النتيجة النهائية</span>
-          <StatusPill status={override || verdict.suggested} />
-          {override && (
+          <StatusPill status={effectiveOverride || verdict.suggested} />
+          {effectiveOverride && (
             <span className="pill pill-warn">تم تجاوز الاقتراح يدويًا</span>
           )}
         </div>
@@ -368,23 +396,37 @@ export function ChecklistForm({
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label">الحالة (اتركها فارغة لاعتماد الاقتراح)</label>
-            <select
-              className="select"
-              name="status"
-              value={override}
-              onChange={(e) => setOverride(e.target.value)}
-            >
-              <option value="">— اعتماد الاقتراح ({STATUS_LABELS[verdict.suggested].ar}) —</option>
-              {def.outcomes.map((o: Status) => (
-                <option key={o} value={o}>
-                  {STATUS_LABELS[o].ar}
+            {canOverride ? (
+              <select
+                className="select"
+                name="status"
+                value={effectiveOverride}
+                onChange={(e) => setOverride(e.target.value)}
+              >
+                <option value="">
+                  — اعتماد الاقتراح ({STATUS_LABELS[verdict.suggested].ar}) —
                 </option>
-              ))}
-            </select>
+                {selectable.map((o: Status) => (
+                  <option key={o} value={o}>
+                    {STATUS_LABELS[o].ar}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="rounded-lg bg-[var(--surface)] px-3 py-2 text-sm text-[var(--muted)]">
+                يُسجَّل الفحص بالنتيجة المحسوبة: {STATUS_LABELS[verdict.suggested].ar}. تغييرها
+                يحتاج صلاحية أعلى.
+              </p>
+            )}
           </div>
           <div>
-            <label className="label">اسم الفاحص</label>
-            <input className="input" name="inspector" required placeholder="الاسم" />
+            <label className="label">الفاحص الموقِّع</label>
+            <p className="rounded-lg bg-[var(--surface)] px-3 py-2 text-sm font-semibold">
+              {signatory.displayName}
+              <span className="ms-2 font-normal text-[var(--muted)]">
+                ({ROLE_LABELS[signatory.role].ar})
+              </span>
+            </p>
           </div>
         </div>
 

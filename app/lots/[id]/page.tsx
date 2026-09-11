@@ -13,6 +13,7 @@ import {
   submitLotInspection,
 } from "@/lib/server/actions";
 import { getLot } from "@/lib/server/queries";
+import { requireUser } from "@/lib/server/auth";
 import { canRaiseParts } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
 import { fmtDate, fmtDateTime, fmtNum } from "@/lib/format";
@@ -20,6 +21,7 @@ import { fmtDate, fmtDateTime, fmtNum } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
+  const user = await requireUser();
   const { id } = await params;
   const lot = await getLot(Number(id));
   if (!lot) notFound();
@@ -139,6 +141,7 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
           stage="RAW_RECEIVING"
           action={submitLotInspection}
           hiddenFields={{ lotId: lot.id }}
+          signatory={{ displayName: user.displayName, role: user.role }}
         />
       </Card>
 

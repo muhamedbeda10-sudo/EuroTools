@@ -14,6 +14,8 @@ import {
   type MeasurementSpec,
 } from "@/lib/domain/inspection";
 import { isStage, stageDef, type Stage, type Status } from "@/lib/domain/stages";
+import { verdictPermission } from "@/lib/domain/roles";
+import { requirePermission } from "@/lib/server/auth";
 import { optionalNumber, optionalString, triState } from "@/lib/format";
 
 export interface ActionResult {
@@ -22,9 +24,21 @@ export interface ActionResult {
   info?: string;
 }
 
+/** Every action below opens with `requirePermission`. That call is the real
+ *  authorisation boundary — `proxy.ts` only keeps signed-out traffic off the
+ *  pages, and a hidden button is not a control. A denial is returned rather
+ *  than thrown so it reaches the operator as the form's error line, the same
+ *  way every other failure in this app does.
+ *
+ *  Identity is read from the session too, never from the submitted form. A
+ *  signature the client could type is not a signature. */
+
 // ───────────────────────── catalog ─────────────────────────
 
 export async function saveMaterial(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("material.manage");
+  if (!auth.ok) return auth;
+
   const partNumber = String(formData.get("partNumber") ?? "").trim();
   if (!partNumber) return { ok: false, error: "رقم الجزء مطلوب." };
 
@@ -59,6 +73,9 @@ export async function saveMaterial(formData: FormData): Promise<ActionResult> {
 }
 
 export async function addFeature(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("material.manage");
+  if (!auth.ok) return auth;
+
   const materialId = optionalNumber(formData.get("materialId"));
   const stage = String(formData.get("stage") ?? "");
   const name = String(formData.get("name") ?? "").trim();
@@ -102,6 +119,9 @@ export async function addFeature(formData: FormData): Promise<ActionResult> {
 }
 
 export async function deleteFeature(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("material.manage");
+  if (!auth.ok) return auth;
+
   const id = optionalNumber(formData.get("id"));
   if (!id) return { ok: false, error: "معرّف غير صالح." };
   const feature = await prisma.materialFeature.findUnique({ where: { id } });
@@ -112,6 +132,9 @@ export async function deleteFeature(formData: FormData): Promise<ActionResult> {
 }
 
 export async function saveSupplier(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("supplier.manage");
+  if (!auth.ok) return auth;
+
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { ok: false, error: "اسم المورد مطلوب." };
   const existing = await prisma.supplier.findUnique({ where: { name } });
@@ -131,6 +154,9 @@ export async function saveSupplier(formData: FormData): Promise<ActionResult> {
 // ────────────────── 1 · raw material receiving ──────────────────
 
 export async function receiveLot(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("lot.receive");
+  if (!auth.ok) return auth;
+
   const lotNumber = String(formData.get("lotNumber") ?? "").trim();
   const materialId = optionalNumber(formData.get("materialId"));
   const receivedQty = optionalNumber(formData.get("receivedQty"));
@@ -179,6 +205,9 @@ export async function receiveLot(formData: FormData): Promise<ActionResult> {
 }
 
 export async function setCertificate(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("lot.certificate.manage");
+  if (!auth.ok) return auth;
+
   const id = optionalNumber(formData.get("id"));
   if (!id) return { ok: false, error: "معرّف غير صالح." };
   const cert = await prisma.certificate.findUnique({ where: { id } });
@@ -198,6 +227,9 @@ export async function setCertificate(formData: FormData): Promise<ActionResult> 
 }
 
 export async function addCertificate(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("lot.certificate.manage");
+  if (!auth.ok) return auth;
+
   const lotId = optionalNumber(formData.get("lotId"));
   const type = String(formData.get("type") ?? "").trim();
   if (!lotId || !type) return { ok: false, error: "نوع الشهادة مطلوب." };
@@ -211,6 +243,9 @@ export async function addCertificate(formData: FormData): Promise<ActionResult> 
 // ──────────────────── 2 · raw material analysis ────────────────────
 
 export async function createAnalysis(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("analysis.record");
+  if (!auth.ok) return auth;
+
   const lotId = optionalNumber(formData.get("lotId"));
   const sampleRef = String(formData.get("sampleRef") ?? "").trim();
   if (!lotId || !sampleRef) return { ok: false, error: "مرجع العينة مطلوب." };
@@ -237,7 +272,10 @@ export async function createAnalysis(formData: FormData): Promise<ActionResult> 
       lotId,
       sampleRef,
       method: optionalString(formData.get("method")),
+      // Who ran the test may be an outside laboratory; who is answerable for
+      // the record is always the account that entered it.
       performedBy: optionalString(formData.get("performedBy")),
+      recordedById: auth.user.id,
       status: "PENDING",
       results: { create: results },
     },
@@ -248,6 +286,9 @@ export async function createAnalysis(formData: FormData): Promise<ActionResult> 
 }
 
 export async function saveAnalysisResults(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("analysis.record");
+  if (!auth.ok) return auth;
+
   const analysisId = optionalNumber(formData.get("analysisId"));
   if (!analysisId) return { ok: false, error: "معرّف غير صالح." };
 
@@ -304,10 +345,15 @@ function readChecks(stage: Stage, formData: FormData) {
 }
 
 export async function submitLotInspection(formData: FormData): Promise<ActionResult> {
+  // A first gate before touching the database, so an account with no business
+  // here cannot use this action to find out which lots exist. The verdict is
+  // gated again below, once we know what it is.
+  const entry = await requirePermission("inspection.submit");
+  if (!entry.ok) return entry;
+  const inspector = entry.user.displayName;
+
   const lotId = optionalNumber(formData.get("lotId"));
-  const inspector = String(formData.get("inspector") ?? "").trim();
   if (!lotId) return { ok: false, error: "معرّف التشغيلة غير صالح." };
-  if (!inspector) return { ok: false, error: "اسم الفاحص مطلوب." };
 
   const lot = await prisma.lot.findUnique({
     where: { id: lotId },
@@ -321,16 +367,22 @@ export async function submitLotInspection(formData: FormData): Promise<ActionRes
   const suggestion = rollup({ stage, checks: checkMap });
 
   const chosen = String(formData.get("status") ?? "").trim();
-  const status: Status =
-    chosen && stageDef(stage).outcomes.includes(chosen as Status)
-      ? (chosen as Status)
-      : suggestion.suggested;
+  // A verdict the stage does not allow is refused outright. Quietly falling
+  // back to the suggestion would file a record saying something the inspector
+  // did not choose.
+  if (chosen !== "" && !stageDef(stage).outcomes.includes(chosen as Status))
+    return { ok: false, error: "حالة غير مسموح بها في هذه المرحلة." };
+  const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
+
+  const auth = await requirePermission(verdictPermission(status, suggestion.suggested));
+  if (!auth.ok) return auth;
 
   await prisma.$transaction([
     prisma.inspection.create({
       data: {
         stage,
         lotId,
+        inspectorId: auth.user.id,
         inspector,
         status,
         notes: optionalString(formData.get("notes")),
@@ -351,13 +403,17 @@ export async function submitLotInspection(formData: FormData): Promise<ActionRes
 }
 
 export async function submitPartInspection(formData: FormData): Promise<ActionResult> {
+  // See `submitLotInspection`: a floor check first, then the verdict-specific
+  // one once the verdict is known.
+  const entry = await requirePermission("inspection.submit");
+  if (!entry.ok) return entry;
+  const inspector = entry.user.displayName;
+
   const partId = optionalNumber(formData.get("partId"));
   const stageRaw = String(formData.get("stage") ?? "");
-  const inspector = String(formData.get("inspector") ?? "").trim();
 
   if (!partId) return { ok: false, error: "معرّف الجزء غير صالح." };
   if (!isStage(stageRaw)) return { ok: false, error: "مرحلة غير معروفة." };
-  if (!inspector) return { ok: false, error: "اسم الفاحص مطلوب." };
 
   const stage = stageRaw as Stage;
   const def = stageDef(stage);
@@ -415,10 +471,16 @@ export async function submitPartInspection(formData: FormData): Promise<ActionRe
   const suggestion = rollup({ stage, checks: checkMap, measurements: specs, hardness });
 
   const chosen = String(formData.get("status") ?? "").trim();
-  const status: Status =
-    chosen && def.outcomes.includes(chosen as Status)
-      ? (chosen as Status)
-      : suggestion.suggested;
+  // A verdict the stage does not allow is refused outright rather than quietly
+  // replaced by the suggestion — see `submitLotInspection`.
+  if (chosen !== "" && !def.outcomes.includes(chosen as Status))
+    return { ok: false, error: "حالة غير مسموح بها في هذه المرحلة." };
+  const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
+
+  // Releasing product needs its own authority; departing from the derived
+  // verdict needs another. Agreeing with it needs neither.
+  const auth = await requirePermission(verdictPermission(status, suggestion.suggested));
+  if (!auth.ok) return auth;
 
   // PENDING means "sheet not finished" — the part must not move.
   const transition =
@@ -431,6 +493,7 @@ export async function submitPartInspection(formData: FormData): Promise<ActionRe
       data: {
         stage,
         partId,
+        inspectorId: auth.user.id,
         inspector,
         status,
         notes: optionalString(formData.get("notes")),
@@ -468,6 +531,7 @@ export async function submitPartInspection(formData: FormData): Promise<ActionRe
         fromValue: `${part.currentStage}/${part.status}`,
         toValue: `${transition.stage}/${transition.status}`,
         note: `${def.ar} — ${status}`,
+        actorId: auth.user.id,
         actor: inspector,
       },
     });
@@ -486,6 +550,9 @@ export async function submitPartInspection(formData: FormData): Promise<ActionRe
 // ───────────────────────── parts ─────────────────────────
 
 export async function raiseParts(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("part.raise");
+  if (!auth.ok) return auth;
+
   const lotId = optionalNumber(formData.get("lotId"));
   const count = optionalNumber(formData.get("count"));
   const prefix = String(formData.get("prefix") ?? "").trim();
@@ -533,6 +600,8 @@ export async function raiseParts(formData: FormData): Promise<ActionResult> {
           stage: "POST_ROUGHING",
           toValue: "POST_ROUGHING/IN_PROCESS",
           note: `صدر من التشغيلة ${lot.lotNumber}`,
+          actorId: auth.user.id,
+          actor: auth.user.displayName,
         },
       });
     }
@@ -546,8 +615,10 @@ export async function raiseParts(formData: FormData): Promise<ActionResult> {
 
 /** Send a reworked part back into its queue once the shop has redone it. */
 export async function returnPartToQueue(formData: FormData): Promise<ActionResult> {
+  const auth = await requirePermission("part.requeue");
+  if (!auth.ok) return auth;
+
   const partId = optionalNumber(formData.get("partId"));
-  const actor = optionalString(formData.get("actor"));
   if (!partId) return { ok: false, error: "معرّف غير صالح." };
 
   const part = await prisma.part.findUnique({ where: { id: partId } });
@@ -565,7 +636,8 @@ export async function returnPartToQueue(formData: FormData): Promise<ActionResul
         fromValue: part.status,
         toValue: "IN_PROCESS",
         note: "أُعيد إلى طابور الفحص بعد المعالجة",
-        actor,
+        actorId: auth.user.id,
+        actor: auth.user.displayName,
       },
     }),
   ]);
