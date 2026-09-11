@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/server/auth";
+import { requirePermission, requireUser } from "@/lib/server/auth";
 import {
   analysisStatus,
   measurementResult,
@@ -305,4 +305,37 @@ export async function recomputeAnalysisStatus(analysisId: number) {
     where: { id: analysisId },
     data: { status: analysisStatus(analysis.results) },
   });
+}
+
+// ───────────────────────── administration ─────────────────────────
+
+/** Accounts and the recent history of who changed whose access.
+ *
+ *  Gated harder than the rest of this file: an ordinary signed-in caller has
+ *  no business reading the staff list, so this asks for `user.manage` rather
+ *  than merely a session.
+ */
+export async function getUsers() {
+  const auth = await requirePermission("user.manage");
+  if (!auth.ok) throw new Error(auth.error);
+
+  const [users, events] = await Promise.all([
+    prisma.user.findMany({
+      orderBy: [{ active: "desc" }, { displayName: "asc" }],
+      include: {
+        createdBy: { select: { displayName: true } },
+        _count: { select: { inspections: true } },
+      },
+    }),
+    prisma.userAuditEvent.findMany({
+      orderBy: { at: "desc" },
+      take: 50,
+      include: {
+        subject: { select: { displayName: true } },
+        actorUser: { select: { displayName: true } },
+      },
+    }),
+  ]);
+
+  return { users, events };
 }

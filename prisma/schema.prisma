@@ -58,8 +58,37 @@ model User {
   inspections      Inspection[]
   analysesRecorded Analysis[]
   partEvents       PartEvent[]
+  auditedChanges   UserAuditEvent[] @relation("AuditActor")
+  accessHistory    UserAuditEvent[] @relation("AuditSubject")
 
   @@index([role, active])
+}
+
+/// Administrative audit trail: who changed whose access, and when.
+///
+/// Granting somebody the authority to release product is itself a decision an
+/// auditor will ask about, and `User` alone only says what is true now. This
+/// table says how it got that way. Append-only, like `PartEvent`.
+model UserAuditEvent {
+  id Int      @id @default(autoincrement())
+  at DateTime @default(now()) @db.Timestamptz(3)
+
+  /// CREATED | ROLE_CHANGED | ACTIVATED | DEACTIVATED
+  kind String
+
+  /// The account that was changed.
+  subjectId Int
+  subject   User @relation("AuditSubject", fields: [subjectId], references: [id], onDelete: Restrict)
+
+  /// The administrator who changed it.
+  actorId   Int
+  actorUser User @relation("AuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  fromValue String?
+  toValue   String?
+
+  @@index([subjectId, at])
+  @@index([at])
 }
 
 // ───────────────────────── catalog ─────────────────────────
