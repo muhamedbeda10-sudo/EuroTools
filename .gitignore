@@ -9,9 +9,8 @@ next-env.d.ts
 .env*
 !.env.example
 
-# Firebase project alias — written by `firebase use`, and different for
-# every developer and environment.
-.firebaserc
+# Firebase deploy cache. The project alias (.firebaserc) is committed: there
+# is one project, and pinning it means nobody has to retype its id.
 .firebase/
 
 *.log

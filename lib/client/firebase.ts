@@ -10,6 +10,8 @@ import {
 } from "firebase/auth";
 import { connectFirestoreEmulator, getFirestore, type Firestore } from "firebase/firestore";
 
+import { emulatorIsReachable, parseEmulatorHost } from "./emulator-host";
+
 /** Firebase, from the browser, which is now the only place it is used.
  *
  *  There is no server in this application any more: it is static files served
@@ -43,6 +45,24 @@ function app(): FirebaseApp {
   return getApps().length > 0 ? getApp() : initializeApp(config);
 }
 
+/** Point the SDKs at the local emulators, but only if this page could possibly
+ *  reach them.
+ *
+ *  The check is not paranoia. Next.js merges `.env` into every build, so a
+ *  production build inherits any emulator host left in it and inlines the
+ *  address into the bundle as a string literal. The result deploys cleanly,
+ *  loads cleanly, and then fails every single read from Firestore, because the
+ *  address it was given is the loopback of the tablet holding it.
+ *
+ *  `npm run deploy` clears those values and refuses to upload a bundle that
+ *  still contains one. A build run by hand has neither of those guards, so the
+ *  running application keeps its own: a page served from a real domain
+ *  declines a loopback emulator and talks to the real project instead.
+ *
+ *  Both SDKs are wired together or neither is. Half a connection — a real
+ *  Firestore behind an emulated sign-in — reads as a permissions bug and takes
+ *  a long time to recognise as a configuration one.
+ */
 function connectEmulatorsOnce(auth: Auth, firestore: Firestore): void {
   if (wired) return;
   wired = true;
@@ -51,9 +71,25 @@ function connectEmulatorsOnce(auth: Auth, firestore: Firestore): void {
   const authHost = process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;
   if (!firestoreHost && !authHost) return;
 
+  // A prerender has no page and makes no connection; leaving the SDKs alone
+  // keeps the emitted HTML identical either way.
+  if (typeof window === "undefined") return;
+
+  const requested = [firestoreHost, authHost].filter((h): h is string => Boolean(h));
+  const pageHost = window.location.hostname;
+
+  if (!requested.every((host) => emulatorIsReachable(host, pageHost))) {
+    console.warn(
+      `Ignoring the Firebase emulator settings baked into this build (${requested.join(", ")}): ` +
+        `this page was served from ${pageHost}, where those addresses point at the visitor's own ` +
+        `machine. Using the real project instead. Rebuild with the emulator variables cleared.`
+    );
+    return;
+  }
+
   if (firestoreHost) {
-    const [host, port] = firestoreHost.split(":");
-    connectFirestoreEmulator(firestore, host, Number(port));
+    const parsed = parseEmulatorHost(firestoreHost);
+    if (parsed) connectFirestoreEmulator(firestore, parsed.host, parsed.port);
   }
   if (authHost) connectAuthEmulator(auth, `http://${authHost}`, { disableWarnings: true });
 }

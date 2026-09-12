@@ -12,6 +12,11 @@
  *      npm run build
  *      npx firebase emulators:start --only hosting
  *      npm run test:e2e
+ *
+ *  The build step needs `.env.production` out of the way. `npm run deploy`
+ *  writes that file pointed at the real project with the emulators cleared,
+ *  which is right for a deployment and useless here — the run would sign in
+ *  against production. Move it aside first if it exists.
  */
 
 import { chromium } from "playwright";
