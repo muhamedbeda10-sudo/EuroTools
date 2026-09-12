@@ -22,7 +22,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { ROLES, isRole } from "../lib/domain/roles";
 import { adminAuth } from "../lib/server/firebase-admin";
 import { db } from "../lib/server/firestore";
-import { reserveUnique, userAuditEvents, users, type UserDoc } from "../lib/server/model";
+import { userAuditEvents, users, type UserDoc } from "../lib/server/model";
 
 /** Read a value from the environment, falling back to --flag=value. */
 function arg(name: string): string | undefined {
@@ -109,10 +109,9 @@ async function main() {
 
   const ref = users().doc(uid);
   await db().runTransaction(async (tx) => {
+    // No separate reservation for the address: the document is keyed by the
+    // Firebase uid, and Authentication has already refused a duplicate one.
     const existing = await tx.get(ref);
-    const claim = await reserveUnique(tx, "user.email", email, ref.path);
-    if (!claim.ok)
-      throw new Error(`the address ${email} is already reserved by ${claim.ownerPath}`);
 
     if (existing.exists) {
       tx.update(ref, { email, displayName, role, active: true, updatedAt: Timestamp.now() });

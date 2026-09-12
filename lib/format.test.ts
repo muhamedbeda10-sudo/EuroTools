@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   fmtDate,
   fmtDateTime,
+  fmtDuration,
   fmtNum,
   fmtTolerance,
   optionalNumber,
@@ -170,5 +171,34 @@ describe("safeNextPath", () => {
 
   it("uses the fallback it was given", () => {
     expect(safeNextPath("//evil.test", "/queue")).toBe("/queue");
+  });
+});
+
+describe("a span of time, as the shop floor would say it", () => {
+  const m = 60_000;
+  const h = 60 * m;
+  const d = 24 * h;
+
+  it("gives two units at most", () => {
+    // "3d 4h 12m 6s" is a number nobody reads.
+    expect(fmtDuration(3 * d + 4 * h + 12 * m)).toBe("3d 4h");
+    expect(fmtDuration(4 * h + 12 * m)).toBe("4h 12m");
+    expect(fmtDuration(12 * m)).toBe("12m");
+  });
+
+  it("drops the second unit when it is zero", () => {
+    expect(fmtDuration(3 * d)).toBe("3d");
+    expect(fmtDuration(4 * h)).toBe("4h");
+  });
+
+  it("says nothing has really happened yet under a minute", () => {
+    expect(fmtDuration(40_000)).toBe("under a minute");
+    expect(fmtDuration(0)).toBe("under a minute");
+  });
+
+  it("shows a dash rather than a negative for a clock that disagrees", () => {
+    expect(fmtDuration(-1)).toBe("—");
+    expect(fmtDuration(null)).toBe("—");
+    expect(fmtDuration(Number.NaN)).toBe("—");
   });
 });

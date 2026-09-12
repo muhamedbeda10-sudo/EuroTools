@@ -10,28 +10,21 @@ import {
 import { COLLECTIONS, SUBCOLLECTIONS } from "@/lib/model";
 import { clientDb } from "@/lib/client/firebase";
 
-/** Collection handles, so a path is spelled once.
+/** Handles to the collections, named once.
  *
- *  The layout itself is described in `lib/model.ts`, which imports no SDK and
- *  is shared with the command-line scripts. This module is only the browser's
- *  way of reaching it.
+ *  Functions rather than constants because `clientDb()` initialises the SDK on
+ *  first use, and a module-level constant would do that while the page is
+ *  still being imported — before the emulator wiring has had a chance to run.
  */
-
 export const users = () => collection(clientDb(), COLLECTIONS.users);
 export const userAuditEvents = () => collection(clientDb(), COLLECTIONS.userAuditEvents);
-export const uniques = () => collection(clientDb(), COLLECTIONS.uniques);
-export const suppliers = () => collection(clientDb(), COLLECTIONS.suppliers);
-export const materials = () => collection(clientDb(), COLLECTIONS.materials);
-export const lots = () => collection(clientDb(), COLLECTIONS.lots);
-export const parts = () => collection(clientDb(), COLLECTIONS.parts);
+export const planningLines = () => collection(clientDb(), COLLECTIONS.planningLines);
+export const pieces = () => collection(clientDb(), COLLECTIONS.pieces);
 export const inspections = () => collection(clientDb(), COLLECTIONS.inspections);
+export const reworks = () => collection(clientDb(), COLLECTIONS.reworks);
+export const itemConfigs = () => collection(clientDb(), COLLECTIONS.itemConfigs);
+export const config = () => collection(clientDb(), COLLECTIONS.config);
 export const stats = () => collection(clientDb(), COLLECTIONS.stats);
-
-export const analysesOf = (lotId: string): CollectionReference =>
-  collection(clientDb(), COLLECTIONS.lots, lotId, SUBCOLLECTIONS.analyses);
-
-export const eventsOf = (partId: string): CollectionReference =>
-  collection(clientDb(), COLLECTIONS.parts, partId, SUBCOLLECTIONS.events);
 
 /** Thumbnails of an inspection's photographs — what a gallery reads. */
 export const photosOf = (inspectionId: string): CollectionReference =>
@@ -41,17 +34,15 @@ export const photosOf = (inspectionId: string): CollectionReference =>
 export const photoDataOf = (inspectionId: string): CollectionReference =>
   collection(clientDb(), COLLECTIONS.inspections, inspectionId, SUBCOLLECTIONS.photoData);
 
-/** A fresh Firestore id, for entries embedded in a document.
+export const docIn = (ref: CollectionReference, id?: string): DocumentReference =>
+  id ? doc(ref, id) : doc(ref);
+
+/** A fresh Firestore id for something embedded in a document.
  *
- *  Embedded checklist answers, certificates and features still need something
- *  stable to address them by — a form posts back "the measured value for
- *  feature X" — and the SDK only generates ids through a collection handle.
- *  This names what is happening so the handle it borrows does not read as a
- *  write to that collection.
+ *  A dimension added on the sheet still needs something stable to address it
+ *  by, and the SDK only generates ids through a collection handle. This names
+ *  what is happening so the handle it borrows does not read as a write.
  */
 export function newId(): string {
   return doc(collection(clientDb(), "_ids")).id;
 }
-
-export const docIn = (ref: CollectionReference, id?: string): DocumentReference =>
-  id ? doc(ref, id) : doc(ref);

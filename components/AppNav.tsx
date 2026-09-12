@@ -9,13 +9,12 @@ import { ROLE_LABELS, can } from "@/lib/domain/roles";
 import { signOut, useSession } from "@/lib/client/session";
 
 const LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/lots", label: "Goods In" },
-  { href: "/queue", label: "Inspection Queue" },
-  { href: "/parts", label: "Parts" },
-  { href: "/materials", label: "Specifications" },
-  { href: "/reports", label: "Reports" },
-];
+  { href: "/", label: "Dashboard", permission: null },
+  { href: "/planning", label: "Planning", permission: null },
+  { href: "/queue", label: "Inspection", permission: null },
+  { href: "/settings", label: "Settings", permission: "config.manage" },
+  { href: "/admin/users", label: "Users", permission: "user.manage" },
+] as const;
 
 export function AppNav() {
   const { user } = useSession();

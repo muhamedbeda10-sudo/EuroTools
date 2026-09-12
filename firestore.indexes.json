@@ -1,68 +1,44 @@
 {
   "indexes": [
     {
-      "collectionGroup": "inspections",
+      "collectionGroup": "pieces",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "lotId", "order": "ASCENDING" },
-        { "fieldPath": "inspectedAt", "order": "DESCENDING" }
+        { "fieldPath": "stage", "order": "ASCENDING" },
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "plannedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pieces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "plannedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pieces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lineId", "order": "ASCENDING" },
+        { "fieldPath": "pieceNo", "order": "ASCENDING" }
       ]
     },
     {
       "collectionGroup": "inspections",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "partId", "order": "ASCENDING" },
+        { "fieldPath": "pieceId", "order": "ASCENDING" },
         { "fieldPath": "inspectedAt", "order": "DESCENDING" }
       ]
     },
     {
-      "collectionGroup": "inspections",
+      "collectionGroup": "reworks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "hasFailedMeasurement", "order": "ASCENDING" },
-        { "fieldPath": "inspectedAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "parts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "lotId", "order": "ASCENDING" },
-        { "fieldPath": "serialNumber", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "parts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "currentStage", "order": "ASCENDING" },
-        { "fieldPath": "serialNumber", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "parts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "serialNumber", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "parts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "currentStage", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "serialNumber", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "parts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+        { "fieldPath": "pieceId", "order": "ASCENDING" },
+        { "fieldPath": "heldAt", "order": "DESCENDING" }
       ]
     }
   ],

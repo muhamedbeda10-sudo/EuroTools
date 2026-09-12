@@ -3,7 +3,7 @@
 import { ActionForm } from "@/components/ActionForm";
 import { InlineForm } from "@/components/InlineForm";
 import { Card, Empty, PageHeader } from "@/components/ui";
-import { ROLES, ROLE_LABELS, permissionsOf } from "@/lib/domain/roles";
+import { PERMISSION_LABELS, ROLES, ROLE_LABELS, permissionsOf } from "@/lib/domain/roles";
 import { fmtDateTime } from "@/lib/format";
 import { getUsers } from "@/lib/client/queries";
 import { grantAccess, setUserActive, setUserRole } from "@/lib/client/actions";
@@ -76,7 +76,7 @@ function UsersView({
                       {permissions.length === 0 ? (
                         "Reads and reports only. No writes of any kind."
                       ) : (
-                        <span className="ltr">{permissions.join(" · ")}</span>
+                        <span className="ltr">{permissions.map((p) => PERMISSION_LABELS[p]).join(" · ")}</span>
                       )}
                     </td>
                   </tr>
@@ -165,7 +165,7 @@ function UsersView({
 
                   <div className="mt-1 text-xs text-[var(--muted)]">
                     {ROLE_LABELS[user.role as (typeof ROLES)[number]]?.en ?? user.role} ·{" "}
-                    {user._count.inspections} inspections signed
+                    {user.signedInspections} inspections signed
                     {user.createdBy && ` · created by ${user.createdBy.displayName}`}
                   </div>
 

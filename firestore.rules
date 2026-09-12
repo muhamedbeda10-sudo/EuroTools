@@ -1,61 +1,50 @@
 rules_version = '2';
 
-// The security boundary.
-//
-// This app is served as static files and talks to Firestore from the browser,
-// so there is no server left to check anything. These rules are not a second
-// lock any more — they are the only lock, and every guarantee the application
-// used to make on the server has to be stated here or it does not exist.
-//
-// What they do enforce:
-//
-//   - Nothing at all without a signed-in, provisioned, active account. A
-//     Firebase account with no user document, or a deactivated one, gets
-//     nothing, which is how an inspector who leaves the company is locked out.
-//   - A signature belongs to the account that made it: an inspection may only
-//     be written with `inspectorUid` equal to the caller's own uid. Signing as
-//     somebody else is impossible rather than merely discouraged.
-//   - Releasing product needs the authority to release it, whether the write
-//     is an inspection carrying RELEASED or a part being moved to it.
-//   - Inspections, part events and account-audit entries are append-only at
-//     the database level: no update, no delete, by anyone, ever. That is
-//     stronger than the server version, which relied on the code not offering
-//     it.
-//   - Uniqueness survives intact. A reservation document may be created but
-//     never overwritten, and Firestore refuses to create a document that
-//     exists, so two writers racing for one part number still produce exactly
-//     one winner.
-//   - Accounts are never deleted, and an administrator cannot edit their own —
-//     the same separation of duties the server enforced.
-//
-// What they cannot enforce, stated plainly because it is the cost of running
-// without a server:
-//
-//   A checklist verdict is *derived* from the answers and the measurements by
-//   `lib/domain/inspection.ts`, and that arithmetic — tolerance bands, GD&T
-//   limits, critical features, hardness windows — cannot be expressed here.
-//   Rules cannot even iterate the measurements array. So the verdict is
-//   computed in the browser and written by the browser, and an account holder
-//   who tampers with the client can file a sheet whose stored verdict does not
-//   match its own evidence.
-//
-//   RELEASED is gated above, so the most consequential case is covered. The
-//   rest is caught rather than prevented: every answer and every measurement
-//   is stored, the rule is pure, so `/reports` re-derives every verdict and
-//   lists any record that disagrees with itself. Detection, not prevention —
-//   which is worth knowing about the system rather than discovering later.
-
+/** The whole security boundary.
+ *
+ *  This application is static files talking to Firestore from the browser.
+ *  There is no server left to check anything, so what this file allows is
+ *  exactly what anybody with the page open can do — including somebody who has
+ *  edited the JavaScript. Every check in `lib/client/actions.ts` is a courtesy
+ *  to the operator; every check here is the control.
+ *
+ *  ## What it enforces
+ *
+ *   - who may read: anybody with an account that is still active;
+ *   - who may write what, from the role on their own user document, re-read on
+ *     every single operation — so deactivating an account stops it on the next
+ *     click rather than when a token expires;
+ *   - that a signature is the caller's own;
+ *   - that a signed record is never edited or deleted, by anyone;
+ *   - that letting through a piece the measurements hold takes a concession,
+ *     and that not every role may grant one;
+ *   - that a piece already measured cannot be deleted with its planning line.
+ *
+ *  ## What it cannot enforce, and what catches it instead
+ *
+ *  It cannot recompute a verdict from the readings. `suggested` is written by
+ *  the client, so a doctored bundle could store a sheet whose verdict does not
+ *  follow from its own measurements. Nothing here can tell. What catches it is
+ *  that the stored readings are kept alongside the verdict: the same pure
+ *  function that suggested it can be run over the record afterwards, and a
+ *  record where the two disagree without a concession was not written by this
+ *  application. A test below pins that gap so it is a known one.
+ *
+ *  ## Keeping this in step with the code
+ *
+ *  The role sets below duplicate `lib/domain/roles.ts`. Rules cannot import,
+ *  so widening a role means editing both — which is the point: it has to be
+ *  deliberate twice.
+ */
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ───────────────────────── who is asking ─────────────────────────
+    function account() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
 
     function accountPath() {
       return /databases/$(database)/documents/users/$(request.auth.uid);
-    }
-
-    function account() {
-      return get(accountPath()).data;
     }
 
     /** Signed in to Firebase, provisioned here, and not deactivated. */
@@ -69,22 +58,24 @@ service cloud.firestore {
       return signedIn() && account().role in roles;
     }
 
-    // These sets mirror `lib/domain/roles.ts`. They are duplicated because
-    // rules cannot import, so widening a role means editing both — which is
-    // the point: it has to be deliberate in two places.
+    // These sets mirror `lib/domain/roles.ts`.
+    function canRead() {
+      return signedIn();
+    }
+
+    function canPlan() {
+      return hasRole(['SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+    }
+
     function canRecord() {
       return hasRole(['INSPECTOR', 'SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
     }
 
-    function canRaise() {
+    function canBypass() {
       return hasRole(['SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
     }
 
-    function canRelease() {
-      return hasRole(['QUALITY_MANAGER', 'ADMIN']);
-    }
-
-    function canManageSpecs() {
+    function canConfig() {
       return hasRole(['QUALITY_MANAGER', 'ADMIN']);
     }
 
@@ -92,10 +83,9 @@ service cloud.firestore {
       return hasRole(['ADMIN']);
     }
 
-    /** Everyone with an active account may read. A VIEWER reads and nothing
-     *  else, which is exactly the role's definition. */
-    function canRead() {
-      return signedIn();
+    /** The keys an update actually changes. */
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
     }
 
     // ───────────────────────── accounts ─────────────────────────
@@ -108,9 +98,15 @@ service cloud.firestore {
       // quality system.
       allow create, update: if isAdmin() && uid != request.auth.uid;
 
+      // An inspector's own signature count goes up when they sign a sheet.
+      // Nothing else about their account may move with it.
+      allow update: if canRecord()
+        && uid == request.auth.uid
+        && changed().hasOnly(['signedInspections']);
+
       // Retiring an account is deactivation. Deleting one would orphan every
-      // inspection it signed, and a Firestore reference cannot refuse the way
-      // a foreign key did — so the delete is refused here instead.
+      // sheet it signed, and a Firestore reference cannot refuse the way a
+      // foreign key did — so the delete is refused here instead.
       allow delete: if false;
     }
 
@@ -120,101 +116,74 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // ───────────────────────── uniqueness ─────────────────────────
+    // ───────────────────────── planning ─────────────────────────
 
-    match /uniques/{key} {
+    match /planningLines/{lineId} {
       allow read: if canRead();
+      allow create: if canPlan();
 
-      // Create-only is the whole mechanism: the document's id *is* the value,
-      // Firestore refuses to create one that exists, and nothing here may
-      // overwrite it. Two writers racing for a part number still produce one
-      // winner.
-      allow create: if canRecord();
-      allow update: if false;
+      // Planning owns the line. An inspector may move its counters — that is
+      // what happens when a piece they measured changes hands — and nothing
+      // else: not the quantity, not the item, not the project.
+      allow update: if canPlan()
+        || (canRecord() && changed().hasOnly(['counts']));
 
-      // Only a spec owner hands a value back, and only when renaming a record
-      // onto a different one.
-      allow delete: if canManageSpecs();
+      // Cancelling a line is only for one nobody has measured yet. A line with
+      // sheets against it is a record; deleting it would leave signed
+      // inspections describing pieces that no longer exist.
+      allow delete: if canPlan();
     }
 
-    // ───────────────────────── catalog ─────────────────────────
-
-    match /suppliers/{supplierId} {
+    match /pieces/{pieceId} {
       allow read: if canRead();
-      allow create, update: if canRaise();
-      allow delete: if false;
-    }
+      allow create: if canPlan();
 
-    match /materials/{materialId} {
-      allow read: if canRead();
-      // The drawing spec decides whether a part passes, so editing it is
-      // quality authority, not shop-floor work.
-      allow create, update: if canManageSpecs();
-      allow delete: if false;
-    }
-
-    // ───────────────────────── lots and analyses ─────────────────────────
-
-    match /lots/{lotId} {
-      allow read: if canRead();
-      allow create, update: if canRecord();
-      allow delete: if false;
-
-      match /analyses/{analysisId} {
-        allow read: if canRead();
-        allow create, update: if canRecord();
-        allow delete: if false;
-      }
-    }
-
-    // ───────────────────────── parts ─────────────────────────
-
-    match /parts/{partId} {
-      allow read: if canRead();
-      allow create: if canRaise();
-
-      // A part reaching RELEASED is the final quality release, whichever write
-      // moves it there.
+      // A piece moves when it is measured or when a rework is closed out. The
+      // fields that say where it is may change; the ones that say what it is
+      // may not.
       allow update: if canRecord()
-        && (request.resource.data.status != 'RELEASED' || canRelease());
+        && changed().hasOnly([
+          'stage', 'state', 'holdDepartment', 'round', 'measuredTimes',
+          'lastVerdict', 'lastInspectedAt', 'qcSince', 'qcSettledMs', 'updatedAt'
+        ]);
 
-      allow delete: if false;
-
-      match /events/{eventId} {
-        allow read: if canRead();
-        // The traveller's history. Append-only, and each entry names its
-        // author truthfully.
-        allow create: if canRecord() && request.resource.data.actorUid == request.auth.uid;
-        allow update, delete: if false;
-      }
+      // The same rule the cancel path checks in the application, enforced
+      // where it cannot be edited out: a piece that has been measured stays.
+      allow delete: if canPlan() && resource.data.measuredTimes == 0;
     }
 
-    // ───────────────────────── inspections ─────────────────────────
+    // ───────────────────────── inspection sheets ─────────────────────────
 
     match /inspections/{inspectionId} {
       allow read: if canRead();
 
       allow create: if canRecord()
         // The signature is the caller's own. This is the guarantee that
-        // mattered most on the server and it survives intact here.
+        // mattered most on a server and it survives intact here.
         && request.resource.data.inspectorUid == request.auth.uid
-        // Releasing product needs the authority to release it.
-        && (request.resource.data.status != 'RELEASED' || canRelease());
+        // Letting through a piece the measurements hold is a concession, and
+        // not every role may grant one. Holding a piece the measurements would
+        // have passed needs nothing: stopping product is always allowed.
+        && (
+          request.resource.data.verdict == 'HOLD'
+          || (request.resource.data.suggested == 'ACCEPTED'
+              && request.resource.data.verdict == 'ACCEPTED')
+          || canBypass()
+        )
+        // A concession has to say why, and the sheet has to admit it is one.
+        && (request.resource.data.verdict != 'ACCEPTED_BYPASS'
+            || (request.resource.data.bypassReason is string
+                && request.resource.data.bypassReason.size() > 0));
 
-      // A signed inspection is a record, not a draft. Nobody edits or removes
-      // one — not even an administrator — so the trail cannot be rewritten
-      // after the fact.
+      // A signed sheet is a record, not a draft. Nobody edits or removes one —
+      // not even an administrator — so the trail cannot be rewritten.
       allow update, delete: if false;
 
       // ── defect photographs ──────────────────────────────────────────
-      // Evidence for a verdict somebody put their name to. The same rules
-      // the inspection itself gets: yours to add, nobody's to change.
-      //
-      // The thumbnail a gallery lists, and the full picture behind it, are
-      // separate documents so that reading a list does not pull every
-      // picture on it. Both are held well under Firestore's one-megabyte
-      // document limit, because a document refused on arrival would take
-      // the inspection written alongside it down too.
+      // Evidence for a verdict somebody put their name to: yours to add,
+      // nobody's to change. Held well under Firestore's one-megabyte document
+      // limit, because a document refused on arrival would take the sheet
+      // written alongside it down too.
 
       match /photos/{photoId} {
         allow read: if canRead();
@@ -234,14 +203,42 @@ service cloud.firestore {
       }
     }
 
-    // ───────────────────────── report counters ─────────────────────────
+    // ───────────────────────── rework ─────────────────────────
+
+    match /reworks/{reworkId} {
+      allow read: if canRead();
+      allow create: if canRecord();
+
+      // Closing one out records that a department reported back. Who held the
+      // piece, and when, is part of the record and does not move.
+      allow update: if canRecord()
+        && changed().hasOnly(['completedAt', 'recordedByUid', 'recordedByName', 'note'])
+        && request.resource.data.recordedByUid == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // ───────────────────────── configuration ─────────────────────────
+
+    // What a piece has to be. An inspector who could widen a tolerance could
+    // pass anything, so this is the other place the authority line falls.
+    match /itemConfigs/{itemId} {
+      allow read: if canRead();
+      allow write: if canConfig();
+    }
+
+    match /config/{settingId} {
+      allow read: if canRead();
+      allow write: if canConfig();
+    }
+
+    // ───────────────────────── tallies ─────────────────────────
 
     match /stats/{statId} {
       allow read: if canRead();
-      // Tallies that order a report. They decide nothing, which is why a
-      // looser rule is acceptable here and nowhere else: the underlying
-      // answers are stored on the inspections themselves, so a distorted
-      // counter changes a chart and not a verdict.
+      // Counters a report reads. They decide nothing — the answers they count
+      // are on the sheets themselves — which is why a looser rule is
+      // acceptable here and nowhere else.
       allow create, update: if canRecord();
       allow delete: if false;
     }

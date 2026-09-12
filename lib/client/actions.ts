@@ -2,8 +2,8 @@
 
 import {
   Timestamp,
-  doc,
   getDoc,
+  getDocs,
   increment,
   query,
   runTransaction,
@@ -14,49 +14,50 @@ import {
 } from "firebase/firestore";
 
 import {
-  canInspect,
-  canRaiseParts,
-  measurementResult,
-  nextPartState,
-  rollup,
-  type MeasurementSpec,
-} from "@/lib/domain/inspection";
+  applyReworkDone,
+  applyVerdict,
+  initialPosition,
+  isVerdict,
+  type PiecePosition,
+  type Stage,
+} from "@/lib/domain/workflow";
+import { result, suggest, type Defect, type Reading } from "@/lib/domain/measurement";
 import { can, verdictPermission, type Permission } from "@/lib/domain/roles";
-import { isStage, stageDef, type Stage, type Status } from "@/lib/domain/stages";
-import { optionalNumber, optionalString, triState } from "@/lib/format";
+import { optionalNumber, optionalString } from "@/lib/format";
 import {
-  uniqueKey,
-  type AnalysisDoc,
-  type AnalysisResultEntry,
-  type CertificateEntry,
-  type FeatureEntry,
-  type InspectionDoc,
-  type LotDoc,
-  type MaterialDoc,
-  type MeasurementEntry,
-  type PartDoc,
-  type UniqueScope,
+  CONFIG_DOCS,
   PHOTO_MAX_PER_INSPECTION,
-  type InspectionPhotoDoc,
+  STAT_DOCS,
+  configKey,
+  toDate,
+  type DefectEntry,
+  type DefectSpec,
+  type DimensionSpec,
+  type InspectionDoc,
   type InspectionPhotoDataDoc,
+  type InspectionPhotoDoc,
+  type ItemConfigDoc,
+  type LineCounts,
+  type MeasuringType,
+  type PieceDoc,
+  type PlanningLineDoc,
+  type ReadingEntry,
+  type ReworkDoc,
 } from "@/lib/model";
 import { clientDb } from "@/lib/client/firebase";
 import {
-  analysesOf,
+  config,
   docIn,
-  eventsOf,
   inspections,
-  lots,
-  materials,
-  newId,
-  parts,
+  itemConfigs,
+  photoDataOf,
+  photosOf,
+  pieces,
+  planningLines,
+  reworks,
   stats,
-  suppliers,
-  uniques,
   userAuditEvents,
   users,
-  photosOf,
-  photoDataOf,
 } from "@/lib/client/db";
 import { prepare } from "@/lib/client/photos";
 import type { SessionUser } from "@/lib/client/session";
@@ -67,611 +68,337 @@ export interface ActionResult {
   info?: string;
 }
 
-/** Writing the quality data, from the browser.
+/** Writing, from the browser.
  *
  *  ## Where the boundary actually is
  *
  *  Every permission check in this file runs on the operator's own machine and
  *  could be edited out of the bundle. They are here so somebody is told "you
- *  cannot do that" in Arabic instead of watching a write fail with a Firestore
- *  error — they are courtesy, not control.
+ *  cannot do that" instead of watching a write fail with a Firestore error.
+ *  They are courtesy, not control.
  *
  *  The control is `firestore.rules`, which runs on Google's side and re-reads
- *  the account's role for every single operation. Read the note at the top of
- *  that file before changing anything here: it also records the one guarantee
- *  that does not survive without a server, and what catches it instead.
+ *  the account's role for every operation. Read the note at the top of that
+ *  file before changing anything here.
  *
- *  ## Uniqueness and counters
+ *  ## What is kept in step with what
  *
- *  A part number is reserved by creating a document whose id *is* the value.
- *  Firestore refuses to create one that exists and the rules forbid
- *  overwriting one, so two writers racing for the same number still produce
- *  exactly one winner. Counters that reports read are incremented in the same
- *  transaction as the record they describe, so they cannot drift apart.
+ *  A piece moving changes three things at once: the piece, the counters on its
+ *  planning line, and the tallies the dashboard reads. All three are written
+ *  in the transaction that moves it, so a report can never describe a state
+ *  the pieces are not in.
  */
 
 const now = () => Timestamp.now();
 
-/** The interface's own check, before the rules get a chance to refuse. */
 function allow(actor: SessionUser, permission: Permission): ActionResult | null {
   if (!can(actor.role, permission))
     return { ok: false, error: "You do not have permission to do that." };
   return null;
 }
 
-/** Turn a rules rejection into something an operator can act on. */
 function explain(error: unknown, fallback: string): ActionResult {
   const code = (error as { code?: string }).code ?? "";
   if (code.includes("permission-denied"))
-    return { ok: false, error: "The system refused that. Check your permissions and the state of the record." };
-  if (code.includes("already-exists")) return { ok: false, error: fallback };
+    return {
+      ok: false,
+      error: "The system refused that. Check your permissions and the state of the record.",
+    };
   if (code.includes("unavailable"))
     return { ok: false, error: "Could not reach the database. Check the connection." };
-  return { ok: false, error: fallback };
+  const message = (error as Error)?.message;
+  return { ok: false, error: message && message.length < 160 ? message : fallback };
 }
 
-/** Claim a value inside a transaction, or say who already holds it. */
-async function reserveUnique(
+/** What a move does to the counters on a planning line.
+ *
+ *  Written as one function because the three numbers have to agree with each
+ *  other and with the pieces they count; working them out at each call site is
+ *  how they stop agreeing.
+ */
+export function countDelta(
+  from: PieceDoc["state"],
+  to: PieceDoc["state"]
+): Partial<Record<keyof LineCounts, number>> {
+  if (from === to) return {};
+  const field = { WAITING_QC: "withQc", WAITING_REWORK: "inRework", CLOSED: "closed" } as const;
+  return { [field[from]]: -1, [field[to]]: 1 };
+}
+
+/** Move a piece, settling the time it spent waiting on quality.
+ *
+ *  The wait is accumulated rather than measured end to end: a piece held twice
+ *  sits with a department in between, and counting that against quality would
+ *  make the figure say the opposite of what it is for.
+ */
+function movePiece(
   tx: Transaction,
-  scope: UniqueScope,
-  value: string,
-  ownerPath: string
-): Promise<boolean> {
-  const ref = doc(uniques(), uniqueKey(scope, value));
-  const existing = await tx.get(ref);
-
-  if (existing.exists()) {
-    return (existing.data() as { ownerPath?: string }).ownerPath === ownerPath;
-  }
-
-  tx.set(ref, { scope, value: value.trim(), ownerPath, at: now() });
-  return true;
-}
-
-function releaseUnique(tx: Transaction, scope: UniqueScope, value: string): void {
-  tx.delete(doc(uniques(), uniqueKey(scope, value)));
-}
-
-function clashMessage(what: string, value: string): string {
-  return `${what} ${value} is already taken.`;
-}
-
-/** Read the tri-state answers for a stage out of the posted form. */
-function readChecks(stage: Stage, formData: FormData) {
-  return stageDef(stage).items.map((item) => ({
-    key: item.key,
-    ok: triState(formData.get(`check_${item.key}`)),
-    note: optionalString(formData.get(`note_${item.key}`)),
-  }));
-}
-
-/** The per-line failure tally the reports page reads, incremented alongside
- *  the inspection that caused it. */
-function tallyFailures(
-  tx: Transaction,
-  stage: Stage,
-  checks: { key: string; ok: boolean | null }[]
+  pieceId: string,
+  current: PieceDoc,
+  next: PiecePosition,
+  extra: Record<string, unknown> = {}
 ): void {
-  const failed = checks.filter((c) => c.ok === false);
-  if (failed.length === 0) return;
+  const at = now();
+  const leavingQc = current.state === "WAITING_QC" && next.state !== "WAITING_QC";
+  const enteringQc = current.state !== "WAITING_QC" && next.state === "WAITING_QC";
 
-  const counts = Object.fromEntries(
-    failed.map((check) => [`${stage}::${check.key}`, increment(1)])
-  );
-  tx.set(doc(stats(), "failures"), { counts }, { merge: true });
+  const waited = leavingQc
+    ? Math.max(0, at.toMillis() - (toDate(current.qcSince)?.getTime() ?? at.toMillis()))
+    : 0;
+
+  tx.update(docIn(pieces(), pieceId), {
+    stage: next.stage,
+    state: next.state,
+    holdDepartment: next.holdDepartment,
+    qcSince: enteringQc ? at : leavingQc ? null : (current.qcSince ?? null),
+    qcSettledMs: increment(waited),
+    updatedAt: at,
+    ...extra,
+  });
+
+  const delta = countDelta(current.state, next.state);
+  if (Object.keys(delta).length > 0) {
+    tx.update(
+      docIn(planningLines(), current.lineId),
+      Object.fromEntries(Object.entries(delta).map(([k, v]) => [`counts.${k}`, increment(v!)]))
+    );
+  }
 }
 
-// ───────────────────────── catalog ─────────────────────────
+/** The tallies the dashboard reads, incremented beside the record that caused
+ *  them. A merge rather than an update, because the first inspection of a new
+ *  department or defect is also the write that creates its line. */
+function tally(tx: Transaction, docId: string, counts: Record<string, unknown>): void {
+  if (Object.keys(counts).length === 0) return;
+  tx.set(docIn(stats(), docId), { counts }, { merge: true });
+}
 
-export const saveMaterial =
+// ───────────────────────── planning ─────────────────────────
+
+/** One row as it arrives from the sheet, already parsed into values. The
+ *  parsing itself is in `lib/import/planning.ts`, where it can be tested
+ *  without a database. */
+export interface PlanningInput {
+  project: string;
+  mplpr: string | null;
+  itemCode: string;
+  itemName: string;
+  qty: number;
+  measuringType: MeasuringType;
+  priority: string | null;
+  plannedAt: Date;
+}
+
+/** Firestore caps a batch at five hundred operations. A line costs one write
+ *  plus one per piece, so a line of forty pieces is forty-one; committing per
+ *  line keeps every batch far inside the limit and, more usefully, means a
+ *  failure halfway through an import leaves whole lines rather than half of
+ *  one. */
+const MAX_QTY = 200;
+
+/** Bring in planning's sheet.
+ *
+ *  A line and its pieces are created together: a line whose pieces failed to
+ *  write would sit in the list with nothing to inspect, and a piece with no
+ *  line has nothing to inspect it against. Re-importing a row that is already
+ *  here is refused rather than duplicated — see `importKey`.
+ */
+export const importPlanning =
   (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "material.manage");
+  async (rows: PlanningInput[]): Promise<ActionResult & { added?: number; skipped?: number }> => {
+    const denied = allow(actor, "planning.manage");
     if (denied) return denied;
+    if (rows.length === 0) return { ok: false, error: "That sheet has no rows to bring in." };
 
-    const partNumber = String(formData.get("partNumber") ?? "").trim();
-    if (!partNumber) return { ok: false, error: "A part number is required." };
-
-    const id = optionalString(formData.get("id"));
-    const data = {
-      partNumber,
-      materialNumber: optionalString(formData.get("materialNumber")),
-      description: optionalString(formData.get("description")),
-      spec: optionalString(formData.get("spec")),
-      drawingNumber: optionalString(formData.get("drawingNumber")),
-      drawingRev: optionalString(formData.get("drawingRev")),
-      hardnessMin: optionalNumber(formData.get("hardnessMin")),
-      hardnessMax: optionalNumber(formData.get("hardnessMax")),
-      hardnessUnit: optionalString(formData.get("hardnessUnit")) ?? "HRC",
-      surfaceFinishRa: optionalNumber(formData.get("surfaceFinishRa")),
-      requiredCerts: optionalString(formData.get("requiredCerts")),
-      roughingAllowance: optionalNumber(formData.get("roughingAllowance")),
-    };
-
-    if (data.hardnessMin != null && data.hardnessMax != null && data.hardnessMin > data.hardnessMax)
-      return { ok: false, error: "The minimum hardness is above the maximum." };
-
-    const ref = docIn(materials(), id ?? undefined);
+    let added = 0;
+    let skipped = 0;
 
     try {
-      await runTransaction(clientDb(), async (tx) => {
-        const existing = id ? await tx.get(ref) : null;
-        if (id && !existing?.exists()) throw new Error("NOT_FOUND");
-        const previous = existing?.data() as MaterialDoc | undefined;
+      for (const row of rows) {
+        if (row.qty < 1 || row.qty > MAX_QTY)
+          return { ok: false, error: `${row.project} ${row.itemCode}: quantity must be between 1 and ${MAX_QTY}.` };
 
-        // Reads before writes, which Firestore requires, so the reservation is
-        // taken while the transaction can still see a competing one.
-        if (!(await reserveUnique(tx, "material.partNumber", partNumber, ref.path)))
-          throw new Error("CLASH");
+        // The row's own identity, as planning wrote it. Importing the same
+        // sheet twice is a thing that happens; creating the pieces twice is
+        // not recoverable by hand.
+        const lineId = importKey(row);
+        const existing = await getDoc(docIn(planningLines(), lineId));
+        if (existing.exists()) {
+          skipped += 1;
+          continue;
+        }
 
-        if (previous && previous.partNumber !== partNumber)
-          releaseUnique(tx, "material.partNumber", previous.partNumber);
+        const batch = writeBatch(clientDb());
+        const at = now();
+        const plannedAt = Timestamp.fromDate(row.plannedAt);
 
-        if (previous) tx.update(ref, data);
-        else tx.set(ref, { ...data, createdAt: now(), features: [], lotCount: 0, partCount: 0 });
-      });
+        batch.set(docIn(planningLines(), lineId), {
+          project: row.project,
+          mplpr: row.mplpr,
+          itemCode: row.itemCode,
+          itemName: row.itemName,
+          qty: row.qty,
+          measuringType: row.measuringType,
+          priority: row.priority,
+          plannedAt,
+          createdAt: at,
+          updatedAt: at,
+          createdByUid: actor.uid,
+          createdByName: actor.displayName,
+          counts: { total: row.qty, withQc: row.qty, inRework: 0, closed: 0, measurements: 0 },
+        } satisfies PlanningLineDoc);
+
+        const start = initialPosition();
+        for (let n = 1; n <= row.qty; n += 1) {
+          batch.set(docIn(pieces()), {
+            lineId,
+            project: row.project,
+            itemCode: row.itemCode,
+            itemName: row.itemName,
+            measuringType: row.measuringType,
+            priority: row.priority,
+            plannedAt,
+            pieceNo: n,
+            serial: `${row.project}-${row.itemCode}-${String(n).padStart(3, "0")}`,
+            stage: start.stage,
+            state: start.state,
+            holdDepartment: null,
+            round: 0,
+            measuredTimes: 0,
+            lastVerdict: null,
+            lastInspectedAt: null,
+            // Quality owns it from the moment planning hands it over; that is
+            // where the clock the dashboard reports starts.
+            qcSince: at,
+            qcSettledMs: 0,
+            createdAt: at,
+            updatedAt: at,
+          } satisfies PieceDoc);
+        }
+
+        await batch.commit();
+        added += 1;
+      }
     } catch (error) {
-      const message = (error as Error).message;
-      if (message === "CLASH") return { ok: false, error: clashMessage("Part number", partNumber) };
-      if (message === "NOT_FOUND") return { ok: false, error: "That specification no longer exists." };
-      return explain(error, "Could not save the specification.");
+      return {
+        ...explain(error, "Could not bring in the sheet."),
+        added,
+        skipped,
+      };
     }
 
-    return { ok: true, info: "Specification saved." };
+    return {
+      ok: true,
+      added,
+      skipped,
+      info:
+        `${added} line(s) brought in` +
+        (skipped > 0 ? `, ${skipped} already here and left alone.` : "."),
+    };
   };
 
-export const addFeature =
+/** A planning row's own identity: the same row imported twice lands on the
+ *  same document and is recognised rather than duplicated. Project, item and
+ *  planning's date are what make a row that row. */
+export function importKey(row: Pick<PlanningInput, "project" | "itemCode" | "plannedAt">): string {
+  const day = row.plannedAt.toISOString().slice(0, 10);
+  return configKey(`${row.project}|${row.itemCode}|${day}`);
+}
+
+/** Cancel a line that has not been started.
+ *
+ *  Refused the moment any piece on it has been measured. A line with
+ *  inspections against it is a record, and deleting it would leave signed
+ *  sheets describing pieces that no longer exist.
+ */
+export const cancelPlanningLine =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "material.manage");
+    const denied = allow(actor, "planning.manage");
     if (denied) return denied;
 
-    const materialId = optionalString(formData.get("materialId"));
-    const stage = String(formData.get("stage") ?? "").trim();
-    const name = String(formData.get("name") ?? "").trim();
-    if (!materialId) return { ok: false, error: "That specification reference is not valid." };
-    if (!name) return { ok: false, error: "A feature name is required." };
-    if (!isStage(stage)) return { ok: false, error: "Unknown stage." };
+    const lineId = optionalString(formData.get("lineId"));
+    if (!lineId) return { ok: false, error: "That line reference is not valid." };
 
-    const ref = docIn(materials(), materialId);
     try {
-      await runTransaction(clientDb(), async (tx) => {
-        const snapshot = await tx.get(ref);
-        if (!snapshot.exists()) throw new Error("NOT_FOUND");
+      const [lineSnap, pieceSnap] = await Promise.all([
+        getDoc(docIn(planningLines(), lineId)),
+        getDocs(query(pieces(), where("lineId", "==", lineId))),
+      ]);
+      if (!lineSnap.exists()) return { ok: false, error: "That line no longer exists." };
 
-        const features = (snapshot.data() as MaterialDoc).features ?? [];
-        const feature: FeatureEntry = {
-          id: newId(),
-          stage,
-          name,
-          kind: String(formData.get("kind") ?? "DIMENSION") === "GDT" ? "GDT" : "DIMENSION",
-          nominal: optionalNumber(formData.get("nominal")),
-          tolMinus: optionalNumber(formData.get("tolMinus")) ?? 0,
-          tolPlus: optionalNumber(formData.get("tolPlus")) ?? 0,
-          unit: optionalString(formData.get("unit")) ?? "mm",
-          critical: formData.get("critical") === "on",
-          gdtSymbol: optionalString(formData.get("gdtSymbol")),
-          gdtLimit: optionalNumber(formData.get("gdtLimit")),
-          sortOrder: features.filter((f) => f.stage === stage).length,
+      const started = pieceSnap.docs.filter((d) => (d.data() as PieceDoc).round > 0);
+      if (started.length > 0)
+        return {
+          ok: false,
+          error: `${started.length} piece(s) on this line have already been inspected, so it cannot be cancelled.`,
         };
 
-        tx.update(ref, { features: [...features, feature] });
-      });
-    } catch (error) {
-      if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "That specification no longer exists." };
-      return explain(error, "Could not add the feature.");
-    }
-
-    return { ok: true, info: "Feature added." };
-  };
-
-export const deleteFeature =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "material.manage");
-    if (denied) return denied;
-
-    const materialId = optionalString(formData.get("materialId"));
-    const featureId = optionalString(formData.get("id"));
-    if (!materialId || !featureId) return { ok: false, error: "That reference is not valid." };
-
-    const ref = docIn(materials(), materialId);
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const snapshot = await tx.get(ref);
-        if (!snapshot.exists()) return;
-        const features = (snapshot.data() as MaterialDoc).features ?? [];
-        tx.update(ref, { features: features.filter((f) => f.id !== featureId) });
-      });
-    } catch (error) {
-      return explain(error, "Could not remove the feature.");
-    }
-
-    return { ok: true, info: "Feature removed." };
-  };
-
-export const saveSupplier =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "supplier.manage");
-    if (denied) return denied;
-
-    const name = String(formData.get("name") ?? "").trim();
-    if (!name) return { ok: false, error: "A supplier name is required." };
-
-    const id = optionalString(formData.get("id"));
-    const data = {
-      name,
-      code: optionalString(formData.get("code")),
-      contact: optionalString(formData.get("contact")),
-      notes: optionalString(formData.get("notes")),
-    };
-    const ref = docIn(suppliers(), id ?? undefined);
-
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const existing = id ? await tx.get(ref) : null;
-        const previous = existing?.data() as { name: string } | undefined;
-
-        if (!(await reserveUnique(tx, "supplier.name", name, ref.path))) throw new Error("CLASH");
-        if (previous && previous.name !== name) releaseUnique(tx, "supplier.name", previous.name);
-
-        if (previous) tx.update(ref, data);
-        else tx.set(ref, { ...data, createdAt: now() });
-      });
-    } catch (error) {
-      if ((error as Error).message === "CLASH")
-        return { ok: false, error: clashMessage("Supplier name", name) };
-      return explain(error, "Could not save the supplier.");
-    }
-
-    return { ok: true, info: "Supplier saved." };
-  };
-
-// ───────────────────── raw material receiving ─────────────────────
-
-export const receiveLot =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "lot.receive");
-    if (denied) return denied;
-
-    const lotNumber = String(formData.get("lotNumber") ?? "").trim();
-    const materialId = optionalString(formData.get("materialId"));
-    const receivedQty = optionalNumber(formData.get("receivedQty"));
-
-    if (!lotNumber) return { ok: false, error: "A lot number is required." };
-    if (!materialId) return { ok: false, error: "Choose a specification." };
-    if (receivedQty == null || receivedQty <= 0)
-      return { ok: false, error: "The quantity received must be greater than zero." };
-
-    const receivedAtRaw = optionalString(formData.get("receivedAt"));
-    const receivedAt = receivedAtRaw ? new Date(receivedAtRaw) : new Date();
-    if (Number.isNaN(receivedAt.getTime())) return { ok: false, error: "That receiving date is not valid." };
-
-    const ref = docIn(lots());
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const materialRef = docIn(materials(), materialId);
-        const materialSnap = await tx.get(materialRef);
-        if (!materialSnap.exists()) throw new Error("NO_MATERIAL");
-
-        if (!(await reserveUnique(tx, "lot.lotNumber", lotNumber, ref.path)))
-          throw new Error("CLASH");
-
-        tx.set(ref, {
-          lotNumber,
-          materialId,
-          supplierId: optionalString(formData.get("supplierId")),
-          receivedAt: Timestamp.fromDate(receivedAt),
-          poNumber: optionalString(formData.get("poNumber")),
-          heatNumber: optionalString(formData.get("heatNumber")),
-          receivedQty,
-          unit: optionalString(formData.get("unit")) ?? "pcs",
-          status: "PENDING",
-          notes: optionalString(formData.get("notes")),
-          createdAt: now(),
-          certificates: [],
-          partCount: 0,
-          analysisCounts: { total: 0, pending: 0, accepted: 0, rejected: 0 },
-        });
-        tx.update(materialRef, { lotCount: increment(1) });
-      });
-    } catch (error) {
-      const message = (error as Error).message;
-      if (message === "CLASH") return { ok: false, error: clashMessage("Lot number", lotNumber) };
-      if (message === "NO_MATERIAL") return { ok: false, error: "That specification no longer exists." };
-      return explain(error, "Could not record the receipt.");
-    }
-
-    return { ok: true, info: `Lot ${lotNumber} received.`, };
-  };
-
-export const addCertificate =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "lot.certificate.manage");
-    if (denied) return denied;
-
-    const lotId = optionalString(formData.get("lotId"));
-    const type = String(formData.get("type") ?? "").trim();
-    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
-    if (!type) return { ok: false, error: "A certificate type is required." };
-
-    const issuedAtRaw = optionalString(formData.get("issuedAt"));
-    const issuedAt = issuedAtRaw ? new Date(issuedAtRaw) : null;
-    if (issuedAt && Number.isNaN(issuedAt.getTime()))
-      return { ok: false, error: "That issue date is not valid." };
-
-    const ref = docIn(lots(), lotId);
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const snapshot = await tx.get(ref);
-        if (!snapshot.exists()) throw new Error("NOT_FOUND");
-
-        const certificate: CertificateEntry = {
-          id: newId(),
-          type,
-          number: optionalString(formData.get("number")),
-          issuedAt: issuedAt ? Timestamp.fromDate(issuedAt) : null,
-          received: formData.get("received") === "on",
-          verified: formData.get("verified") === "on",
-          notes: optionalString(formData.get("notes")),
-        };
-        tx.update(ref, {
-          certificates: [...((snapshot.data() as LotDoc).certificates ?? []), certificate],
-        });
-      });
-    } catch (error) {
-      if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "That lot no longer exists." };
-      return explain(error, "Could not add the certificate.");
-    }
-
-    return { ok: true, info: "Certificate added." };
-  };
-
-export const setCertificate =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "lot.certificate.manage");
-    if (denied) return denied;
-
-    const lotId = optionalString(formData.get("lotId"));
-    const certificateId = optionalString(formData.get("id"));
-    if (!lotId || !certificateId) return { ok: false, error: "That reference is not valid." };
-
-    const ref = docIn(lots(), lotId);
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const snapshot = await tx.get(ref);
-        if (!snapshot.exists()) return;
-        tx.update(ref, {
-          certificates: ((snapshot.data() as LotDoc).certificates ?? []).map((c) =>
-            c.id === certificateId
-              ? {
-                  ...c,
-                  received: formData.get("received") === "on",
-                  verified: formData.get("verified") === "on",
-                }
-              : c
-          ),
-        });
-      });
-    } catch (error) {
-      return explain(error, "Could not update the certificate.");
-    }
-
-    return { ok: true, info: "Certificate updated." };
-  };
-
-// ───────────────────── raw material analysis ─────────────────────
-
-export const createAnalysis =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "analysis.record");
-    if (denied) return denied;
-
-    const lotId = optionalString(formData.get("lotId"));
-    const sampleRef = String(formData.get("sampleRef") ?? "").trim();
-    if (!lotId || !sampleRef) return { ok: false, error: "A sample reference is required." };
-
-    // Chemistry lines the lab fills in. Kept as free rows so a different alloy
-    // can be analysed without a schema change.
-    const properties = formData.getAll("property").map((v) => String(v).trim());
-    const mins = formData.getAll("requiredMin");
-    const maxes = formData.getAll("requiredMax");
-    const units = formData.getAll("unit");
-
-    const results: AnalysisResultEntry[] = properties
-      .map((property, i) => ({
-        id: newId(),
-        property,
-        requiredMin: optionalNumber(mins[i] ?? null),
-        requiredMax: optionalNumber(maxes[i] ?? null),
-        requiredText: null,
-        actual: null,
-        actualText: null,
-        unit: optionalString(units[i] ?? null),
-        pass: null,
-        sortOrder: i,
-      }))
-      .filter((r) => r.property !== "");
-
-    try {
       const batch = writeBatch(clientDb());
-      batch.set(docIn(analysesOf(lotId)), {
-        sampleRef,
-        method: optionalString(formData.get("method")),
-        performedAt: now(),
-        // Who ran the test may be an outside laboratory; who is answerable for
-        // the record is always the account that entered it.
-        performedBy: optionalString(formData.get("performedBy")),
-        recordedByUid: actor.uid,
-        recordedByName: actor.displayName,
-        status: "PENDING",
-        conclusion: null,
-        actionTaken: null,
-        results,
-      });
-      batch.update(docIn(lots(), lotId), {
-        "analysisCounts.total": increment(1),
-        "analysisCounts.pending": increment(1),
-      });
+      for (const piece of pieceSnap.docs) batch.delete(piece.ref);
+      batch.delete(lineSnap.ref);
       await batch.commit();
     } catch (error) {
-      return explain(error, "Could not open the analysis.");
+      return explain(error, "Could not cancel the line.");
     }
 
-    return { ok: true, info: "Analysis opened." };
+    return { ok: true, info: "Line cancelled." };
   };
 
-export const saveAnalysisResults =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "analysis.record");
-    if (denied) return denied;
+// ───────────────────────── inspecting a piece ─────────────────────────
 
-    const lotId = optionalString(formData.get("lotId"));
-    const analysisId = optionalString(formData.get("analysisId"));
-    if (!lotId || !analysisId) return { ok: false, error: "That reference is not valid." };
-
-    const { analysisStatus } = await import("@/lib/domain/inspection");
-    let status: Status = "PENDING";
-
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        const analysisRef = docIn(analysesOf(lotId), analysisId);
-        const lotRef = docIn(lots(), lotId);
-        const [analysisSnap, lotSnap] = await Promise.all([tx.get(analysisRef), tx.get(lotRef)]);
-        if (!analysisSnap.exists() || !lotSnap.exists()) throw new Error("NOT_FOUND");
-
-        const analysis = analysisSnap.data() as AnalysisDoc;
-        const merged = (analysis.results ?? []).map((r) => ({
-          ...r,
-          actual: optionalNumber(formData.get(`actual_${r.id}`)),
-          actualText: optionalString(formData.get(`actualText_${r.id}`)),
-        }));
-
-        status = analysisStatus(merged);
-        const previous = analysis.status;
-
-        tx.update(analysisRef, {
-          results: merged,
-          status,
-          conclusion: optionalString(formData.get("conclusion")),
-          actionTaken: optionalString(formData.get("actionTaken")),
-          performedBy: optionalString(formData.get("performedBy")) ?? analysis.performedBy,
-        });
-
-        // Move the lot's tally from the old verdict to the new one, so the
-        // dashboard's "waiting on analysis" list stays true without reading
-        // every analysis.
-        if (previous !== status) {
-          const bucket = (s: string) =>
-            s === "ACCEPTED" ? "accepted" : s === "REJECTED" ? "rejected" : "pending";
-          tx.update(lotRef, {
-            [`analysisCounts.${bucket(previous)}`]: increment(-1),
-            [`analysisCounts.${bucket(status)}`]: increment(1),
-          });
-        }
-      });
-    } catch (error) {
-      if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "That analysis no longer exists." };
-      return explain(error, "Could not save the results.");
-    }
-
-    return { ok: true, info: `Results saved. Verdict: ${status}.` };
-  };
-
-// ─────────────── the checklist submit path ───────────────
-
-export const submitLotInspection =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "inspection.submit");
-    if (denied) return denied;
-
-    const lotId = optionalString(formData.get("lotId"));
-    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
-
-    const lotSnap = await getDoc(docIn(lots(), lotId));
-    if (!lotSnap.exists()) return { ok: false, error: "That lot no longer exists." };
-    const lot = lotSnap.data() as LotDoc;
-
-    const materialSnap = await getDoc(docIn(materials(), lot.materialId));
-    const material = materialSnap.data() as MaterialDoc | undefined;
-
-    const stage: Stage = "RAW_RECEIVING";
-    const checks = readChecks(stage, formData);
-    const suggestion = rollup({
-      stage,
-      checks: Object.fromEntries(checks.map((c) => [c.key, c.ok])),
-    });
-
-    const chosen = String(formData.get("status") ?? "").trim();
-    // A verdict the stage does not allow is refused outright. Quietly falling
-    // back to the suggestion would file a record saying something the
-    // inspector did not choose.
-    if (chosen !== "" && !stageDef(stage).outcomes.includes(chosen as Status))
-      return { ok: false, error: "That verdict is not allowed at this stage." };
-    const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
-
-    const verdictDenied = allow(actor, verdictPermission(status, suggestion.suggested));
-    if (verdictDenied) return verdictDenied;
-
-    try {
-      await runTransaction(clientDb(), async (tx) => {
-        tx.set(docIn(inspections()), {
-          stage,
-          partId: null,
-          lotId,
-          // The rules require this to equal the caller's own uid, so a forged
-          // signature is refused by the database rather than by this line.
-          inspectorUid: actor.uid,
-          inspector: actor.displayName,
-          inspectedAt: now(),
-          status,
-          notes: optionalString(formData.get("notes")),
-          hardnessValue: null,
-          hardnessUnit: null,
-          hardnessMin: null,
-          hardnessMax: null,
-          surfaceFinishRa: null,
-          cmmRequired: false,
-          cmmReportRef: null,
-          cmmReviewed: false,
-          checks,
-          measurements: [],
-          subject: lot.lotNumber,
-          partNumber: material?.partNumber ?? "—",
-          hasFailedMeasurement: false,
-        } satisfies InspectionDoc);
-
-        // A lot mirrors its receiving verdict; PENDING keeps it in the queue.
-        tx.update(docIn(lots(), lotId), { status: status === "PENDING" ? "PENDING" : status });
-        tx.update(docIn(users(), actor.uid), { signedInspections: increment(1) });
-        tallyFailures(tx, stage, checks);
-      });
-    } catch (error) {
-      return explain(error, "Could not record the inspection.");
-    }
-
-    return { ok: true, info: `Inspection recorded. Verdict: ${status}.` };
-  };
-
-
-/** The defect photographs posted with an inspection, resized and encoded.
+/** The readings posted from the sheet.
  *
- *  Done before the transaction opens, not inside it. A transaction callback is
- *  re-run whenever Firestore sees contention, and re-compressing four
- *  photographs on a tablet each time it retries is how a sheet takes half a
- *  minute to save. It also means a picture that cannot be read fails the sheet
- *  with a plain sentence rather than half-writing it.
+ *  The drawing is posted alongside the reading rather than looked up again, so
+ *  the record says what the inspector was working to. If the item's
+ *  configuration is revised tomorrow, today's sheet still reads correctly —
+ *  which is the whole reason a quality record copies its specification instead
+ *  of pointing at one.
  */
+function readReadings(formData: FormData): ReadingEntry[] {
+  const keys = formData.getAll("readingKey").map(String);
+
+  return keys.map((key, i) => {
+    const spec: Reading = {
+      key,
+      name: String(formData.getAll("readingName")[i] ?? key),
+      unit: optionalString(formData.getAll("readingUnit")[i]),
+      nominal: optionalNumber(formData.getAll("readingNominal")[i]),
+      tolMinus: optionalNumber(formData.getAll("readingTolMinus")[i]),
+      tolPlus: optionalNumber(formData.getAll("readingTolPlus")[i]),
+      actual: optionalNumber(formData.getAll("readingActual")[i]),
+    };
+    return {
+      ...spec,
+      unit: spec.unit ?? null,
+      nominal: spec.nominal ?? null,
+      tolMinus: spec.tolMinus ?? null,
+      tolPlus: spec.tolPlus ?? null,
+      actual: spec.actual ?? null,
+      result: result(spec),
+      adHoc: String(formData.getAll("readingAdHoc")[i] ?? "") === "1",
+    };
+  });
+}
+
+/** Only the defects actually ticked. An untouched checklist records nothing,
+ *  rather than recording that every defect was absent — the sheet says what
+ *  was seen, and a blank is not an observation. */
+function readDefects(formData: FormData): DefectEntry[] {
+  return formData
+    .getAll("defectKey")
+    .map(String)
+    .map((key, i) => ({
+      key,
+      name: String(formData.getAll("defectName")[i] ?? key),
+      department: optionalString(formData.getAll("defectDepartment")[i]),
+      note: optionalString(formData.getAll("defectNote")[i]),
+      seen: String(formData.getAll("defectSeen")[i] ?? "") === "1",
+    }))
+    .filter((d) => d.seen)
+    .map((d) => ({ key: d.key, name: d.name, department: d.department, note: d.note }));
+}
+
 async function readPhotos(formData: FormData) {
   const files = formData
     .getAll("photos")
@@ -683,95 +410,42 @@ async function readPhotos(formData: FormData) {
   return Promise.all(files.map((file) => prepare(file)));
 }
 
-export const submitPartInspection =
+/** Measure a piece and decide what happens to it.
+ *
+ *  One transaction writes the sheet, moves the piece, adjusts the line's
+ *  counters, opens a rework when it is held, and updates the tallies the
+ *  dashboard reads. Anything less and a report can describe a state the pieces
+ *  are not in.
+ */
+export const recordInspection =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "inspection.submit");
+    const denied = allow(actor, "inspection.record");
     if (denied) return denied;
 
-    const partId = optionalString(formData.get("partId"));
-    const stageRaw = String(formData.get("stage") ?? "");
-    if (!partId) return { ok: false, error: "That part reference is not valid." };
-    if (!isStage(stageRaw)) return { ok: false, error: "Unknown stage." };
+    const pieceId = optionalString(formData.get("pieceId"));
+    const verdict = String(formData.get("verdict") ?? "");
+    const department = optionalString(formData.get("holdDepartment"));
+    const bypassReason = optionalString(formData.get("bypassReason"));
 
-    const stage = stageRaw as Stage;
-    const def = stageDef(stage);
-    if (def.subject !== "PART") return { ok: false, error: "That stage does not apply to parts." };
+    if (!pieceId) return { ok: false, error: "That piece reference is not valid." };
+    if (!isVerdict(verdict)) return { ok: false, error: "Choose a verdict." };
 
-    const partSnap = await getDoc(docIn(parts(), partId));
-    if (!partSnap.exists()) return { ok: false, error: "That part no longer exists." };
-    const part = partSnap.data() as PartDoc;
+    const readings = readReadings(formData);
+    const defects = readDefects(formData);
+    const suggestion = suggest(readings as Reading[], defects as Defect[]);
 
-    const gate = canInspect(part, stage);
-    if (!gate.ok) return { ok: false, error: gate.reason };
-
-    const materialSnap = await getDoc(docIn(materials(), part.materialId));
-    if (!materialSnap.exists()) return { ok: false, error: "The part's specification no longer exists." };
-    const material = materialSnap.data() as MaterialDoc;
-
-    const checks = readChecks(stage, formData);
-
-    // Measurements come from the material's feature list for this stage; the
-    // nominal and tolerances are copied in so the record reads on its own even
-    // after the drawing is revised.
-    const features = (material.features ?? []).filter((f) => f.stage === stage);
-    const specs: MeasurementSpec[] = features.map((f) => ({
-      kind: f.kind,
-      nominal: f.nominal,
-      tolMinus: f.tolMinus,
-      tolPlus: f.tolPlus,
-      gdtLimit: f.gdtLimit,
-      actual: optionalNumber(formData.get(`actual_${f.id}`)),
-      critical: f.critical,
-    }));
-    const measurements: MeasurementEntry[] = features.map((f, i) => ({
-      featureId: f.id,
-      name: f.name,
-      kind: f.kind,
-      nominal: f.nominal,
-      tolMinus: f.tolMinus,
-      tolPlus: f.tolPlus,
-      gdtLimit: f.gdtLimit,
-      actual: specs[i].actual ?? null,
-      unit: f.unit,
-      critical: f.critical,
-      result: measurementResult(specs[i]),
-      sortOrder: i,
-    }));
-
-    const hardness =
-      stage === "HEAT_TREATMENT"
-        ? {
-            value: optionalNumber(formData.get("hardnessValue")),
-            min: material.hardnessMin,
-            max: material.hardnessMax,
-          }
-        : undefined;
-
-    const suggestion = rollup({
-      stage,
-      checks: Object.fromEntries(checks.map((c) => [c.key, c.ok])),
-      measurements: specs,
-      hardness,
-    });
-
-    const chosen = String(formData.get("status") ?? "").trim();
-    if (chosen !== "" && !def.outcomes.includes(chosen as Status))
-      return { ok: false, error: "That verdict is not allowed at this stage." };
-    const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
-
-    // Releasing product needs its own authority; departing from the derived
-    // verdict needs another. Agreeing with it needs neither. The release half
-    // of this is also enforced by the rules; the override half cannot be,
-    // which is what the reconciliation report exists for.
-    const verdictDenied = allow(actor, verdictPermission(status, suggestion.suggested));
-    if (verdictDenied) return verdictDenied;
-
-    // PENDING means "sheet not finished" — the part must not move.
-    const transition =
-      status === "PENDING"
-        ? { stage: part.currentStage as Stage, status: part.status as "IN_PROCESS" }
-        : nextPartState(stage, status);
+    // A concession is the one verdict nothing arrives at on its own, so it is
+    // the one the permission sits on.
+    const verdictDenied = allow(actor, verdictPermission(verdict, suggestion.verdict));
+    if (verdictDenied)
+      return {
+        ok: false,
+        error:
+          "Letting through a piece the measurements hold needs a concession, and your account cannot grant one.",
+      };
+    if (verdict === "ACCEPTED_BYPASS" && !bypassReason)
+      return { ok: false, error: "A concession has to say why. Write the reason before signing." };
 
     let photos;
     try {
@@ -782,74 +456,116 @@ export const submitPartInspection =
 
     try {
       await runTransaction(clientDb(), async (tx) => {
-        // Named, because the photographs hang off it.
+        const ref = docIn(pieces(), pieceId);
+        const snapshot = await tx.get(ref);
+        if (!snapshot.exists()) throw new Error("That piece no longer exists.");
+        const piece = snapshot.data() as PieceDoc;
+
+        const move = applyVerdict(
+          { stage: piece.stage, state: piece.state, holdDepartment: piece.holdDepartment },
+          verdict,
+          verdict === "HOLD" ? department : null
+        );
+        if (!move.ok) throw new Error(transitionMessage(move.reason));
+
+        const round = (piece.round ?? 0) + 1;
+        const at = now();
         const inspectionRef = docIn(inspections());
 
         tx.set(inspectionRef, {
-          stage,
-          partId,
-          lotId: part.lotId,
+          pieceId,
+          lineId: piece.lineId,
+          project: piece.project,
+          itemCode: piece.itemCode,
+          itemName: piece.itemName,
+          serial: piece.serial,
+          stage: piece.stage,
+          round,
+          readings,
+          defects,
+          suggested: suggestion.verdict,
+          verdict,
+          holdDepartment: move.next.holdDepartment,
+          bypassReason: verdict === "ACCEPTED_BYPASS" ? bypassReason : null,
           inspectorUid: actor.uid,
           inspector: actor.displayName,
-          inspectedAt: now(),
-          status,
-          notes: optionalString(formData.get("notes")),
-          hardnessValue: hardness?.value ?? null,
-          hardnessUnit: stage === "HEAT_TREATMENT" ? material.hardnessUnit : null,
-          hardnessMin: stage === "HEAT_TREATMENT" ? material.hardnessMin : null,
-          hardnessMax: stage === "HEAT_TREATMENT" ? material.hardnessMax : null,
-          surfaceFinishRa: stage === "FINAL" ? optionalNumber(formData.get("surfaceFinishRa")) : null,
-          cmmRequired: stage === "FINAL" && formData.get("cmmRequired") === "on",
-          cmmReportRef: stage === "FINAL" ? optionalString(formData.get("cmmReportRef")) : null,
-          cmmReviewed: stage === "FINAL" && formData.get("cmmReviewed") === "on",
-          checks,
-          measurements,
-          subject: part.serialNumber,
-          partNumber: material.partNumber,
-          hasFailedMeasurement: measurements.some((m) => m.result === "FAIL"),
+          inspectedAt: at,
+          photoCount: photos.length,
+          hasFailedReading: readings.some((r) => r.result === "FAIL"),
         } satisfies InspectionDoc);
 
-        // Evidence and verdict commit together or not at all. A photograph of
-        // a defect that outlived the sheet it was taken for would be a
-        // photograph of nothing in particular.
+        // Evidence and verdict commit together. A photograph that outlived the
+        // sheet it was taken for would be a photograph of nothing.
         for (const photo of photos) {
           const photoId = docIn(photosOf(inspectionRef.id)).id;
-
           tx.set(docIn(photosOf(inspectionRef.id), photoId), {
             thumb: photo.thumb,
             caption: null,
             width: photo.width,
             height: photo.height,
             bytes: photo.bytes,
-            capturedAt: now(),
+            capturedAt: at,
             capturedByUid: actor.uid,
             capturedByName: actor.displayName,
           } satisfies InspectionPhotoDoc);
-
           tx.set(docIn(photoDataOf(inspectionRef.id), photoId), {
             data: photo.data,
           } satisfies InspectionPhotoDataDoc);
         }
 
-        tx.update(docIn(parts(), partId), {
-          currentStage: transition.stage,
-          status: transition.status,
-          updatedAt: now(),
+        movePiece(tx, pieceId, piece, move.next, {
+          // The round counts measurements at the stage the piece is at, so it
+          // starts again when the piece moves on: "held three times at finish"
+          // then reads directly off the piece.
+          round: move.next.stage === piece.stage ? round : 0,
+          // Never reset: this is the number planning asks for in their
+          // Description column — how many times the thing had to be measured.
+          measuredTimes: increment(1),
+          lastVerdict: verdict,
+          lastInspectedAt: at,
         });
 
-        tx.set(docIn(eventsOf(partId)), {
-          at: now(),
-          kind: "INSPECTION",
-          stage,
-          fromValue: `${part.currentStage}/${part.status}`,
-          toValue: `${transition.stage}/${transition.status}`,
-          note: `${def.ar} — ${status}`,
-          actorUid: actor.uid,
-          actor: actor.displayName,
+        tx.update(docIn(planningLines(), piece.lineId), {
+          "counts.measurements": increment(1),
         });
+
+        if (verdict === "HOLD" && move.next.holdDepartment) {
+          tx.set(docIn(reworks()), {
+            pieceId,
+            lineId: piece.lineId,
+            project: piece.project,
+            itemCode: piece.itemCode,
+            serial: piece.serial,
+            stage: piece.stage,
+            round,
+            inspectionId: inspectionRef.id,
+            department: move.next.holdDepartment,
+            heldAt: at,
+            heldByUid: actor.uid,
+            heldByName: actor.displayName,
+            completedAt: null,
+            recordedByUid: null,
+            recordedByName: null,
+            note: null,
+          } satisfies ReworkDoc);
+        }
 
         tx.update(docIn(users(), actor.uid), { signedInspections: increment(1) });
-        tallyFailures(tx, stage, checks);
+
+        tally(tx, STAT_DOCS.verdicts, {
+          [verdict]: increment(1),
+          [`${piece.stage}::${verdict}`]: increment(1),
+        });
+        if (move.next.holdDepartment)
+          tally(tx, STAT_DOCS.holds, {
+            [move.next.holdDepartment]: increment(1),
+            [`${move.next.holdDepartment}::${piece.stage}`]: increment(1),
+          });
+        tally(
+          tx,
+          STAT_DOCS.defects,
+          Object.fromEntries(defects.map((d) => [d.key, increment(1)]))
+        );
       });
     } catch (error) {
       return explain(error, "Could not record the inspection.");
@@ -857,173 +573,330 @@ export const submitPartInspection =
 
     return {
       ok: true,
-      info: `Inspection recorded. Verdict: ${status}. The part is now at ${transition.stage}.`,
+      info:
+        verdict === "HOLD"
+          ? `Held for ${department}. It stays at this stage until the rework is closed out.`
+          : "Recorded. The piece has moved on.",
     };
   };
 
-// ───────────────────────── parts ─────────────────────────
-
-/** Each part costs three writes: the part, its first event, and the serial
- *  reservation. Firestore caps a batch at five hundred operations, so a
- *  hundred and fifty leaves room to spare. */
-const PARTS_PER_BATCH = 150;
-
-export const raiseParts =
-  (actor: SessionUser) =>
-  async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "part.raise");
-    if (denied) return denied;
-
-    const lotId = optionalString(formData.get("lotId"));
-    const count = optionalNumber(formData.get("count"));
-    const prefix = String(formData.get("prefix") ?? "").trim();
-
-    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
-    if (count == null || count < 1 || count > 500)
-      return { ok: false, error: "The count must be between 1 and 500." };
-    if (!prefix) return { ok: false, error: "A serial number prefix is required." };
-
-    const lotSnap = await getDoc(docIn(lots(), lotId));
-    if (!lotSnap.exists()) return { ok: false, error: "That lot no longer exists." };
-    const lot = lotSnap.data() as LotDoc;
-
-    // `canRaiseParts` wants the verdicts themselves; the lot keeps a tally of
-    // them, which is enough to answer "is any analysis rejected".
-    const counts = lot.analysisCounts ?? { total: 0, pending: 0, accepted: 0, rejected: 0 };
-    const gate = canRaiseParts({
-      status: lot.status,
-      analyses: [
-        ...Array.from({ length: counts.rejected }, () => ({ status: "REJECTED" })),
-        ...Array.from({ length: counts.pending }, () => ({ status: "PENDING" })),
-        ...Array.from({ length: counts.accepted }, () => ({ status: "ACCEPTED" })),
-      ],
-    });
-    if (!gate.ok) return { ok: false, error: gate.reason };
-
-    const existing = lot.partCount ?? 0;
-    const serials = Array.from(
-      { length: Math.trunc(count) },
-      (_, i) => `${prefix}-${String(existing + i + 1).padStart(4, "0")}`
-    );
-
-    let created = 0;
-    try {
-      for (let offset = 0; offset < serials.length; offset += PARTS_PER_BATCH) {
-        const slice = serials.slice(offset, offset + PARTS_PER_BATCH);
-        const batch = writeBatch(clientDb());
-
-        for (const serialNumber of slice) {
-          const partRef = docIn(parts());
-          // The reservation is what enforces the serial: the rules forbid
-          // overwriting one, so a clash fails the whole batch rather than
-          // filing a duplicate traveller.
-          batch.set(doc(uniques(), uniqueKey("part.serialNumber", serialNumber)), {
-            scope: "part.serialNumber",
-            value: serialNumber,
-            ownerPath: partRef.path,
-            at: now(),
-          });
-          batch.set(partRef, {
-            serialNumber,
-            materialId: lot.materialId,
-            lotId,
-            batchQty: 1,
-            currentStage: "POST_ROUGHING",
-            status: "IN_PROCESS",
-            createdAt: now(),
-            updatedAt: now(),
-          } satisfies PartDoc);
-          batch.set(docIn(eventsOf(partRef.id)), {
-            at: now(),
-            kind: "CREATED",
-            stage: "POST_ROUGHING",
-            fromValue: null,
-            toValue: "POST_ROUGHING/IN_PROCESS",
-            note: `Raised from lot ${lot.lotNumber}`,
-            actorUid: actor.uid,
-            actor: actor.displayName,
-          });
-        }
-
-        await batch.commit();
-        created += slice.length;
-      }
-    } catch (error) {
-      if (created > 0) {
-        await bumpPartCounts(lotId, lot.materialId, created);
-        return {
-          ok: false,
-          error: `${created} parts were raised and the rest could not be. A serial number is most likely already in use. Try again for the remainder.`,
-        };
-      }
-      return explain(error, "Could not raise the parts. A serial number is most likely already in use.");
-    }
-
-    await bumpPartCounts(lotId, lot.materialId, created);
-    return { ok: true, info: `${created} parts raised.` };
-  };
-
-/** Keep the lot's and the material's part tallies in step with what was
- *  actually written, including after a partial failure. */
-async function bumpPartCounts(lotId: string, materialId: string, by: number): Promise<void> {
-  if (by <= 0) return;
-  const batch = writeBatch(clientDb());
-  batch.update(docIn(lots(), lotId), { partCount: increment(by) });
-  batch.update(docIn(materials(), materialId), { partCount: increment(by) });
-  await batch.commit();
+function transitionMessage(reason: string): string {
+  if (reason === "not-with-qc")
+    return "This piece is not waiting on quality — somebody else has already moved it. Reload the page.";
+  if (reason === "hold-needs-department")
+    return "A hold has to name the department that will put it right.";
+  return "A department cannot be recorded against a piece that was accepted.";
 }
 
-export const returnPartToQueue =
+// ───────────────────────── rework ─────────────────────────
+
+/** Record that the department has finished.
+ *
+ *  Quality enters this on the department's behalf — that is how the plant
+ *  works, and the record says so plainly by keeping both names: who held the
+ *  piece, and who is reporting that the work is done.
+ */
+export const recordReworkDone =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
-    const denied = allow(actor, "part.requeue");
+    const denied = allow(actor, "rework.record");
     if (denied) return denied;
 
-    const partId = optionalString(formData.get("partId"));
-    if (!partId) return { ok: false, error: "That reference is not valid." };
+    const pieceId = optionalString(formData.get("pieceId"));
+    const note = optionalString(formData.get("note"));
+    if (!pieceId) return { ok: false, error: "That piece reference is not valid." };
 
     try {
       await runTransaction(clientDb(), async (tx) => {
-        const ref = docIn(parts(), partId);
-        const snapshot = await tx.get(ref);
-        if (!snapshot.exists()) throw new Error("NOT_FOUND");
+        const snapshot = await tx.get(docIn(pieces(), pieceId));
+        if (!snapshot.exists()) throw new Error("That piece no longer exists.");
+        const piece = snapshot.data() as PieceDoc;
 
-        const part = snapshot.data() as PartDoc;
-        if (part.status !== "REWORK" && part.status !== "HOLD") throw new Error("NOT_REWORK");
-
-        tx.update(ref, { status: "IN_PROCESS", updatedAt: now() });
-        tx.set(docIn(eventsOf(partId)), {
-          at: now(),
-          kind: "STATUS_CHANGE",
-          stage: part.currentStage,
-          fromValue: part.status,
-          toValue: "IN_PROCESS",
-          note: "Returned to the inspection queue after rework",
-          actorUid: actor.uid,
-          actor: actor.displayName,
+        const move = applyReworkDone({
+          stage: piece.stage,
+          state: piece.state,
+          holdDepartment: piece.holdDepartment,
         });
+        if (!move.ok) throw new Error("That piece is not in rework.");
+
+        movePiece(tx, pieceId, piece, move.next);
       });
+
+      // Closing the open rework record is a second write on purpose: it needs
+      // a query to find, and a transaction may not query. It is a report of
+      // when the work finished, not part of where the piece is, so a failure
+      // here leaves the piece correctly back with quality.
+      const open = await getDocs(
+        query(reworks(), where("pieceId", "==", pieceId), where("completedAt", "==", null))
+      );
+      const batch = writeBatch(clientDb());
+      for (const d of open.docs)
+        batch.update(d.ref, {
+          completedAt: now(),
+          recordedByUid: actor.uid,
+          recordedByName: actor.displayName,
+          note,
+        });
+      if (open.docs.length > 0) await batch.commit();
     } catch (error) {
-      const message = (error as Error).message;
-      if (message === "NOT_FOUND") return { ok: false, error: "That part no longer exists." };
-      if (message === "NOT_REWORK")
-        return { ok: false, error: "That part is not in rework or on hold." };
-      return explain(error, "Could not return the part.");
+      return explain(error, "Could not close out the rework.");
     }
 
-    return { ok: true, info: "Part returned to the queue." };
+    return { ok: true, info: "Back with quality. Measure it again to decide." };
+  };
+
+// ───────────────────────── configuration ─────────────────────────
+
+/** The departments a hold may name.
+ *
+ *  A free-text department would make the dashboard useless within a month:
+ *  "Machining", "machining" and "M/C shop" are three columns describing one
+ *  place. The list is short, an administrator owns it, and everything else
+ *  chooses from it.
+ */
+export const saveDepartments =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "config.manage");
+    if (denied) return denied;
+
+    const list = String(formData.get("departments") ?? "")
+      .split(/[\n,]/)
+      .map((d) => d.trim())
+      .filter(Boolean);
+
+    const seen = new Set<string>();
+    const unique = list.filter((d) => {
+      const k = d.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    if (unique.length === 0)
+      return { ok: false, error: "At least one department is needed — a hold has to name somebody." };
+
+    try {
+      await setDoc(docIn(config(), CONFIG_DOCS.departments), { list: unique });
+    } catch (error) {
+      return explain(error, "Could not save the departments.");
+    }
+    return { ok: true, info: `${unique.length} department(s) saved.` };
+  };
+
+/** The defects every item starts from. An item with none of its own still
+ *  gives the inspector something to tick, which is the difference between a
+ *  defect being recorded and being remembered. */
+export const saveDefectCatalogue =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "config.manage");
+    if (denied) return denied;
+
+    const list = readDefectSpecs(formData);
+    try {
+      await setDoc(docIn(config(), CONFIG_DOCS.defects), { list });
+    } catch (error) {
+      return explain(error, "Could not save the defect list.");
+    }
+    return { ok: true, info: `${list.length} defect(s) saved.` };
+  };
+
+function readDefectSpecs(formData: FormData): DefectSpec[] {
+  return formData
+    .getAll("defectName")
+    .map(String)
+    .map((name, i) => ({
+      // A stored key never changes when a label is re-worded: the tallies are
+      // keyed by it, and re-wording a line must not orphan its history.
+      key: optionalString(formData.getAll("defectKey")[i]) ?? slug(name),
+      name: name.trim(),
+      department: optionalString(formData.getAll("defectDepartment")[i]),
+    }))
+    .filter((d) => d.name.length > 0);
+}
+
+function readDimensionSpecs(formData: FormData, stage: Stage): DimensionSpec[] {
+  const prefix = stage.toLowerCase();
+  return formData
+    .getAll(`${prefix}Name`)
+    .map(String)
+    .map((name, i) => ({
+      key: optionalString(formData.getAll(`${prefix}Key`)[i]) ?? slug(name),
+      name: name.trim(),
+      unit: optionalString(formData.getAll(`${prefix}Unit`)[i]),
+      nominal: optionalNumber(formData.getAll(`${prefix}Nominal`)[i]) ?? null,
+      tolMinus: optionalNumber(formData.getAll(`${prefix}TolMinus`)[i]) ?? null,
+      tolPlus: optionalNumber(formData.getAll(`${prefix}TolPlus`)[i]) ?? null,
+    }))
+    .filter((d) => d.name.length > 0);
+}
+
+/** A stable key from a label. Lower case, words joined by underscores, so the
+ *  same dimension typed twice with different capitalisation is one key. */
+export function slug(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9؀-ۿ]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "unnamed"
+  );
+}
+
+/** What an item has to be: its dimensions at each stage, and the defects to
+ *  look for. Saved whole, because a dimension removed from the sheet has to
+ *  disappear from the next inspection, not linger. Sheets already signed keep
+ *  their own copy and are unaffected. */
+export const saveItemConfig =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "config.manage");
+    if (denied) return denied;
+
+    const itemCode = optionalString(formData.get("itemCode"));
+    const itemName = optionalString(formData.get("itemName"));
+    if (!itemCode) return { ok: false, error: "An item code is required." };
+
+    const doc: ItemConfigDoc = {
+      itemCode,
+      itemName: itemName ?? itemCode,
+      dimensions: {
+        ROUGHING: readDimensionSpecs(formData, "ROUGHING"),
+        FINISH: readDimensionSpecs(formData, "FINISH"),
+      },
+      defects: readDefectSpecs(formData),
+      updatedAt: now(),
+      updatedByUid: actor.uid,
+      updatedByName: actor.displayName,
+    };
+
+    try {
+      await setDoc(docIn(itemConfigs(), configKey(itemCode)), doc);
+    } catch (error) {
+      return explain(error, "Could not save the item.");
+    }
+    return { ok: true, info: `${itemCode} saved.` };
+  };
+
+export const deleteItemConfig =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "config.manage");
+    if (denied) return denied;
+
+    const itemCode = optionalString(formData.get("itemCode"));
+    if (!itemCode) return { ok: false, error: "An item code is required." };
+
+    try {
+      const batch = writeBatch(clientDb());
+      batch.delete(docIn(itemConfigs(), configKey(itemCode)));
+      await batch.commit();
+    } catch (error) {
+      return explain(error, "Could not remove the item.");
+    }
+    // Sheets already signed keep their own copy of the drawing, so nothing
+    // historical changes. Only the next inspection does.
+    return { ok: true, info: `${itemCode} removed. Sheets already signed are unchanged.` };
+  };
+
+/** One dimension row as it arrives from the configuration sheet. */
+export interface DimensionInput {
+  itemCode: string;
+  itemName: string | null;
+  stage: Stage;
+  name: string;
+  unit: string | null;
+  nominal: number | null;
+  tolMinus: number | null;
+  tolPlus: number | null;
+}
+
+/** One defect row as it arrives from the configuration sheet. */
+export interface DefectInput {
+  itemCode: string | null;
+  name: string;
+  department: string | null;
+}
+
+/** Bring in dimensions and defects for many items at once.
+ *
+ *  Grouped by item and written one document per item, so a sheet covering
+ *  forty items is forty writes rather than four hundred. An item already
+ *  configured is replaced: the sheet is the source, and merging would leave
+ *  dimensions somebody deleted from it still being measured.
+ */
+export const importItemConfigs =
+  (actor: SessionUser) =>
+  async (
+    dimensions: DimensionInput[],
+    defects: DefectInput[]
+  ): Promise<ActionResult & { items?: number }> => {
+    const denied = allow(actor, "config.manage");
+    if (denied) return denied;
+    if (dimensions.length === 0 && defects.length === 0)
+      return { ok: false, error: "That sheet has nothing to bring in." };
+
+    const byItem = new Map<string, ItemConfigDoc>();
+    const blank = (itemCode: string, itemName: string | null): ItemConfigDoc => ({
+      itemCode,
+      itemName: itemName ?? itemCode,
+      dimensions: { ROUGHING: [], FINISH: [] },
+      defects: [],
+      updatedAt: now(),
+      updatedByUid: actor.uid,
+      updatedByName: actor.displayName,
+    });
+
+    for (const row of dimensions) {
+      const item = byItem.get(row.itemCode) ?? blank(row.itemCode, row.itemName);
+      if (row.itemName) item.itemName = row.itemName;
+      item.dimensions[row.stage].push({
+        key: slug(row.name),
+        name: row.name.trim(),
+        unit: row.unit,
+        nominal: row.nominal,
+        tolMinus: row.tolMinus,
+        tolPlus: row.tolPlus,
+      });
+      byItem.set(row.itemCode, item);
+    }
+
+    // A defect row with no item code belongs to every item, so it goes to the
+    // catalogue rather than to one of them.
+    const catalogue: DefectSpec[] = [];
+    for (const row of defects) {
+      const spec = { key: slug(row.name), name: row.name.trim(), department: row.department };
+      if (!row.itemCode) {
+        catalogue.push(spec);
+        continue;
+      }
+      const item = byItem.get(row.itemCode) ?? blank(row.itemCode, null);
+      item.defects.push(spec);
+      byItem.set(row.itemCode, item);
+    }
+
+    try {
+      const batch = writeBatch(clientDb());
+      for (const [itemCode, item] of byItem)
+        batch.set(docIn(itemConfigs(), configKey(itemCode)), item);
+      if (catalogue.length > 0) batch.set(docIn(config(), CONFIG_DOCS.defects), { list: catalogue });
+      await batch.commit();
+    } catch (error) {
+      return explain(error, "Could not bring in the configuration.");
+    }
+
+    return {
+      ok: true,
+      items: byItem.size,
+      info:
+        `${byItem.size} item(s) configured` +
+        (catalogue.length > 0 ? `, and ${catalogue.length} defect(s) added to the shared list.` : "."),
+    };
   };
 
 // ───────────────────────── accounts ─────────────────────────
 
-/** Account administration, minus the one thing a browser cannot do.
- *
- *  Creating a Firebase Authentication account needs the Admin SDK, which needs
- *  a service-account key, which cannot live in a browser bundle. So on this
- *  plan an administrator creates the sign-in credential in the Firebase
- *  console and then grants it a role here. `npm run create-admin` does both at
- *  once for anyone who has a key to run it with.
- */
 export const grantAccess =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {

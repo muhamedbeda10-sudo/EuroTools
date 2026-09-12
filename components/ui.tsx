@@ -1,33 +1,43 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { STATUS_LABELS, type Status } from "@/lib/domain/stages";
 
-/** One colour per verdict, used by every table, card and header. */
-const STATUS_TONE: Record<string, string> = {
+import { STATE_LABELS, VERDICT_LABELS } from "@/lib/domain/workflow";
+
+/** One colour per thing a piece can be, used by every table, card and header.
+ *
+ *  Green means one thing only: this passed. The brand is blue precisely so
+ *  that stays true — see the note at the top of `globals.css`.
+ */
+const TONE: Record<string, string> = {
   ACCEPTED: "pill-ok",
-  RELEASED: "pill-ok",
+  ACCEPTED_BYPASS: "pill-warn",
+  HOLD: "pill-bad",
   PASS: "pill-ok",
-  IN_PROCESS: "pill-info",
-  PENDING: "pill-neutral",
-  REWORK: "pill-warn",
-  HOLD: "pill-warn",
-  FURTHER_INVESTIGATION: "pill-warn",
-  REJECTED: "pill-bad",
   FAIL: "pill-bad",
+  NOT_MEASURED: "pill-neutral",
+  WAITING_QC: "pill-info",
+  WAITING_REWORK: "pill-warn",
+  CLOSED: "pill-ok",
+  ROUGHING: "pill-neutral",
+  FINISH: "pill-neutral",
 };
 
-const EXTRA_LABELS: Record<string, string> = {
-  IN_PROCESS: "In process",
-  HOLD: "On hold",
-  DONE: "Complete",
+const LABELS: Record<string, string> = {
+  ...VERDICT_LABELS,
+  ...STATE_LABELS,
   PASS: "Pass",
   FAIL: "Fail",
+  NOT_MEASURED: "Not measured",
+  ROUGHING: "Roughing",
+  FINISH: "Finish",
 };
 
 export function StatusPill({ status }: { status: string }) {
-  const label =
-    STATUS_LABELS[status as Status]?.en ?? EXTRA_LABELS[status] ?? status;
-  return <span className={`pill ${STATUS_TONE[status] ?? "pill-neutral"}`}>{label}</span>;
+  return (
+    <span className={`pill ${TONE[status] ?? "pill-neutral"}`}>
+      {LABELS[status] ?? status}
+    </span>
+  );
 }
 
 export function Card({

@@ -1,70 +1,316 @@
-/** The documents this app stores, described once.
+/** The shape of everything stored, with no SDK in it.
  *
- *  The browser writes them through the Firebase Web SDK and the command-line
- *  scripts write them through the Admin SDK. The shapes belong to neither, so
- *  this module imports no SDK at all — which is also what lets it be read by
- *  `lib/domain` tests and by the rules tests without dragging a client in.
+ *  Imported by the browser and by the scripts, which use different Firestore
+ *  libraries whose `Timestamp` types are not the same one. `StoredTimestamp`
+ *  is the shared surface: the only thing either side needs is `toDate()`.
  *
- *  ## Why things are nested the way they are
- *
- *  Firestore bills per document, so the shape of the data is also the shape of
- *  the bill. Three things are embedded rather than given their own documents:
- *
- *  - a checklist's answers and measurements, inside the inspection,
- *  - a lot's certificates, inside the lot,
- *  - a material's measured features, inside the material.
- *
- *  Each of those is only ever read with its parent and only ever written with
- *  it. Embedding turns one inspection from about fifteen writes into one, and
- *  turns reading a filled-in sheet from fifteen reads into one. Nothing is
- *  lost: every answer and every measurement is still stored individually,
- *  which is what lets the "most frequent nonconformity" report exist at all,
- *  and what lets a stored verdict be checked against its own evidence.
- *
- *  Part events are a subcollection instead: the trail only grows, and it is
- *  read on one page.
- *
- *  ## Why ids are generated rather than natural
- *
- *  A document id cannot contain a slash, and shop-floor part numbers and
- *  serials contain slashes and spaces all the time. So ids are generated, and
- *  uniqueness — which a database used to enforce with an index — is held by
- *  the reservation documents in `uniques`, whose id *is* the value.
+ *  Nothing here reads or writes. The rules live in `lib/domain/`, the reads in
+ *  `lib/client/queries.ts`, the writes in `lib/client/actions.ts`.
  */
 
-/** A Firestore timestamp, from whichever SDK wrote it. Both expose `toDate`,
- *  which is all any reader here needs. */
+import type { Stage, Verdict, PieceState } from "./domain/workflow";
+
 export interface StoredTimestamp {
   toDate(): Date;
-  seconds: number;
-  nanoseconds: number;
+  toMillis(): number;
 }
-
-// ───────────────────────── collection names ─────────────────────────
 
 export const COLLECTIONS = {
   users: "users",
   userAuditEvents: "userAuditEvents",
-  uniques: "uniques",
-  suppliers: "suppliers",
-  materials: "materials",
-  lots: "lots",
-  parts: "parts",
+  /** One row as planning handed it over. */
+  planningLines: "planningLines",
+  /** One physical piece. A line with a quantity of five makes five of these. */
+  pieces: "pieces",
+  /** One measurement round on one piece at one stage. */
   inspections: "inspections",
+  /** One hold, from the moment it was raised to the moment it was closed. */
+  reworks: "reworks",
+  /** What a piece has to be: dimensions per stage, and the defects to look
+   *  for. Keyed by item code. */
+  itemConfigs: "itemConfigs",
+  /** Settings with no natural key of their own — the department list, the
+   *  defect catalogue every item starts from. */
+  config: "config",
+  /** Tallies the dashboard reads instead of scanning. */
   stats: "stats",
 } as const;
 
-/** Subcollections, named relative to their parent document. */
 export const SUBCOLLECTIONS = {
-  analyses: "analyses",
-  events: "events",
-  /** Defect photographs: what the inspector saw, kept beside what they wrote.
-   *  Split in two on purpose — see `InspectionPhotoDoc` below. */
+  /** Thumbnails a gallery lists, and the full pictures behind them. Split so
+   *  that opening a list does not pull every photograph on it. */
   photos: "photos",
   photoData: "photoData",
 } as const;
 
-// ───────────────────────── stored shapes ─────────────────────────
+/** Fixed ids for the settings documents, so nothing addresses them by string
+ *  literal in three places. */
+export const CONFIG_DOCS = {
+  departments: "departments",
+  defects: "defects",
+} as const;
+
+export const STAT_DOCS = {
+  /** Holds by department, and by department and stage. */
+  holds: "holds",
+  /** How often each defect has been seen. */
+  defects: "defects",
+  /** Verdicts by stage, so the dashboard never counts inspections by hand. */
+  verdicts: "verdicts",
+} as const;
+
+// ───────────────────────── planning ─────────────────────────
+
+export const MEASURING_TYPES = ["CMM", "TRADITIONAL"] as const;
+export type MeasuringType = (typeof MEASURING_TYPES)[number];
+
+export function isMeasuringType(v: unknown): v is MeasuringType {
+  return typeof v === "string" && (MEASURING_TYPES as readonly string[]).includes(v);
+}
+
+/** A row of planning's sheet.
+ *
+ *  `plannedAt` is planning's own date — when they wrote the row — and is not
+ *  the same thing as when quality first saw it. Keeping both is what lets the
+ *  dashboard say whether a delay was in the queue or on the bench.
+ */
+export interface PlanningLineDoc {
+  project: string;
+  /** Planning's own second column. Carried through as typed rather than
+   *  interpreted, because what it means is theirs to decide, not ours. */
+  mplpr: string | null;
+  itemCode: string;
+  itemName: string;
+  qty: number;
+  measuringType: MeasuringType;
+  priority: string | null;
+  plannedAt: StoredTimestamp;
+
+  createdAt: StoredTimestamp;
+  updatedAt: StoredTimestamp;
+  createdByUid: string;
+  createdByName: string;
+
+  /** Maintained as pieces move, so a list of lines costs one read per line
+   *  rather than one per piece on it. */
+  counts: LineCounts;
+}
+
+export interface LineCounts {
+  total: number;
+  withQc: number;
+  inRework: number;
+  closed: number;
+  /** Every measurement taken against this line, across all of its pieces and
+   *  both stages. This is what goes back to planning in their Description
+   *  column: how many times a thing had to be measured before it was done. */
+  measurements: number;
+}
+
+/** A line is off quality's desk when no piece on it is waiting to be measured
+ *  — which is exactly what planning's `Complete` column means. */
+export function lineIsComplete(counts: LineCounts): boolean {
+  return counts.total > 0 && counts.withQc === 0;
+}
+
+// ───────────────────────── pieces ─────────────────────────
+
+export interface PieceDoc {
+  lineId: string;
+  /** Copied from the line so a queue row is one read, not two. A line's own
+   *  fields never change after import, so there is nothing to keep in step. */
+  project: string;
+  itemCode: string;
+  itemName: string;
+  measuringType: MeasuringType;
+  priority: string | null;
+  plannedAt: StoredTimestamp;
+
+  pieceNo: number;
+  /** What is written on the tag. Unique because the line id is in it. */
+  serial: string;
+
+  stage: Stage;
+  state: PieceState;
+  holdDepartment: string | null;
+  /** Measurement rounds so far at the *current* stage. Reset when the piece
+   *  moves on, so "held three times at finish" reads directly. */
+  round: number;
+  /** Every measurement this piece has ever had, across both stages. Never
+   *  reset — this is the number planning asks for, and a piece measured twice
+   *  at roughing and three times at finish was measured five times. */
+  measuredTimes: number;
+
+  lastVerdict: Verdict | null;
+  lastInspectedAt: StoredTimestamp | null;
+
+  /** When the current wait on quality began; null while it is elsewhere. */
+  qcSince: StoredTimestamp | null;
+  /** Waiting time already settled, in milliseconds. Accumulated rather than
+   *  measured end to end — see `qcMillis` in `lib/domain/workflow.ts`. */
+  qcSettledMs: number;
+
+  createdAt: StoredTimestamp;
+  updatedAt: StoredTimestamp;
+}
+
+// ───────────────────────── inspections ─────────────────────────
+
+/** One dimension as it was measured, with the drawing copied in beside the
+ *  reading. Copied rather than referenced so the record still reads correctly
+ *  after somebody revises the item's configuration. */
+export interface ReadingEntry {
+  key: string;
+  name: string;
+  unit: string | null;
+  nominal: number | null;
+  tolMinus: number | null;
+  tolPlus: number | null;
+  actual: number | null;
+  result: "PASS" | "FAIL" | "NOT_MEASURED";
+  /** True when the inspector added this dimension on the sheet rather than
+   *  taking it from the item's configuration. */
+  adHoc: boolean;
+}
+
+export interface DefectEntry {
+  key: string;
+  name: string;
+  department: string | null;
+  note: string | null;
+}
+
+export interface InspectionDoc {
+  pieceId: string;
+  lineId: string;
+  /** Copied so a report never reads the piece and the line back to label a
+   *  row. */
+  project: string;
+  itemCode: string;
+  itemName: string;
+  serial: string;
+
+  stage: Stage;
+  round: number;
+
+  readings: ReadingEntry[];
+  defects: DefectEntry[];
+
+  /** What the evidence required, recomputed from the stored readings by the
+   *  reconciliation report. A record where these two disagree without a
+   *  bypass was not written by this application. */
+  suggested: "HOLD" | "ACCEPTED";
+  verdict: Verdict;
+  holdDepartment: string | null;
+  /** Required when the verdict is a concession: why product the evidence
+   *  holds was let through, and on whose authority. */
+  bypassReason: string | null;
+
+  inspectorUid: string;
+  inspector: string;
+  inspectedAt: StoredTimestamp;
+
+  photoCount: number;
+  hasFailedReading: boolean;
+}
+
+// ───────────────────────── reworks ─────────────────────────
+
+export interface ReworkDoc {
+  pieceId: string;
+  lineId: string;
+  project: string;
+  itemCode: string;
+  serial: string;
+  stage: Stage;
+  /** The round that was held, so a rework points at the sheet that caused it. */
+  round: number;
+  inspectionId: string;
+
+  department: string;
+  heldAt: StoredTimestamp;
+  heldByUid: string;
+  heldByName: string;
+
+  /** Null while the department still has it. */
+  completedAt: StoredTimestamp | null;
+  /** Quality records the completion on the department's behalf, so the record
+   *  says plainly whose word it is. */
+  recordedByUid: string | null;
+  recordedByName: string | null;
+  note: string | null;
+}
+
+// ───────────────────────── configuration ─────────────────────────
+
+export interface DimensionSpec {
+  key: string;
+  name: string;
+  unit: string | null;
+  nominal: number | null;
+  tolMinus: number | null;
+  tolPlus: number | null;
+}
+
+export interface DefectSpec {
+  key: string;
+  name: string;
+  /** The department a defect usually belongs to. A suggestion on the sheet,
+   *  never a decision: the inspector confirms it. */
+  department: string | null;
+}
+
+/** What an item has to be. Keyed by item code, so there is one of these per
+ *  item no matter how many projects order it. */
+export interface ItemConfigDoc {
+  itemCode: string;
+  itemName: string;
+  dimensions: Record<Stage, DimensionSpec[]>;
+  defects: DefectSpec[];
+  updatedAt: StoredTimestamp;
+  updatedByUid: string;
+  updatedByName: string;
+}
+
+export interface DepartmentsDoc {
+  list: string[];
+}
+
+/** The defects every item starts from. An item with none of its own still
+ *  gives the inspector something to tick, which is the difference between a
+ *  defect being recorded and being remembered. */
+export interface DefectCatalogueDoc {
+  list: DefectSpec[];
+}
+
+// ───────────────────────── photographs ─────────────────────────
+
+export interface InspectionPhotoDoc {
+  /** A JPEG data URL, long edge 320px. Small enough to list many at once. */
+  thumb: string;
+  caption: string | null;
+  width: number;
+  height: number;
+  bytes: number;
+  capturedAt: StoredTimestamp;
+  capturedByUid: string;
+  capturedByName: string;
+}
+
+export interface InspectionPhotoDataDoc {
+  /** A JPEG data URL, long edge at most 1600px. */
+  data: string;
+}
+
+/** A Firestore document may not exceed a megabyte, and one refused on arrival
+ *  takes the inspection written beside it down too. Holding a picture well
+ *  under the limit leaves room for the fields around it. */
+export const PHOTO_MAX_BYTES = 900_000;
+export const PHOTO_MAX_EDGE = 1600;
+export const THUMB_MAX_EDGE = 320;
+export const PHOTO_MAX_PER_INSPECTION = 4;
+
+// ───────────────────────── accounts ─────────────────────────
 
 export interface UserDoc {
   email: string;
@@ -76,189 +322,12 @@ export interface UserDoc {
   updatedAt: StoredTimestamp;
   createdByUid: string | null;
   createdByName: string | null;
-  /** Kept as a counter so the admin screen does not count inspections by
-   *  reading them. */
   signedInspections: number;
-}
-
-export interface SupplierDoc {
-  name: string;
-  code: string | null;
-  contact: string | null;
-  notes: string | null;
-  createdAt: StoredTimestamp;
-}
-
-export interface FeatureEntry {
-  id: string;
-  stage: string;
-  name: string;
-  kind: string;
-  nominal: number | null;
-  tolMinus: number;
-  tolPlus: number;
-  unit: string;
-  critical: boolean;
-  gdtSymbol: string | null;
-  gdtLimit: number | null;
-  sortOrder: number;
-}
-
-export interface MaterialDoc {
-  partNumber: string;
-  materialNumber: string | null;
-  description: string | null;
-  spec: string | null;
-  drawingNumber: string | null;
-  drawingRev: string | null;
-  hardnessMin: number | null;
-  hardnessMax: number | null;
-  hardnessUnit: string;
-  surfaceFinishRa: number | null;
-  requiredCerts: string | null;
-  roughingAllowance: number | null;
-  createdAt: StoredTimestamp;
-  features: FeatureEntry[];
-  lotCount: number;
-  partCount: number;
-}
-
-export interface CertificateEntry {
-  id: string;
-  type: string;
-  number: string | null;
-  issuedAt: StoredTimestamp | null;
-  received: boolean;
-  verified: boolean;
-  notes: string | null;
-}
-
-export interface LotDoc {
-  lotNumber: string;
-  materialId: string;
-  supplierId: string | null;
-  receivedAt: StoredTimestamp;
-  poNumber: string | null;
-  heatNumber: string | null;
-  receivedQty: number;
-  unit: string;
-  status: string;
-  notes: string | null;
-  createdAt: StoredTimestamp;
-  certificates: CertificateEntry[];
-  partCount: number;
-  /** So the dashboard can tell which lots are waiting on their analysis
-   *  without reading every analysis of every lot. */
-  analysisCounts: { total: number; pending: number; accepted: number; rejected: number };
-}
-
-export interface AnalysisResultEntry {
-  id: string;
-  property: string;
-  requiredMin: number | null;
-  requiredMax: number | null;
-  requiredText: string | null;
-  actual: number | null;
-  actualText: string | null;
-  unit: string | null;
-  pass: boolean | null;
-  sortOrder: number;
-}
-
-export interface AnalysisDoc {
-  sampleRef: string;
-  method: string | null;
-  performedAt: StoredTimestamp;
-  /** Who ran the test; may be an outside laboratory, so it is free text. */
-  performedBy: string | null;
-  /** Who entered it. Always an account — the person answerable for the record. */
-  recordedByUid: string;
-  recordedByName: string;
-  status: string;
-  conclusion: string | null;
-  actionTaken: string | null;
-  results: AnalysisResultEntry[];
-}
-
-export interface PartDoc {
-  serialNumber: string;
-  materialId: string;
-  lotId: string | null;
-  batchQty: number;
-  currentStage: string;
-  status: string;
-  createdAt: StoredTimestamp;
-  updatedAt: StoredTimestamp;
-}
-
-export interface PartEventDoc {
-  at: StoredTimestamp;
-  kind: string;
-  stage: string | null;
-  fromValue: string | null;
-  toValue: string | null;
-  note: string | null;
-  actorUid: string;
-  actor: string;
-}
-
-export interface CheckEntry {
-  key: string;
-  /** true = ok, false = not ok, null = not answered yet */
-  ok: boolean | null;
-  note: string | null;
-}
-
-export interface MeasurementEntry {
-  featureId: string | null;
-  name: string;
-  kind: string;
-  nominal: number | null;
-  tolMinus: number;
-  tolPlus: number;
-  gdtLimit: number | null;
-  actual: number | null;
-  unit: string;
-  critical: boolean;
-  result: string;
-  sortOrder: number;
-}
-
-export interface InspectionDoc {
-  stage: string;
-  partId: string | null;
-  lotId: string | null;
-  inspectorUid: string;
-  inspector: string;
-  inspectedAt: StoredTimestamp;
-  status: string;
-  notes: string | null;
-
-  hardnessValue: number | null;
-  hardnessUnit: string | null;
-  hardnessMin: number | null;
-  hardnessMax: number | null;
-
-  surfaceFinishRa: number | null;
-  cmmRequired: boolean;
-  cmmReportRef: string | null;
-  cmmReviewed: boolean;
-
-  checks: CheckEntry[];
-  measurements: MeasurementEntry[];
-
-  /** Copied at write time so the reports never have to read the part, the lot
-   *  and the material back just to label a row. */
-  subject: string;
-  partNumber: string;
-  /** Lets the out-of-tolerance report ask for the fifty it needs instead of
-   *  reading every inspection ever filed. */
-  hasFailedMeasurement: boolean;
 }
 
 export interface UserAuditEventDoc {
   at: StoredTimestamp;
-  kind: string;
+  kind: "CREATED" | "ROLE_CHANGED" | "ACTIVATED" | "DEACTIVATED";
   subjectUid: string;
   subjectName: string;
   actorUid: string;
@@ -267,41 +336,30 @@ export interface UserAuditEventDoc {
   toValue: string | null;
 }
 
-// ───────────────────────── uniqueness ─────────────────────────
+// ───────────────────────── helpers ─────────────────────────
 
-/** The fields that used to carry a database unique constraint. */
-export type UniqueScope =
-  | "material.partNumber"
-  | "lot.lotNumber"
-  | "part.serialNumber"
-  | "user.email"
-  | "supplier.name";
-
-/** Reservation key for a value.
+/** A document id from a value people type.
  *
- *  Base64url, because a document id may not contain a slash and shop-floor
- *  part numbers frequently do. The `u_` prefix keeps the result clear of
- *  Firestore's reserved `__…__` pattern, and the encoding stays reversible so
- *  a reservation can still be read by a human debugging one.
- *
- *  Case and surrounding space are normalised away, so "PN-1042/a " cannot be
- *  filed as a second part alongside "PN-1042/A".
+ *  Firestore ids may not contain a slash and may not begin with two dots, and
+ *  item codes on a drawing contain both slashes and spaces. Base64 with the
+ *  two url-unsafe characters swapped by hand: `base64url` as a named encoding
+ *  exists in Node but not in the Buffer polyfill a browser bundle gets, and
+ *  the difference only shows up at runtime, in production, as an id that
+ *  cannot be written.
  */
-export function uniqueKey(scope: UniqueScope, value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const encoded =
-    typeof Buffer !== "undefined"
-      ? Buffer.from(`${scope}:${normalized}`, "utf8").toString("base64url")
-      : btoa(String.fromCharCode(...new TextEncoder().encode(`${scope}:${normalized}`)))
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-  return `u_${encoded}`;
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return typeof btoa === "function"
+    ? btoa(binary)
+    : Buffer.from(binary, "binary").toString("base64");
 }
 
-// ───────────────────────── conversion ─────────────────────────
+export function configKey(value: string): string {
+  const bytes = new TextEncoder().encode(value.trim().toLowerCase());
+  return `i_${base64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+}
 
-/** Firestore hands back timestamps; every page in this app renders Dates. */
 export function toDate(value: StoredTimestamp | Date | null | undefined): Date | null {
   if (value == null) return null;
   return value instanceof Date ? value : value.toDate();
@@ -310,65 +368,6 @@ export function toDate(value: StoredTimestamp | Date | null | undefined): Date |
 export function toDateRequired(value: StoredTimestamp | Date): Date {
   return value instanceof Date ? value : value.toDate();
 }
-
-/** A defect photograph, stored in two pieces.
- *
- *  There is no object store on this plan, so the picture lives in Firestore
- *  like everything else. That makes what it costs to *look at a list* the
- *  design problem: a traveller with five photographs on it would pull about a
- *  megabyte and a quarter every time somebody opened it, and a plan with ten
- *  gigabytes of monthly traffic does not survive that habit.
- *
- *  So the thumbnail and the full picture are separate documents sharing an id.
- *  A gallery reads only the thumbnails — about twenty kilobytes each — and the
- *  full picture is fetched when somebody actually opens one. Reading a list
- *  therefore costs roughly a twelfth of what it otherwise would.
- *
- *  Both are written in the same transaction as the inspection they belong to,
- *  and both are refused any update or delete by the rules. A photograph is
- *  part of a signed record: it is evidence for a verdict somebody put their
- *  name to, and evidence that can be swapped afterwards is not evidence.
- */
-export interface InspectionPhotoDoc {
-  /** A JPEG data URL, long edge 320px. Small enough to list many at once. */
-  thumb: string;
-  caption: string | null;
-  /** Of the full picture, so a gallery can reserve the right shape before the
-   *  full picture arrives and the page does not jump under a gloved hand. */
-  width: number;
-  height: number;
-  bytes: number;
-  capturedAt: StoredTimestamp;
-  capturedByUid: string;
-  capturedByName: string;
-}
-
-/** The full picture, addressed by the same id as its thumbnail. */
-export interface InspectionPhotoDataDoc {
-  /** A JPEG data URL, long edge at most 1600px. */
-  data: string;
-}
-
-/** The ceiling the security rules enforce on a stored picture.
- *
- *  A Firestore document may not exceed a megabyte, and a document that is
- *  refused on arrival loses the inspection written with it. Holding the
- *  picture well under the limit leaves room for the field names and the
- *  metadata beside it, and keeps a single photograph from eating a thousandth
- *  of the plan's entire storage.
- */
-export const PHOTO_MAX_BYTES = 900_000;
-
-/** How many photographs may ride with one inspection.
- *
- *  Not an arbitrary tidiness rule. The photographs are written in the same
- *  transaction as the inspection so that neither can exist without the other,
- *  and a Firestore transaction has a size of its own to stay under. Four also
- *  happens to be more than anybody photographing one defect has ever needed.
- */
-export const PHOTO_MAX_PER_INSPECTION = 4;
-export const PHOTO_MAX_EDGE = 1600;
-export const THUMB_MAX_EDGE = 320;
 
 /** A stored document plus its id, which the pages use for links. */
 export type WithId<T> = T & { id: string };

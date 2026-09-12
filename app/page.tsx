@@ -2,170 +2,174 @@
 
 import Link from "next/link";
 
-import { Card, Empty, PageHeader, Stat, StatusPill } from "@/components/ui";
-import { getDashboard } from "@/lib/client/queries";
-import { stageDef } from "@/lib/domain/stages";
-import { fmtDateTime, pct } from "@/lib/format";
 import { Async } from "@/components/Async";
+import { Card, Empty, PageHeader, Stat, StatusPill } from "@/components/ui";
+import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
+import { fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
+import { getDashboard } from "@/lib/client/queries";
 import { useAsync } from "@/lib/client/use-async";
 import { useRequireSession } from "@/lib/client/session";
 
+/** What the data can be asked, now that it is all in one shape.
+ *
+ *  Every number here comes from a count Firestore did or a tally kept beside
+ *  the record that caused it. Nothing on this page reads a collection and
+ *  counts it, which is what keeps the whole screen inside a handful of reads
+ *  however many pieces the plant has been through.
+ */
 export default function DashboardPage() {
-  const user = useRequireSession();
+  const me = useRequireSession();
   const state = useAsync(() => getDashboard(), []);
-
-  if (!user) return null;
-  return <Async state={state}>{(data) => <DashboardView {...data} />}</Async>;
-}
-
-function DashboardView({
-  lotCounts,
-  partCounts,
-  queues,
-  blocked,
-  inspections,
-  firstPassYield,
-}: Awaited<ReturnType<typeof getDashboard>>) {
+  if (!me) return null;
 
   return (
-    <>
-      <PageHeader
-        title="Quality Dashboard"
-        subtitle="From goods-in to final release"
-      />
+    <Async state={state}>
+      {(d) => (
+        <>
+          <PageHeader title="Quality Dashboard" subtitle="Everything waiting, and what is holding it up" />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat
-          label="Lots awaiting inspection"
-          value={lotCounts.pending}
-          hint={`${lotCounts.total} lots recorded`}
-          tone={lotCounts.pending > 0 ? "warn" : "ok"}
-          href="/lots"
-        />
-        <Stat
-          label="Parts in process"
-          value={partCounts.inProcess}
-          hint={`${partCounts.rework} in rework · ${partCounts.hold} on hold`}
-          tone="info"
-          href="/parts"
-        />
-        <Stat
-          label="Released"
-          value={partCounts.released}
-          hint={`${partCounts.rejected} rejected`}
-          tone="ok"
-          href="/parts?status=RELEASED"
-        />
-        <Stat
-          label="First-pass yield"
-          value={firstPassYield == null ? "—" : pct(firstPassYield, 1)}
-          hint="released ÷ (released + rejected)"
-          tone={firstPassYield != null && firstPassYield < 0.9 ? "warn" : "ok"}
-          href="/reports"
-        />
-      </div>
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-3">
-        <Card
-          title="Inspection queues"
-          subtitle="Parts waiting at each stage"
-          className="lg:col-span-2"
-          action={
-            <Link href="/queue" className="btn">
-              Open the queues
-            </Link>
-          }
-        >
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            {queues.map((q) => {
-              const def = stageDef(q.stage);
-              return (
-                <Link
-                  key={q.stage}
-                  href={`/queue#${q.stage}`}
-                  className="rounded-[var(--radius-sm)] border border-[var(--border)] p-3 transition hover:border-[var(--brand)]"
-                >
-                  <div className="text-xs font-semibold text-[var(--muted)]">
-                    {def.order}. {def.en}
-                  </div>
-                  <div className="num mt-1 text-2xl font-bold">{q.waiting}</div>
-                  {q.onHold > 0 && (
-                    <div className="mt-1 text-xs font-semibold text-[var(--warn-fg)]">
-                      {q.onHold} on hold
-                    </div>
-                  )}
-                </Link>
-              );
-            })}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Stat label="Waiting on quality" value={d.totals.withQc} tone={d.totals.withQc > 0 ? "warn" : "ok"}
+              hint={`${d.totals.pieces} pieces on ${d.totals.lines} lines`} />
+            <Stat label="In rework" value={d.totals.inRework} tone={d.totals.inRework > 0 ? "warn" : undefined}
+              hint="With a department" />
+            <Stat label="Closed" value={d.totals.closed} tone="ok" hint="Through both stages" />
+            <Stat
+              label="First-pass rate"
+              value={d.firstPassRate == null ? "—" : `${fmtNum(d.firstPassRate, 1)}%`}
+              tone={d.firstPassRate != null && d.firstPassRate < 80 ? "warn" : "ok"}
+              hint={d.bypasses > 0 ? `${d.bypasses} on concession` : "accepted ÷ decisions"}
+            />
           </div>
-        </Card>
 
-        <Card title="Materials needing attention" subtitle="Missing certificates or an unfinished analysis">
-          {blocked.length === 0 ? (
-            <Empty>Nothing outstanding on any material.</Empty>
-          ) : (
-            <ul className="grid gap-2">
-              {blocked.slice(0, 8).map((b) => (
-                <li key={b.lot.id}>
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            <Card title="The two stages" subtitle="What is standing where">
+              <div className="grid grid-cols-2 gap-3">
+                {STAGES.map((stage) => (
                   <Link
-                    href={`/lots/view?id=${b.lot.id}`}
-                    className="block rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5 transition hover:border-[var(--brand)]"
+                    key={stage}
+                    href={`/queue/?stage=${stage}`}
+                    className="rounded-[var(--radius-sm)] border border-[var(--border)] p-3 transition hover:border-[var(--brand)]"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="ltr text-sm font-bold">{b.lot.lotNumber}</span>
-                      <StatusPill status={b.lot.status} />
-                    </div>
-                    <ul className="mt-1 grid gap-0.5 text-xs text-[var(--muted)]">
-                      {b.missingCerts.length > 0 && (
-                        <li>Missing certificates: <span className="ltr">{b.missingCerts.join(", ")}</span></li>
-                      )}
-                      {b.analysisRejected && <li>Analysis rejected</li>}
-                      {b.analysisPending && !b.analysisRejected && <li>Analysis in progress</li>}
-                    </ul>
+                    <div className="text-sm font-bold">{STAGE_LABELS[stage]}</div>
+                    <div className="mt-1 text-2xl font-bold num">{d.stages[stage].waiting}</div>
+                    <div className="text-xs text-[var(--muted)]">waiting on quality</div>
+                    {d.stages[stage].rework > 0 && (
+                      <div className="mt-1 text-xs font-semibold text-[var(--warn-fg)]">
+                        {d.stages[stage].rework} in rework
+                      </div>
+                    )}
                   </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
-
-      <Card className="mt-4" title="Latest inspections">
-        {inspections.length === 0 ? (
-          <Empty>No inspection has been recorded yet.</Empty>
-        ) : (
-          <div className="scroll-x">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Stage</th>
-                  <th>Part / Lot</th>
-                  <th>Inspector</th>
-                  <th>Verdict</th>
-                  <th>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inspections.map((i) => (
-                  <tr key={i.id}>
-                    <td>{stageDef(i.stage).en}</td>
-                    <td className="ltr font-semibold">
-                      {i.part?.serialNumber ?? i.lot?.lotNumber ?? "—"}
-                    </td>
-                    <td>{i.inspector}</td>
-                    <td>
-                      <StatusPill status={i.status} />
-                    </td>
-                    <td className="num text-xs text-[var(--muted)]">
-                      {fmtDateTime(i.inspectedAt)}
-                    </td>
-                  </tr>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </Card>
+
+            <Card title="Holds by department" subtitle="Who the work is going back to">
+              {d.holdsByDepartment.length === 0 ? (
+                <Empty>Nothing has been held yet.</Empty>
+              ) : (
+                <ul className="grid gap-1.5 text-sm">
+                  {d.holdsByDepartment.slice(0, 8).map((h) => (
+                    <li key={h.department} className="flex items-baseline justify-between gap-3">
+                      <span>{h.department}</span>
+                      <span className="num font-bold">{h.n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            <Card title="Most frequent defects" subtitle="Counted as they were ticked">
+              {d.topDefects.length === 0 ? (
+                <Empty>No defect has been recorded yet.</Empty>
+              ) : (
+                <ul className="grid gap-1.5 text-sm">
+                  {d.topDefects.map((t) => (
+                    <li key={t.key} className="flex items-baseline justify-between gap-3">
+                      <span className="capitalize">{t.key.replace(/_/g, " ")}</span>
+                      <span className="num font-bold">{t.n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
           </div>
-        )}
-      </Card>
-    </>
+
+          <Card className="mt-4" title="Waiting longest" subtitle="Oldest first — these are the ones somebody is asking about">
+            {d.oldestWaiting.length === 0 ? (
+              <Empty>Nothing is waiting on quality.</Empty>
+            ) : (
+              <div className="scroll-x">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Piece</th>
+                      <th>Project</th>
+                      <th>Item</th>
+                      <th>Stage</th>
+                      <th>Priority</th>
+                      <th>With quality</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.oldestWaiting.map((p) => (
+                      <tr key={p.id}>
+                        <td className="ltr font-bold">{p.serial}</td>
+                        <td className="ltr">{p.project}</td>
+                        <td>{p.itemName}</td>
+                        <td><StatusPill status={p.stage} /></td>
+                        <td className="ltr">{p.priority ?? "—"}</td>
+                        <td className="num">{fmtDuration(p.qcMs)}</td>
+                        <td>
+                          <Link href={`/piece/?id=${p.id}`} className="font-bold text-[var(--brand)]">
+                            Measure
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          <Card className="mt-4" title="Latest decisions">
+            {d.recentInspections.length === 0 ? (
+              <Empty>No inspection has been recorded yet.</Empty>
+            ) : (
+              <div className="scroll-x">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Piece</th>
+                      <th>Stage</th>
+                      <th>Round</th>
+                      <th>Inspector</th>
+                      <th>Verdict</th>
+                      <th>Held against</th>
+                      <th>When</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.recentInspections.map((i) => (
+                      <tr key={i.id}>
+                        <td className="ltr font-bold">{i.serial}</td>
+                        <td>{STAGE_LABELS[i.stage]}</td>
+                        <td className="num">{i.round}</td>
+                        <td>{i.inspector}</td>
+                        <td><StatusPill status={i.verdict} /></td>
+                        <td>{i.holdDepartment ?? "—"}</td>
+                        <td className="num">{fmtDateTime(i.inspectedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+    </Async>
   );
 }

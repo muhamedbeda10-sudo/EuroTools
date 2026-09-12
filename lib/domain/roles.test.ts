@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+
 import {
   PERMISSIONS,
   ROLES,
-  ROLE_LABELS,
   can,
   isRole,
   permissionsOf,
@@ -11,143 +11,85 @@ import {
   type Role,
 } from "./roles";
 
-// ───────────────────────── the matrix itself ─────────────────────────
-
-/** The whole table, pinned. Widening a role has to be written here as well as
- *  in the source, so nobody gains an authority by accident. */
-const EXPECTED: Record<Role, readonly Permission[]> = {
+/** The whole matrix, written out again. Deliberate duplication: a change to
+ *  who may do what has to be made twice, and the second time is here, in a
+ *  file an auditor can read without reading the implementation. */
+const EXPECTED: Record<Role, Permission[]> = {
   ADMIN: [
-    "lot.receive",
-    "lot.certificate.manage",
-    "analysis.record",
-    "inspection.submit",
-    "inspection.override",
-    "part.raise",
-    "part.requeue",
-    "part.release",
-    "material.manage",
-    "supplier.manage",
+    "planning.manage",
+    "inspection.record",
+    "verdict.bypass",
+    "rework.record",
+    "config.manage",
     "user.manage",
   ],
   QUALITY_MANAGER: [
-    "lot.receive",
-    "lot.certificate.manage",
-    "analysis.record",
-    "inspection.submit",
-    "inspection.override",
-    "part.raise",
-    "part.requeue",
-    "part.release",
-    "material.manage",
-    "supplier.manage",
+    "planning.manage",
+    "inspection.record",
+    "verdict.bypass",
+    "rework.record",
+    "config.manage",
   ],
-  SUPERVISOR: [
-    "lot.receive",
-    "lot.certificate.manage",
-    "analysis.record",
-    "inspection.submit",
-    "inspection.override",
-    "part.raise",
-    "part.requeue",
-    "supplier.manage",
-  ],
-  INSPECTOR: ["lot.receive", "lot.certificate.manage", "analysis.record", "inspection.submit"],
+  SUPERVISOR: ["planning.manage", "inspection.record", "verdict.bypass", "rework.record"],
+  INSPECTOR: ["inspection.record", "rework.record"],
   VIEWER: [],
 };
 
 describe("the permission matrix", () => {
-  for (const role of ROLES) {
-    it(`grants ${role} exactly its documented permissions`, () => {
-      expect([...permissionsOf(role)].sort()).toEqual([...EXPECTED[role]].sort());
-    });
-  }
-
-  it("answers every role against every permission without throwing", () => {
-    for (const role of ROLES)
-      for (const permission of PERMISSIONS) expect(typeof can(role, permission)).toBe("boolean");
+  it("is exactly this", () => {
+    for (const role of ROLES) expect([...permissionsOf(role)].sort()).toEqual([...EXPECTED[role]].sort());
   });
 
-  it("grants no permission that is not declared", () => {
-    for (const role of ROLES)
-      for (const permission of permissionsOf(role))
-        expect(PERMISSIONS).toContain(permission);
-  });
-});
-
-// ─────────────────── the rules that matter most ───────────────────
-
-describe("separation of authority", () => {
-  it("lets only the quality manager and the administrator release product", () => {
-    expect(can("QUALITY_MANAGER", "part.release")).toBe(true);
-    expect(can("ADMIN", "part.release")).toBe(true);
-    expect(can("SUPERVISOR", "part.release")).toBe(false);
-    expect(can("INSPECTOR", "part.release")).toBe(false);
-    expect(can("VIEWER", "part.release")).toBe(false);
+  it("gives a viewer nothing at all", () => {
+    for (const p of PERMISSIONS) expect(can("VIEWER", p)).toBe(false);
   });
 
-  it("stops an inspector departing from the verdict the system derived", () => {
-    expect(can("INSPECTOR", "inspection.submit")).toBe(true);
-    expect(can("INSPECTOR", "inspection.override")).toBe(false);
-    expect(can("SUPERVISOR", "inspection.override")).toBe(true);
-  });
-
-  it("keeps the drawing spec out of the hands of the shop floor", () => {
-    expect(can("INSPECTOR", "material.manage")).toBe(false);
-    expect(can("SUPERVISOR", "material.manage")).toBe(false);
-    expect(can("QUALITY_MANAGER", "material.manage")).toBe(true);
-  });
-
-  it("gives account administration to the administrator alone", () => {
+  it("keeps account management to the administrator", () => {
     for (const role of ROLES)
       expect(can(role, "user.manage")).toBe(role === "ADMIN");
   });
 
-  it("gives a viewer nothing at all", () => {
-    for (const permission of PERMISSIONS) expect(can("VIEWER", permission)).toBe(false);
+  it("keeps the drawings out of an inspector's hands", () => {
+    // An inspector who can widen a tolerance can pass anything.
+    expect(can("INSPECTOR", "config.manage")).toBe(false);
+    expect(can("SUPERVISOR", "config.manage")).toBe(false);
+    expect(can("QUALITY_MANAGER", "config.manage")).toBe(true);
+  });
+
+  it("puts a concession above the inspector who measured", () => {
+    expect(can("INSPECTOR", "verdict.bypass")).toBe(false);
+    // Somebody on the shift has to be able to, or the line waits for a manager.
+    expect(can("SUPERVISOR", "verdict.bypass")).toBe(true);
   });
 });
 
-// ───────────────────── verdict gating ─────────────────────
-
-describe("verdictPermission", () => {
-  it("treats agreeing with the system as an ordinary submission", () => {
-    expect(verdictPermission("ACCEPTED", "ACCEPTED")).toBe("inspection.submit");
-    // Recording a derived rejection is reporting a fact, not exercising
-    // judgement, so it needs no more authority than an acceptance does.
-    expect(verdictPermission("REJECTED", "REJECTED")).toBe("inspection.submit");
-    expect(verdictPermission("REWORK", "REWORK")).toBe("inspection.submit");
+describe("what a verdict costs to record", () => {
+  it("is reporting when it agrees with the evidence", () => {
+    expect(verdictPermission("ACCEPTED", "ACCEPTED")).toBe("inspection.record");
+    expect(verdictPermission("HOLD", "HOLD")).toBe("inspection.record");
   });
 
-  it("treats departing from the system as an override", () => {
-    expect(verdictPermission("ACCEPTED", "REJECTED")).toBe("inspection.override");
-    expect(verdictPermission("REWORK", "REJECTED")).toBe("inspection.override");
-    expect(verdictPermission("PENDING", "ACCEPTED")).toBe("inspection.override");
+  it("is reporting to hold a piece the evidence would have passed", () => {
+    // Nobody needs authority to stop a piece. An inspector who saw something
+    // the sheet has no line for must be able to act on it.
+    expect(verdictPermission("HOLD", "ACCEPTED")).toBe("inspection.record");
   });
 
-  it("gates a release on its own even when the system derived it", () => {
-    expect(verdictPermission("RELEASED", "RELEASED")).toBe("part.release");
-    expect(verdictPermission("RELEASED", "REWORK")).toBe("part.release");
-  });
-});
-
-// ───────────────────────── narrowing ─────────────────────────
-
-describe("isRole", () => {
-  it("accepts every declared role", () => {
-    for (const role of ROLES) expect(isRole(role)).toBe(true);
+  it("is a concession to pass what the evidence holds", () => {
+    expect(verdictPermission("ACCEPTED", "HOLD")).toBe("verdict.bypass");
   });
 
-  it("rejects anything else, including near misses and junk types", () => {
-    for (const value of ["admin", "Admin", "MANAGER", "", null, undefined, 0, {}, []])
-      expect(isRole(value)).toBe(false);
+  it("is a concession whenever it is called one, agreement or not", () => {
+    // A bypass recorded on a piece that would have passed anyway is still a
+    // bypass on the record, and still needs the authority behind it.
+    expect(verdictPermission("ACCEPTED_BYPASS", "ACCEPTED")).toBe("verdict.bypass");
+    expect(verdictPermission("ACCEPTED_BYPASS", "HOLD")).toBe("verdict.bypass");
   });
 });
 
-describe("ROLE_LABELS", () => {
-  it("labels every role in both languages", () => {
-    for (const role of ROLES) {
-      expect(ROLE_LABELS[role].ar.trim()).not.toBe("");
-      expect(ROLE_LABELS[role].en.trim()).not.toBe("");
-    }
+describe("reading a role back out of the database", () => {
+  it("accepts the five and nothing else", () => {
+    for (const r of ROLES) expect(isRole(r)).toBe(true);
+    for (const junk of ["admin", "MANAGER", "", null, 7, {}]) expect(isRole(junk)).toBe(false);
   });
 });
