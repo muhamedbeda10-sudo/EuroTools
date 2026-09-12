@@ -10,7 +10,7 @@ import { fmtDateTime, fmtNum } from "@/lib/format";
 import { stageDef } from "@/lib/domain/stages";
 
 interface ResultRow {
-  id: number;
+  id: string;
   property: string;
   requiredMin: number | null;
   requiredMax: number | null;
@@ -21,7 +21,7 @@ interface ResultRow {
 }
 
 interface AnalysisRow {
-  id: number;
+  id: string;
   sampleRef: string;
   method: string | null;
   performedAt: Date;
@@ -47,7 +47,7 @@ export function AnalysisPanel({
   lotId,
   analyses,
 }: {
-  lotId: number;
+  lotId: string;
   analyses: AnalysisRow[];
 }) {
   const def = stageDef("RAW_ANALYSIS");
@@ -64,7 +64,7 @@ export function AnalysisPanel({
       ) : (
         <div className="grid gap-4">
           {analyses.map((a) => (
-            <AnalysisCard key={a.id} analysis={a} />
+            <AnalysisCard key={a.id} analysis={a} lotId={lotId} />
           ))}
         </div>
       )}
@@ -191,7 +191,7 @@ export function AnalysisPanel({
   );
 }
 
-function AnalysisCard({ analysis }: { analysis: AnalysisRow }) {
+function AnalysisCard({ analysis, lotId }: { analysis: AnalysisRow; lotId: string }) {
   return (
     <div className="rounded-[var(--radius-sm)] border border-[var(--border-strong)] p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -205,6 +205,7 @@ function AnalysisCard({ analysis }: { analysis: AnalysisRow }) {
       </div>
 
       <ActionForm action={saveAnalysisResults} submitLabel="حفظ النتائج">
+        <input type="hidden" name="lotId" value={lotId} />
         <input type="hidden" name="analysisId" value={analysis.id} />
 
         <div className="scroll-x">

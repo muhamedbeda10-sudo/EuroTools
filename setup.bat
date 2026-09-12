@@ -30,21 +30,18 @@ echo [2/6] تثبيت الحزم...
 call npm install
 if errorlevel 1 ( echo فشل التثبيت & pause & exit /b 1 )
 
-echo [3/6] توليد Prisma Client...
-call npx prisma generate
-if errorlevel 1 ( echo فشل توليد Prisma & pause & exit /b 1 )
+rem Firestore has no schema to migrate and no client to generate. Against a
+rem real project the collections appear as they are written; locally, the
+rem emulators must be running in another window (npm run emulators).
+echo [3/6] فحص الاعدادات...
+if not exist "firebase.json" ( echo ملف firebase.json مفقود & pause & exit /b 1 )
 
-rem PostgreSQL, not a local file: the database has to be running and reachable
-rem at DATABASE_URL before this step can do anything.
-echo [4/6] تجهيز قاعدة البيانات...
-call npx prisma migrate deploy
+echo [4/6] نشر قواعد امان Firestore...
+call npx firebase deploy --only firestore:rules
 if errorlevel 1 (
   echo.
-  echo فشل الاتصال بقاعدة البيانات.
-  echo تأكد أن PostgreSQL يعمل، وأن DATABASE_URL في ملف .env صحيح،
-  echo وأن قاعدة البيانات المذكورة فيه منشأة بالفعل.
-  pause
-  exit /b 1
+  echo تعذّر نشر قواعد الامان. تأكد من تسجيل الدخول: npx firebase login
+  echo يمكنك المتابعة ونشرها لاحقًا.
 )
 
 echo [5/6] بناء نسخة الانتاج...

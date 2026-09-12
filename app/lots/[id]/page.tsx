@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
   const user = await requireUser();
   const { id } = await params;
-  const lot = await getLot(Number(id));
+  const lot = await getLot(id);
   if (!lot) notFound();
 
   const receivingDef = stageDef("RAW_RECEIVING");

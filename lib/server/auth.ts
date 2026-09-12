@@ -5,20 +5,15 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 
 import { can, isRole, type Permission, type Role } from "@/lib/domain/roles";
-import { prisma } from "@/lib/db";
 import { adminAuth } from "@/lib/server/firebase-admin";
-import { SESSION_COOKIE } from "@/lib/session-cookie";
+import { users, type UserDoc } from "@/lib/server/model";
+import { SESSION_COOKIE, SESSION_MAX_AGE_MS } from "@/lib/session-cookie";
 
-export { SESSION_COOKIE };
-
-/** One shift. Long enough that an inspector is not signing in again in the
- *  middle of a job, short enough that a tablet left on the shop floor has
- *  stopped being a way in by the next morning. */
-export const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+export { SESSION_COOKIE, SESSION_MAX_AGE_MS };
 
 export interface SessionUser {
-  id: number;
-  firebaseUid: string;
+  /** The Firebase uid, which is also this user's document id. */
+  uid: string;
   email: string;
   displayName: string;
   role: Role;
@@ -62,8 +57,12 @@ export const currentUser = cache(async (): Promise<SessionUser | null> => {
     return null;
   }
 
-  const user = await prisma.user.findUnique({ where: { firebaseUid: uid } });
-  if (!user || !user.active) return null;
+  // One document read, not a query: `users/{uid}` is keyed by the Firebase uid
+  // precisely so the session check costs the minimum possible.
+  const snapshot = await users().doc(uid).get();
+  if (!snapshot.exists) return null;
+  const user = snapshot.data() as UserDoc;
+  if (!user.active) return null;
 
   // A role the domain layer does not recognise grants nothing. This can only
   // happen if a role were removed from `roles.ts` while accounts still carry
@@ -71,12 +70,11 @@ export const currentUser = cache(async (): Promise<SessionUser | null> => {
   if (!isRole(user.role)) return null;
 
   return {
-    id: user.id,
-    firebaseUid: user.firebaseUid,
+    uid,
     email: user.email,
     displayName: user.displayName,
     role: user.role,
-    employeeNo: user.employeeNo,
+    employeeNo: user.employeeNo ?? null,
   };
 });
 

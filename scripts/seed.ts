@@ -1,7 +1,14 @@
 /** Demo data: two part numbers walked through the whole flow so every page has
- *  something real to show. Idempotent — it wipes and reloads every table. */
+ *  something real to show. Idempotent — it wipes and reloads every collection.
+ *
+ *  The counters the application maintains (a lot's parts, a material's lots and
+ *  parts, an account's signed inspections, the per-line failure tally) are
+ *  written here too, and by the same arithmetic the actions use. A seed that
+ *  filled the records but not the counters would leave the dashboard and the
+ *  reports quietly disagreeing with the data underneath them.
+ */
 
-import { PrismaClient } from "@prisma/client";
+import { Timestamp, type WriteBatch } from "firebase-admin/firestore";
 
 import {
   analysisStatus,
@@ -11,59 +18,105 @@ import {
   type MeasurementSpec,
 } from "../lib/domain/inspection";
 import { stageDef, type Stage, type Status } from "../lib/domain/stages";
+import { db } from "../lib/server/firestore";
+import {
+  COLLECTIONS,
+  analysesOf,
+  eventsOf,
+  inspections,
+  lots,
+  materials,
+  newId,
+  parts,
+  stats,
+  suppliers,
+  uniqueKey,
+  uniques,
+  users,
+  type AnalysisResultEntry,
+  type CertificateEntry,
+  type FeatureEntry,
+  type MeasurementEntry,
+} from "../lib/server/model";
 
-const prisma = new PrismaClient();
+const firestore = db();
 
-function daysAgo(n: number): Date {
+function daysAgo(n: number): Timestamp {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d;
+  return Timestamp.fromDate(d);
+}
+
+/** Delete every document in a collection, including its subcollections. */
+async function wipe(path: string): Promise<void> {
+  const snapshot = await firestore.collection(path).get();
+  for (const doc of snapshot.docs) await firestore.recursiveDelete(doc.ref);
+}
+
+/** Batched writes, flushed before Firestore's five-hundred-operation ceiling.
+ *
+ *  Queued rather than committed as they are made, then committed in order. The
+ *  queue is what keeps this a handful of round trips instead of one per
+ *  document, which matters because the seed writes several hundred.
+ */
+class Writer {
+  private queue: { ref: FirebaseFirestore.DocumentReference; data: FirebaseFirestore.DocumentData; merge: boolean }[] = [];
+
+  set(
+    ref: FirebaseFirestore.DocumentReference,
+    data: FirebaseFirestore.DocumentData,
+    options: { merge?: boolean } = {}
+  ): void {
+    this.queue.push({ ref, data, merge: options.merge ?? false });
+  }
+
+  async flush(): Promise<void> {
+    for (let i = 0; i < this.queue.length; i += 400) {
+      const batch: WriteBatch = firestore.batch();
+      for (const write of this.queue.slice(i, i + 400))
+        batch.set(write.ref, write.data, { merge: write.merge });
+      await batch.commit();
+    }
+    this.queue = [];
+  }
+}
+
+/** Reserve a value the way the application does, so the seeded data is subject
+ *  to the same uniqueness guarantee as anything typed in later. */
+function reserve(
+  writer: Writer,
+  scope: Parameters<typeof uniqueKey>[0],
+  value: string,
+  ownerPath: string
+): void {
+  writer.set(uniques().doc(uniqueKey(scope, value)), {
+    scope,
+    value,
+    ownerPath,
+    at: Timestamp.now(),
+  });
 }
 
 async function main() {
-  // Order matters: children before parents.
-  await prisma.measurement.deleteMany();
-  await prisma.checkResult.deleteMany();
-  await prisma.inspection.deleteMany();
-  await prisma.partEvent.deleteMany();
-  await prisma.part.deleteMany();
-  await prisma.analysisResult.deleteMany();
-  await prisma.analysis.deleteMany();
-  await prisma.certificate.deleteMany();
-  await prisma.lot.deleteMany();
-  await prisma.materialFeature.deleteMany();
-  await prisma.material.deleteMany();
-  await prisma.supplier.deleteMany();
-  await prisma.user.deleteMany();
+  for (const path of Object.values(COLLECTIONS)) await wipe(path);
 
-  // Postgres sequences keep counting up across wipes, so every re-seed would
-  // hand out new ids — and new URLs. Restarting them makes seeding twice give
-  // exactly the same database. The table list is explicit rather than
-  // discovered, so adding a model is a deliberate edit here too.
-  for (const table of [
-    "User",
-    "Supplier",
-    "Material",
-    "MaterialFeature",
-    "Lot",
-    "Certificate",
-    "Analysis",
-    "AnalysisResult",
-    "Part",
-    "PartEvent",
-    "Inspection",
-    "CheckResult",
-    "Measurement",
-  ])
-    await prisma.$executeRawUnsafe(
-      `ALTER SEQUENCE "${table}_id_seq" RESTART WITH 1`
-    );
+  const writer = new Writer();
+  const failureTally = new Map<string, number>();
+  const signedByUid = new Map<string, number>();
+
+  const recordChecks = (stage: Stage, checks: { key: string; ok: boolean | null }[]) => {
+    for (const check of checks)
+      if (check.ok === false) {
+        const id = `${stage}::${check.key}`;
+        failureTally.set(id, (failureTally.get(id) ?? 0) + 1);
+      }
+  };
 
   // ── the people the demo history is signed by ──
   //
-  // Seeded inactive and with synthetic Firebase UIDs on purpose: this is
-  // historical data, not a set of accounts anyone can sign in with. Create the
-  // real first account with `npm run create-admin`.
+  // Seeded inactive and with synthetic uids on purpose: this is historical
+  // data, not a set of accounts anyone can sign in with. Create the real first
+  // account with `npm run create-admin`.
   const STAFF = [
     { displayName: "م. هالة فؤاد", email: "hala@example.invalid", role: "INSPECTOR" },
     { displayName: "م. كريم عادل", email: "karim@example.invalid", role: "INSPECTOR" },
@@ -72,274 +125,216 @@ async function main() {
     { displayName: "م. منى رشاد", email: "mona@example.invalid", role: "QUALITY_MANAGER" },
   ] as const;
 
-  const staff = new Map<string, number>();
+  const staffUid = new Map<string, string>();
   for (const person of STAFF) {
-    const row = await prisma.user.create({
-      data: {
-        firebaseUid: `seed:${person.email}`,
-        email: person.email,
-        displayName: person.displayName,
-        role: person.role,
-        active: false,
-      },
+    const uid = `seed-${person.email.split("@")[0]}`;
+    staffUid.set(person.displayName, uid);
+    reserve(writer, "user.email", person.email, users().doc(uid).path);
+    writer.set(users().doc(uid), {
+      email: person.email,
+      displayName: person.displayName,
+      role: person.role,
+      employeeNo: null,
+      active: false,
+      createdAt: daysAgo(60),
+      updatedAt: daysAgo(60),
+      createdByUid: null,
+      createdByName: null,
+      signedInspections: 0,
     });
-    staff.set(person.displayName, row.id);
   }
 
-  /** The id behind a demo inspector's name. Throws rather than guessing: a
-   *  typo here would otherwise seed a record signed by nobody. */
-  const uid = (name: string): number => {
-    const id = staff.get(name);
-    if (id == null) throw new Error(`seed: unknown inspector "${name}"`);
+  /** The uid behind a demo inspector's name. Throws rather than guessing: a
+   *  typo would otherwise seed a record signed by nobody. */
+  const uid = (name: string): string => {
+    const found = staffUid.get(name);
+    if (!found) throw new Error(`seed: unknown inspector "${name}"`);
+    return found;
+  };
+
+  const signedBy = (name: string) => {
+    const id = uid(name);
+    signedByUid.set(id, (signedByUid.get(id) ?? 0) + 1);
     return id;
   };
 
-  const [bohler, dorrenberg] = await Promise.all([
-    prisma.supplier.create({
-      data: { name: "Böhler Edelstahl", code: "BOH", contact: "sales@bohler.example" },
-    }),
-    prisma.supplier.create({
-      data: { name: "Dörrenberg Edelstahl", code: "DOR", contact: "info@dorrenberg.example" },
-    }),
-  ]);
+  // ── suppliers ──
+  const bohlerId = newId();
+  const dorrenbergId = newId();
+  for (const [id, name, code, contact] of [
+    [bohlerId, "Böhler Edelstahl", "BOH", "sales@bohler.example"],
+    [dorrenbergId, "Dörrenberg Edelstahl", "DOR", "info@dorrenberg.example"],
+  ] as const) {
+    reserve(writer, "supplier.name", name, suppliers().doc(id).path);
+    writer.set(suppliers().doc(id), {
+      name,
+      code,
+      contact,
+      notes: null,
+      createdAt: daysAgo(60),
+    });
+  }
 
   // ── material 1: a hardened die punch ──
-  const punch = await prisma.material.create({
-    data: {
-      partNumber: "PN-1042-A",
-      materialNumber: "1.2379",
-      description: "Die punch — cold work tool steel",
-      spec: "DIN 1.2379 / AISI D2",
-      drawingNumber: "DRW-1042",
-      drawingRev: "B",
-      hardnessMin: 58,
-      hardnessMax: 62,
-      hardnessUnit: "HRC",
-      surfaceFinishRa: 0.4,
-      roughingAllowance: 0.6,
-      requiredCerts: "Mill Test Certificate, Heat Treatment Certificate",
-      features: {
-        create: [
-          {
-            stage: "POST_ROUGHING",
-            name: "القطر الخارجي (rough)",
-            nominal: 50.6,
-            tolMinus: 0.2,
-            tolPlus: 0.2,
-            unit: "mm",
-            sortOrder: 1,
-          },
-          {
-            stage: "POST_ROUGHING",
-            name: "الطول الكلي (rough)",
-            nominal: 120.5,
-            tolMinus: 0.3,
-            tolPlus: 0.3,
-            unit: "mm",
-            sortOrder: 2,
-          },
-          {
-            stage: "POST_GRINDING",
-            name: "القطر الخارجي",
-            nominal: 50.02,
-            tolMinus: 0.01,
-            tolPlus: 0.01,
-            unit: "mm",
-            critical: true,
-            sortOrder: 1,
-          },
-          {
-            stage: "POST_GRINDING",
-            name: "الطول الكلي",
-            nominal: 120,
-            tolMinus: 0.05,
-            tolPlus: 0.05,
-            unit: "mm",
-            sortOrder: 2,
-          },
-          {
-            stage: "FINAL",
-            name: "القطر الخارجي النهائي",
-            nominal: 50,
-            tolMinus: 0.005,
-            tolPlus: 0.005,
-            unit: "mm",
-            critical: true,
-            sortOrder: 1,
-          },
-          {
-            stage: "FINAL",
-            name: "الطول الكلي النهائي",
-            nominal: 120,
-            tolMinus: 0.02,
-            tolPlus: 0.02,
-            unit: "mm",
-            sortOrder: 2,
-          },
-          {
-            stage: "FINAL",
-            name: "الاستدارة (Runout A-B)",
-            kind: "GDT",
-            gdtSymbol: "⌭",
-            gdtLimit: 0.02,
-            unit: "mm",
-            critical: true,
-            sortOrder: 3,
-          },
-          {
-            stage: "FINAL",
-            name: "التعامد (Perpendicularity)",
-            kind: "GDT",
-            gdtSymbol: "⊥",
-            gdtLimit: 0.03,
-            unit: "mm",
-            sortOrder: 4,
-          },
-        ],
-      },
-    },
-    include: { features: true },
+  const feature = (f: Partial<FeatureEntry> & { stage: string; name: string; sortOrder: number }): FeatureEntry => ({
+    id: newId(),
+    kind: "DIMENSION",
+    nominal: null,
+    tolMinus: 0,
+    tolPlus: 0,
+    unit: "mm",
+    critical: false,
+    gdtSymbol: null,
+    gdtLimit: null,
+    ...f,
+  });
+
+  const punchFeatures: FeatureEntry[] = [
+    feature({ stage: "POST_ROUGHING", name: "القطر الخارجي (rough)", nominal: 50.6, tolMinus: 0.2, tolPlus: 0.2, sortOrder: 1 }),
+    feature({ stage: "POST_ROUGHING", name: "الطول الكلي (rough)", nominal: 120.5, tolMinus: 0.3, tolPlus: 0.3, sortOrder: 2 }),
+    feature({ stage: "POST_GRINDING", name: "القطر الخارجي", nominal: 50.02, tolMinus: 0.01, tolPlus: 0.01, critical: true, sortOrder: 1 }),
+    feature({ stage: "POST_GRINDING", name: "الطول الكلي", nominal: 120, tolMinus: 0.05, tolPlus: 0.05, sortOrder: 2 }),
+    feature({ stage: "FINAL", name: "القطر الخارجي النهائي", nominal: 50, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
+    feature({ stage: "FINAL", name: "الطول الكلي النهائي", nominal: 120, tolMinus: 0.02, tolPlus: 0.02, sortOrder: 2 }),
+    feature({ stage: "FINAL", name: "الاستدارة (Runout A-B)", kind: "GDT", gdtSymbol: "⌭", gdtLimit: 0.02, critical: true, sortOrder: 3 }),
+    feature({ stage: "FINAL", name: "التعامد (Perpendicularity)", kind: "GDT", gdtSymbol: "⊥", gdtLimit: 0.03, sortOrder: 4 }),
+  ];
+
+  const punchId = newId();
+  const punch = {
+    partNumber: "PN-1042-A",
+    materialNumber: "1.2379",
+    description: "Die punch — cold work tool steel",
+    spec: "DIN 1.2379 / AISI D2",
+    drawingNumber: "DRW-1042",
+    drawingRev: "B",
+    hardnessMin: 58,
+    hardnessMax: 62,
+    hardnessUnit: "HRC",
+    surfaceFinishRa: 0.4,
+    requiredCerts: "Mill Test Certificate, Heat Treatment Certificate",
+    roughingAllowance: 0.5,
+  };
+  reserve(writer, "material.partNumber", punch.partNumber, materials().doc(punchId).path);
+  writer.set(materials().doc(punchId), {
+    ...punch,
+    createdAt: daysAgo(60),
+    features: punchFeatures,
+    lotCount: 2,
+    partCount: 10,
   });
 
   // ── material 2: a case-hardened shaft ──
-  const shaft = await prisma.material.create({
-    data: {
-      partNumber: "PN-2210-C",
-      materialNumber: "1.7131",
-      description: "Drive shaft — case hardening steel",
-      spec: "DIN 1.7131 / 16MnCr5",
-      drawingNumber: "DRW-2210",
-      drawingRev: "A",
-      hardnessMin: 60,
-      hardnessUnit: "HRC",
-      surfaceFinishRa: 0.8,
-      roughingAllowance: 0.4,
-      requiredCerts: "Mill Test Certificate",
-      features: {
-        create: [
-          {
-            stage: "POST_ROUGHING",
-            name: "قطر المحمل (rough)",
-            nominal: 35.4,
-            tolMinus: 0.15,
-            tolPlus: 0.15,
-            unit: "mm",
-            sortOrder: 1,
-          },
-          {
-            stage: "POST_GRINDING",
-            name: "قطر المحمل",
-            nominal: 35.01,
-            tolMinus: 0.008,
-            tolPlus: 0.008,
-            unit: "mm",
-            critical: true,
-            sortOrder: 1,
-          },
-          {
-            stage: "FINAL",
-            name: "قطر المحمل النهائي",
-            nominal: 35,
-            tolMinus: 0.005,
-            tolPlus: 0.005,
-            unit: "mm",
-            critical: true,
-            sortOrder: 1,
-          },
-          {
-            stage: "FINAL",
-            name: "التوازي (Concentricity)",
-            kind: "GDT",
-            gdtSymbol: "⌾",
-            gdtLimit: 0.015,
-            unit: "mm",
-            sortOrder: 2,
-          },
-        ],
-      },
-    },
-    include: { features: true },
+  const shaftId = newId();
+  const shaft = {
+    partNumber: "PN-2210-C",
+    materialNumber: "1.7131",
+    description: "Drive shaft — case hardening steel",
+    spec: "DIN 1.7131 / 16MnCr5",
+    drawingNumber: "DRW-2210",
+    drawingRev: "A",
+    hardnessMin: 60,
+    hardnessMax: null,
+    hardnessUnit: "HRC",
+    surfaceFinishRa: 0.8,
+    requiredCerts: "Mill Test Certificate",
+    roughingAllowance: 0.4,
+  };
+  reserve(writer, "material.partNumber", shaft.partNumber, materials().doc(shaftId).path);
+  writer.set(materials().doc(shaftId), {
+    ...shaft,
+    createdAt: daysAgo(60),
+    features: [
+      feature({ stage: "POST_ROUGHING", name: "قطر المحمل (rough)", nominal: 35.4, tolMinus: 0.15, tolPlus: 0.15, sortOrder: 1 }),
+      feature({ stage: "POST_GRINDING", name: "قطر المحمل", nominal: 35.01, tolMinus: 0.008, tolPlus: 0.008, critical: true, sortOrder: 1 }),
+      feature({ stage: "FINAL", name: "قطر المحمل النهائي", nominal: 35, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
+      feature({ stage: "FINAL", name: "التوازي (Concentricity)", kind: "GDT", gdtSymbol: "⌾", gdtLimit: 0.015, sortOrder: 2 }),
+    ],
+    lotCount: 1,
+    partCount: 0,
   });
 
   // ── lots ──
-  const lotA = await prisma.lot.create({
-    data: {
-      lotNumber: "LOT-2026-001",
-      materialId: punch.id,
-      supplierId: bohler.id,
-      receivedAt: daysAgo(21),
-      poNumber: "PO-88412",
-      heatNumber: "H-55210",
-      receivedQty: 40,
-      unit: "pcs",
-      status: "ACCEPTED",
-      certificates: {
-        create: [
-          {
-            type: "Mill Test Certificate",
-            number: "MTC-55210",
-            received: true,
-            verified: true,
-            issuedAt: daysAgo(25),
-          },
-          {
-            type: "Heat Treatment Certificate",
-            number: "HT-9921",
-            received: true,
-            verified: true,
-            issuedAt: daysAgo(24),
-          },
-        ],
-      },
-    },
+  const certificate = (c: Partial<CertificateEntry> & { type: string }): CertificateEntry => ({
+    id: newId(),
+    number: null,
+    issuedAt: null,
+    received: false,
+    verified: false,
+    notes: null,
+    ...c,
   });
 
-  const lotB = await prisma.lot.create({
-    data: {
-      lotNumber: "LOT-2026-002",
-      materialId: shaft.id,
-      supplierId: dorrenberg.id,
-      receivedAt: daysAgo(9),
-      poNumber: "PO-88530",
-      heatNumber: "H-61044",
-      receivedQty: 60,
-      unit: "pcs",
-      status: "PENDING",
-      certificates: {
-        // Deliberately not received — the dashboard should flag this lot.
-        create: [{ type: "Mill Test Certificate" }],
-      },
-    },
+  const lotAId = newId();
+  const lotA = { lotNumber: "LOT-2026-001", materialId: punchId, supplierId: bohlerId };
+  reserve(writer, "lot.lotNumber", lotA.lotNumber, lots().doc(lotAId).path);
+  writer.set(lots().doc(lotAId), {
+    ...lotA,
+    receivedAt: daysAgo(21),
+    poNumber: "PO-88412",
+    heatNumber: "H-55210",
+    receivedQty: 40,
+    unit: "pcs",
+    status: "ACCEPTED",
+    notes: null,
+    createdAt: daysAgo(21),
+    certificates: [
+      certificate({ type: "Mill Test Certificate", number: "MTC-55210", received: true, verified: true, issuedAt: daysAgo(25) }),
+      certificate({ type: "Heat Treatment Certificate", number: "HT-9921", received: true, verified: true, issuedAt: daysAgo(24) }),
+    ],
+    partCount: 10,
+    analysisCounts: { total: 1, pending: 0, accepted: 1, rejected: 0 },
   });
 
-  const lotC = await prisma.lot.create({
-    data: {
-      lotNumber: "LOT-2026-003",
-      materialId: punch.id,
-      supplierId: dorrenberg.id,
-      receivedAt: daysAgo(4),
-      poNumber: "PO-88604",
-      heatNumber: "H-61190",
-      receivedQty: 25,
-      unit: "pcs",
-      status: "REJECTED",
-      notes: "صدأ سطحي واضح على 6 قطع + شهادة المصنع غير مطابقة للصهرة.",
-      certificates: {
-        create: [
-          { type: "Mill Test Certificate", number: "MTC-61190", received: true, verified: false },
-          { type: "Heat Treatment Certificate" },
-        ],
-      },
-    },
+  const lotBId = newId();
+  const lotB = { lotNumber: "LOT-2026-002", materialId: shaftId, supplierId: dorrenbergId };
+  reserve(writer, "lot.lotNumber", lotB.lotNumber, lots().doc(lotBId).path);
+  writer.set(lots().doc(lotBId), {
+    ...lotB,
+    receivedAt: daysAgo(9),
+    poNumber: "PO-88530",
+    heatNumber: "H-61044",
+    receivedQty: 60,
+    unit: "pcs",
+    status: "PENDING",
+    notes: null,
+    createdAt: daysAgo(9),
+    // Deliberately not received — the dashboard should flag this lot.
+    certificates: [certificate({ type: "Mill Test Certificate" })],
+    partCount: 0,
+    analysisCounts: { total: 1, pending: 1, accepted: 0, rejected: 0 },
+  });
+
+  const lotCId = newId();
+  const lotC = { lotNumber: "LOT-2026-003", materialId: punchId, supplierId: dorrenbergId };
+  reserve(writer, "lot.lotNumber", lotC.lotNumber, lots().doc(lotCId).path);
+  writer.set(lots().doc(lotCId), {
+    ...lotC,
+    receivedAt: daysAgo(4),
+    poNumber: "PO-88604",
+    heatNumber: "H-61190",
+    receivedQty: 25,
+    unit: "pcs",
+    status: "REJECTED",
+    notes: "صدأ سطحي واضح على 6 قطع + شهادة المصنع غير مطابقة للصهرة.",
+    createdAt: daysAgo(4),
+    certificates: [
+      certificate({ type: "Mill Test Certificate", number: "MTC-61190", received: true, verified: false }),
+      certificate({ type: "Heat Treatment Certificate" }),
+    ],
+    partCount: 0,
+    analysisCounts: { total: 0, pending: 0, accepted: 0, rejected: 0 },
   });
 
   // ── receiving inspections ──
-  async function receivingInspection(
-    lotId: number,
+  function receivingInspection(
+    lotId: string,
+    lotNumber: string,
+    partNumber: string,
     inspector: string,
-    at: Date,
+    at: Timestamp,
     failedKeys: string[] = [],
-    status?: Status
+    forced?: Status
   ) {
     const def = stageDef("RAW_RECEIVING");
     const checks = def.items.map((i) => ({
@@ -348,115 +343,128 @@ async function main() {
       note: failedKeys.includes(i.key) ? "غير مطابق — راجع الملاحظات" : null,
     }));
     const verdict =
-      status ??
+      forced ??
       rollup({
         stage: "RAW_RECEIVING",
         checks: Object.fromEntries(checks.map((c) => [c.key, c.ok])),
       }).suggested;
 
-    await prisma.inspection.create({
-      data: {
-        stage: "RAW_RECEIVING",
-        lotId,
-        inspectorId: uid(inspector),
-        inspector,
-        inspectedAt: at,
-        status: verdict,
-        checks: { create: checks },
-      },
+    recordChecks("RAW_RECEIVING", checks);
+    writer.set(inspections().doc(newId()), {
+      stage: "RAW_RECEIVING",
+      partId: null,
+      lotId,
+      inspectorUid: signedBy(inspector),
+      inspector,
+      inspectedAt: at,
+      status: verdict,
+      notes: null,
+      hardnessValue: null,
+      hardnessUnit: null,
+      hardnessMin: null,
+      hardnessMax: null,
+      surfaceFinishRa: null,
+      cmmRequired: false,
+      cmmReportRef: null,
+      cmmReviewed: false,
+      checks,
+      measurements: [],
+      subject: lotNumber,
+      partNumber,
+      hasFailedMeasurement: false,
     });
   }
 
-  await receivingInspection(lotA.id, "م. أحمد سالم", daysAgo(21));
-  await receivingInspection(lotC.id, "م. أحمد سالم", daysAgo(4), ["visual_inspection", "review_certificates"], "REJECTED");
+  receivingInspection(lotAId, lotA.lotNumber, punch.partNumber, "م. أحمد سالم", daysAgo(21));
+  receivingInspection(
+    lotCId,
+    lotC.lotNumber,
+    punch.partNumber,
+    "م. أحمد سالم",
+    daysAgo(4),
+    ["visual_inspection", "review_certificates"],
+    "REJECTED"
+  );
 
-  // ── analysis ──
-  const analysisA = await prisma.analysis.create({
-    data: {
-      lotId: lotA.id,
-      sampleRef: "S-001",
-      method: "Spectro",
-      performedAt: daysAgo(20),
-      performedBy: "معمل التحاليل",
-      recordedById: uid("م. منى رشاد"),
-      results: {
-        create: [
-          { property: "C %", requiredMin: 1.45, requiredMax: 1.6, actual: 1.52, unit: "%", sortOrder: 0 },
-          { property: "Cr %", requiredMin: 11, requiredMax: 12.5, actual: 11.8, unit: "%", sortOrder: 1 },
-          { property: "Mo %", requiredMin: 0.7, requiredMax: 1.0, actual: 0.82, unit: "%", sortOrder: 2 },
-          { property: "V %", requiredMin: 0.7, requiredMax: 1.0, actual: 0.9, unit: "%", sortOrder: 3 },
-          { property: "P %", requiredMax: 0.03, actual: 0.018, unit: "%", sortOrder: 4 },
-          { property: "S %", requiredMax: 0.03, actual: 0.011, unit: "%", sortOrder: 5 },
-        ],
-      },
-    },
-    include: { results: true },
+  // ── analyses ──
+  const result = (r: Partial<AnalysisResultEntry> & { property: string; sortOrder: number }): AnalysisResultEntry => ({
+    id: newId(),
+    requiredMin: null,
+    requiredMax: null,
+    requiredText: null,
+    actual: null,
+    actualText: null,
+    unit: "%",
+    pass: null,
+    ...r,
   });
-  await prisma.analysis.update({
-    where: { id: analysisA.id },
-    data: {
-      status: analysisStatus(analysisA.results),
-      conclusion: "مطابق للمواصفة DIN 1.2379.",
-    },
+
+  const analysisAResults = [
+    result({ property: "C %", requiredMin: 1.45, requiredMax: 1.6, actual: 1.52, sortOrder: 0 }),
+    result({ property: "Cr %", requiredMin: 11, requiredMax: 12.5, actual: 11.8, sortOrder: 1 }),
+    result({ property: "Mo %", requiredMin: 0.7, requiredMax: 1.0, actual: 0.82, sortOrder: 2 }),
+    result({ property: "V %", requiredMin: 0.7, requiredMax: 1.0, actual: 0.9, sortOrder: 3 }),
+    result({ property: "P %", requiredMax: 0.03, actual: 0.018, sortOrder: 4 }),
+    result({ property: "S %", requiredMax: 0.03, actual: 0.011, sortOrder: 5 }),
+  ];
+
+  writer.set(analysesOf(lotAId).doc(newId()), {
+    sampleRef: "S-001",
+    method: "Spectro",
+    performedAt: daysAgo(20),
+    performedBy: "معمل التحاليل",
+    recordedByUid: uid("م. منى رشاد"),
+    recordedByName: "م. منى رشاد",
+    status: analysisStatus(analysisAResults),
+    conclusion: "مطابق للمواصفة DIN 1.2379.",
+    actionTaken: null,
+    results: analysisAResults,
   });
 
   // Lot B's sample is open but unread — it should read as pending everywhere.
-  await prisma.analysis.create({
-    data: {
-      lotId: lotB.id,
-      sampleRef: "S-014",
-      method: "Spectro",
-      performedAt: daysAgo(8),
-      performedBy: "معمل التحاليل",
-      recordedById: uid("م. منى رشاد"),
-      status: "PENDING",
-      results: {
-        create: [
-          { property: "C %", requiredMin: 0.14, requiredMax: 0.19, unit: "%", sortOrder: 0 },
-          { property: "Cr %", requiredMin: 0.8, requiredMax: 1.1, unit: "%", sortOrder: 1 },
-          { property: "Mn %", requiredMin: 1.0, requiredMax: 1.3, unit: "%", sortOrder: 2 },
-        ],
-      },
-    },
+  writer.set(analysesOf(lotBId).doc(newId()), {
+    sampleRef: "S-014",
+    method: "Spectro",
+    performedAt: daysAgo(8),
+    performedBy: "معمل التحاليل",
+    recordedByUid: uid("م. منى رشاد"),
+    recordedByName: "م. منى رشاد",
+    status: "PENDING",
+    conclusion: null,
+    actionTaken: null,
+    results: [
+      result({ property: "C %", requiredMin: 0.14, requiredMax: 0.19, sortOrder: 0 }),
+      result({ property: "Cr %", requiredMin: 0.8, requiredMax: 1.1, sortOrder: 1 }),
+      result({ property: "Mn %", requiredMin: 1.0, requiredMax: 1.3, sortOrder: 2 }),
+    ],
   });
 
-  // ── parts + their inspections ──
-  const features = [...punch.features];
+  // ── parts and their inspections ──
+  interface Step {
+    stage: Stage;
+    inspector: string;
+    at: Timestamp;
+    failedKeys?: string[];
+    actuals?: Record<string, number>;
+    hardness?: number;
+    ra?: number;
+    cmmRef?: string;
+  }
 
   /** Run one part through `plan`, recording a real inspection per stage. */
-  async function runPart(
-    serialNumber: string,
-    plan: {
-      stage: Stage;
-      inspector: string;
-      at: Date;
-      failedKeys?: string[];
-      actuals?: Record<string, number>;
-      hardness?: number;
-      ra?: number;
-      cmmRef?: string;
-    }[]
-  ) {
-    const part = await prisma.part.create({
-      data: {
-        serialNumber,
-        materialId: punch.id,
-        lotId: lotA.id,
-        currentStage: "POST_ROUGHING",
-        status: "IN_PROCESS",
-      },
-    });
-    await prisma.partEvent.create({
-      data: {
-        partId: part.id,
-        kind: "CREATED",
-        stage: "POST_ROUGHING",
-        toValue: "POST_ROUGHING/IN_PROCESS",
-        note: `صدر من التشغيلة ${lotA.lotNumber}`,
-        actorId: uid("م. طارق سليم"),
-        actor: "م. طارق سليم",
-        at: daysAgo(18),
-      },
+  function runPart(serialNumber: string, plan: Step[]): void {
+    const partId = newId();
+    reserve(writer, "part.serialNumber", serialNumber, parts().doc(partId).path);
+
+    writer.set(eventsOf(partId).doc(newId()), {
+      at: daysAgo(18),
+      kind: "CREATED",
+      stage: "POST_ROUGHING",
+      fromValue: null,
+      toValue: "POST_ROUGHING/IN_PROCESS",
+      note: `صدر من التشغيلة ${lotA.lotNumber}`,
+      actorUid: uid("م. طارق سليم"),
+      actor: "م. طارق سليم",
     });
 
     let currentStage: Stage | "DONE" = "POST_ROUGHING";
@@ -472,7 +480,7 @@ async function main() {
         note: failed.includes(i.key) ? "غير مطابق" : null,
       }));
 
-      const stageFeatures = features.filter((f) => f.stage === step.stage);
+      const stageFeatures = punchFeatures.filter((f) => f.stage === step.stage);
       const specs: MeasurementSpec[] = stageFeatures.map((f) => ({
         kind: f.kind,
         nominal: f.nominal,
@@ -482,7 +490,7 @@ async function main() {
         actual: step.actuals?.[f.name] ?? null,
         critical: f.critical,
       }));
-      const measurements = stageFeatures.map((f, i) => ({
+      const measurements: MeasurementEntry[] = stageFeatures.map((f, i) => ({
         featureId: f.id,
         name: f.name,
         kind: f.kind,
@@ -509,48 +517,41 @@ async function main() {
         hardness,
       }).suggested;
 
-      await prisma.inspection.create({
-        data: {
-          stage: step.stage,
-          partId: part.id,
-          inspectorId: uid(step.inspector),
-          inspector: step.inspector,
-          inspectedAt: step.at,
-          status: verdict,
-          ...(step.stage === "HEAT_TREATMENT"
-            ? {
-                hardnessValue: step.hardness ?? null,
-                hardnessUnit: punch.hardnessUnit,
-                hardnessMin: punch.hardnessMin,
-                hardnessMax: punch.hardnessMax,
-              }
-            : {}),
-          ...(step.stage === "FINAL"
-            ? {
-                surfaceFinishRa: step.ra ?? null,
-                cmmRequired: step.cmmRef != null,
-                cmmReportRef: step.cmmRef ?? null,
-                cmmReviewed: step.cmmRef != null,
-              }
-            : {}),
-          checks: { create: checks },
-          measurements: { create: measurements },
-        },
+      recordChecks(step.stage, checks);
+      writer.set(inspections().doc(newId()), {
+        stage: step.stage,
+        partId,
+        lotId: lotAId,
+        inspectorUid: signedBy(step.inspector),
+        inspector: step.inspector,
+        inspectedAt: step.at,
+        status: verdict,
+        notes: null,
+        hardnessValue: step.stage === "HEAT_TREATMENT" ? (step.hardness ?? null) : null,
+        hardnessUnit: step.stage === "HEAT_TREATMENT" ? punch.hardnessUnit : null,
+        hardnessMin: step.stage === "HEAT_TREATMENT" ? punch.hardnessMin : null,
+        hardnessMax: step.stage === "HEAT_TREATMENT" ? punch.hardnessMax : null,
+        surfaceFinishRa: step.stage === "FINAL" ? (step.ra ?? null) : null,
+        cmmRequired: step.stage === "FINAL" && step.cmmRef != null,
+        cmmReportRef: step.stage === "FINAL" ? (step.cmmRef ?? null) : null,
+        cmmReviewed: step.stage === "FINAL" && step.cmmRef != null,
+        checks,
+        measurements,
+        subject: serialNumber,
+        partNumber: punch.partNumber,
+        hasFailedMeasurement: measurements.some((m) => m.result === "FAIL"),
       });
 
       const transition = nextPartState(step.stage, verdict);
-      await prisma.partEvent.create({
-        data: {
-          partId: part.id,
-          kind: "INSPECTION",
-          stage: step.stage,
-          fromValue: `${currentStage}/${status}`,
-          toValue: `${transition.stage}/${transition.status}`,
-          note: `${def.ar} — ${verdict}`,
-          actorId: uid(step.inspector),
-          actor: step.inspector,
-          at: step.at,
-        },
+      writer.set(eventsOf(partId).doc(newId()), {
+        at: step.at,
+        kind: "INSPECTION",
+        stage: step.stage,
+        fromValue: `${currentStage}/${status}`,
+        toValue: `${transition.stage}/${transition.status}`,
+        note: `${def.ar} — ${verdict}`,
+        actorUid: uid(step.inspector),
+        actor: step.inspector,
       });
 
       currentStage = transition.stage;
@@ -558,11 +559,16 @@ async function main() {
       if (status === "REJECTED" || status === "REWORK" || status === "HOLD") break;
     }
 
-    await prisma.part.update({
-      where: { id: part.id },
-      data: { currentStage, status },
+    writer.set(parts().doc(partId), {
+      serialNumber,
+      materialId: punchId,
+      lotId: lotAId,
+      batchQty: 1,
+      currentStage,
+      status,
+      createdAt: daysAgo(18),
+      updatedAt: plan.length > 0 ? plan[plan.length - 1].at : daysAgo(18),
     });
-    return part;
   }
 
   const goodActuals = {
@@ -578,7 +584,7 @@ async function main() {
 
   // Three parts released clean.
   for (let i = 1; i <= 3; i++) {
-    await runPart(`LOT-2026-001-${String(i).padStart(4, "0")}`, [
+    runPart(`LOT-2026-001-${String(i).padStart(4, "0")}`, [
       { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
       { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(14), hardness: 60 + i * 0.3 },
       { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(10), actuals: goodActuals.grinding },
@@ -594,7 +600,7 @@ async function main() {
   }
 
   // Rejected at final on a critical runout.
-  await runPart("LOT-2026-001-0004", [
+  runPart("LOT-2026-001-0004", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(14), hardness: 59.4 },
     { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(10), actuals: goodActuals.grinding },
@@ -609,19 +615,19 @@ async function main() {
   ]);
 
   // Soft after heat treatment → rejected there.
-  await runPart("LOT-2026-001-0005", [
+  runPart("LOT-2026-001-0005", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 54.5 },
   ]);
 
   // Over-hard → further investigation, sits on hold.
-  await runPart("LOT-2026-001-0006", [
+  runPart("LOT-2026-001-0006", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 64.2 },
   ]);
 
   // Grinding burn → rework, waiting to be sent back.
-  await runPart("LOT-2026-001-0007", [
+  runPart("LOT-2026-001-0007", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 60.1 },
     {
@@ -634,35 +640,51 @@ async function main() {
   ]);
 
   // Three still walking the line, one per queue.
-  await runPart("LOT-2026-001-0008", [
+  runPart("LOT-2026-001-0008", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(16), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(11), hardness: 61 },
     { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(7), actuals: goodActuals.grinding },
   ]);
-  await runPart("LOT-2026-001-0009", [
+  runPart("LOT-2026-001-0009", [
     { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(16), actuals: goodActuals.roughing },
     { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(11), hardness: 59.8 },
   ]);
-  await runPart("LOT-2026-001-0010", []);
+  runPart("LOT-2026-001-0010", []);
 
-  const counts = {
-    suppliers: await prisma.supplier.count(),
-    materials: await prisma.material.count(),
-    features: await prisma.materialFeature.count(),
-    lots: await prisma.lot.count(),
-    analyses: await prisma.analysis.count(),
-    parts: await prisma.part.count(),
-    inspections: await prisma.inspection.count(),
-    measurements: await prisma.measurement.count(),
-  };
-  console.log("Seeded:", counts);
-  console.log(`Lots: ${lotA.lotNumber} accepted · ${lotB.lotNumber} pending · ${lotC.lotNumber} rejected`);
+  // ── the counters, by the same arithmetic the actions use ──
+  writer.set(stats().doc("failures"), { counts: Object.fromEntries(failureTally) });
+  // Merged, not replaced: the account document was queued earlier in this same
+  // run and a plain set would overwrite it with a single field.
+  for (const [id, count] of signedByUid)
+    writer.set(users().doc(id), { signedInspections: count }, { merge: true });
+
+  await writer.flush();
+
+  // Counting what was actually written, rather than what we meant to write.
+  const [supplierCount, materialCount, lotCount, partCount, inspectionCount] = await Promise.all([
+    suppliers().count().get(),
+    materials().count().get(),
+    lots().count().get(),
+    parts().count().get(),
+    inspections().count().get(),
+  ]);
+
+  console.log("Seeded:", {
+    staff: STAFF.length,
+    suppliers: supplierCount.data().count,
+    materials: materialCount.data().count,
+    lots: lotCount.data().count,
+    parts: partCount.data().count,
+    inspections: inspectionCount.data().count,
+    failureLines: failureTally.size,
+  });
+  console.log(
+    `Lots: ${lotA.lotNumber} accepted · ${lotB.lotNumber} pending · ${lotC.lotNumber} rejected`
+  );
   console.log(`Materials: ${punch.partNumber}, ${shaft.partNumber}`);
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

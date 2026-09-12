@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
   const user = await requireUser();
   const { id } = await params;
-  const part = await getPart(Number(id));
+  const part = await getPart(id);
   if (!part) notFound();
 
   const stage = part.currentStage as Stage | "DONE";
@@ -307,8 +307,8 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
                               </tr>
                             </thead>
                             <tbody>
-                              {insp.measurements.map((m) => (
-                                <tr key={m.id}>
+                              {insp.measurements.map((m, mi) => (
+                                <tr key={`${m.featureId ?? "m"}-${mi}`}>
                                   <td>
                                     {m.name}
                                     {m.critical && (

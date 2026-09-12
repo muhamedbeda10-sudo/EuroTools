@@ -34,34 +34,40 @@ to final quality release. Arabic RTL UI, English data values.
 
 ## التشغيل محليًا
 
-التطبيق يحتاج **PostgreSQL** (النسخة 14 فما فوق). التطبيق يعمل على المنفذ
-**3001**، فيمكن تشغيله جنبًا إلى جنب مع تطبيق آخر على 3000.
+التطبيق يحتاج **Firebase emulators** فقط — لا قاعدة بيانات تُنصَّب ولا مفاتيح
+خدمة. الـ Admin SDK يتعرّف على الـ emulators من متغيّرات البيئة ولا يطلب
+اعتمادات أصلًا، فلا يوجد مفتاح يمكن تسريبه بالخطأ.
+
+في نافذة:
 
 ```bash
-cp .env.example .env        # ملف الإعدادات — غير موجود في git
 npm install
-createdb eurotools_dev      # أو أي قاعدة PostgreSQL فارغة
-npx prisma migrate deploy
-npm run seed                # بيانات تجريبية تغطي كل المراحل (اختياري)
-npm run dev                 # http://localhost:3001
+npm run emulators            # Firestore على 8080 وAuth على 9099
 ```
 
-بيانات الـ seed تاريخية: الحسابات فيها موقوفة وبمعرّفات Firebase صناعية، فلا
-يستطيع أحد الدخول بها. لإنشاء أول حساب حقيقي راجع قسم النشر.
+وفي نافذة أخرى:
+
+```bash
+cp .env.example .env
+npm run seed                 # بيانات تجريبية تغطي كل المراحل
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='StrongPass123' \
+  ADMIN_NAME='اسمك' npm run create-admin
+npm run dev                  # http://localhost:3001
+```
+
+بيانات الـ seed تاريخية: الحسابات فيها موقوفة وبمعرّفات صناعية، فلا يستطيع أحد
+الدخول بها. الحساب الحقيقي هو الذي ينشئه `create-admin`.
 
 أوامر أخرى:
 
 ```bash
-npm run test:run     # 105 اختبار وحدة للمنطق النقي
+npm run test:run          # 105 اختبار وحدة للمنطق النقي
+npm run test:integration  # ضمانات السلامة، يحتاج الـ emulator شغّالًا
 npm run typecheck
 npm run lint
 npm run build && npm start
-npm run db:reset     # مسح القاعدة وإعادة تطبيق الـ migrations
-npm run create-admin # إنشاء أول مدير نظام
+npm run dev:session       # كوكي جلسة لاختبار الصفحات من سطر الأوامر
 ```
-
-المتغيّرات كلها موصوفة في `.env.example`. أهمها `DATABASE_URL`، وإعدادات
-Firebase، و`NEXT_PUBLIC_QC_TIME_ZONE` (الافتراضي `Africa/Cairo`).
 
 ## الصفحات
 
@@ -95,9 +101,9 @@ Firebase، و`NEXT_PUBLIC_QC_TIME_ZONE` (الافتراضي `Africa/Cairo`).
 
 ## الدخول والصلاحيات
 
-الهوية من **Firebase Authentication**، والصلاحية من جدول `User` في قاعدة
-البيانات. يعني إيقاف حساب يمنعه من الدخول في الطلب التالي مباشرة، دون انتظار
-انتهاء صلاحية أي رمز.
+الهوية من **Firebase Authentication**، والصلاحية من مستند المستخدم في Firestore.
+يعني إيقاف حساب يمنعه من الدخول في الطلب التالي مباشرة، دون انتظار انتهاء صلاحية
+أي رمز. مستند المستخدم مُعرَّفه هو الـ uid نفسه، فالتحقق من الجلسة قراءة واحدة.
 
 اسم الفاحص **لا يُكتب في النموذج** — يأتي من الجلسة على الخادم. توقيع يستطيع
 المتصفّح أن يكتبه ليس توقيعًا.
@@ -126,124 +132,110 @@ Firebase، و`NEXT_PUBLIC_QC_TIME_ZONE` (الافتراضي `Africa/Cairo`).
 `proxy.ts` فحص تفاؤلي فقط — ينظر هل توجد كوكي جلسة، لا هل هي صحيحة — وكوكي مزوّر
 يعبره ويُرفض عند طبقة البيانات.
 
-الحسابات **لا تُحذف أبدًا**، تُوقَف فقط: كل فحص موقَّع يجب أن يظل مشيرًا إلى صاحبه،
-والمخطط يفرض ذلك بـ `ON DELETE RESTRICT`. وتغييرات الصلاحيات تُسجَّل في
-`UserAuditEvent`.
+الحسابات **لا تُحذف أبدًا**، تُوقَف فقط: كل فحص موقَّع يجب أن يظل مشيرًا إلى صاحبه.
+في PostgreSQL كان القيد `ON DELETE RESTRICT` يفرض ذلك؛ Firestore لا يملك مفاتيح
+أجنبية، فالضمان انتقل إلى الكود: شاشة الإدارة لا تعرض حذفًا أصلًا، وقواعد الأمان
+تمنع أي كتابة من المتصفّح، واختبار في `tests/integrity.test.ts` يثبّت أن وحدة
+الإجراءات لا تصدّر أي دالة حذف. وتغييرات الصلاحيات تُسجَّل في `userAuditEvents`.
+
+الترقيم الفريد كان فهرسًا فريدًا في قاعدة البيانات، وصار مستند حجز مُعرِّفه هو
+القيمة نفسها: كاتبان يتسابقان على رقم تشغيلة واحد يحاولان إنشاء نفس المستند،
+وواحد فقط ينجح. هذا مُختبَر بكتابتين متزامنتين فعليًا، لا بمحاكاة.
 
 ## النشر على Firebase App Hosting
 
 كل صفحات التطبيق تُبنى عند الطلب على الخادم والكتابة عبر Server Actions، فلا
-يمكن تصديره كموقع ثابت، و**Firebase Hosting العادي لا يكفي**. المنتج الصحيح هو
+يمكن تصديره كموقع ثابت و**Firebase Hosting العادي لا يكفي**. المنتج الصحيح هو
 **App Hosting** الذي يشغّله فوق Cloud Run.
 
-الإعداد كله في `apphosting.yaml`، وليس فيه أي سر: الأسرار في Cloud Secret
-Manager. المنطقة المقترحة `europe-west1`، ويجب أن تكون قاعدة البيانات في نفس
-المنطقة.
+**App Hosting يتطلب حساب فوترة (خطة Blaze).** لا توجد نسخة من هذا التطبيق تعمل
+على خطة Spark المجانية. لكن Blaze لا تعني الدفع: كل ما يستخدمه التطبيق له حصة
+مجانية تشملها الخطة، والإعدادات في `apphosting.yaml` مختارة للبقاء داخلها.
+الفرق الحقيقي يظهر عند تجاوز الحصة — على Blaze تُحتسب قروش وتستمر الكتابة، وعلى
+Spark **تتوقف الكتابة حتى منتصف الليل بتوقيت المحيط الهادئ**، أي حوالي العاشرة
+صباحًا بتوقيت القاهرة. في مصنع، ذلك يعني فاحصًا لا يستطيع تسجيل فحص في منتصف
+الوردية.
 
-### 1 · قاعدة البيانات
+### 1 · المشروع وقاعدة البيانات
+
+من Firebase Console أنشئ مشروعًا، فعّل **Blaze**، ثم أنشئ قاعدة **Firestore** في
+وضع Production واختر المنطقة `europe-west1` (نفس منطقة App Hosting لاحقًا).
+
+لا يوجد schema تنشئه: المجموعات تظهر عند أول كتابة. بنية البيانات موصوفة بالكامل
+في `lib/server/model.ts`.
+
+**فعّل النسخ الاحتياطي**: من Firestore → Backups أنشئ جدولًا يوميًا مع احتفاظ
+مناسب. سجل الفحص مستند جودة يُطلب إثباته، وفقدانه ليس عطلًا بل عدم مطابقة.
+
+### 2 · قواعد الأمان
 
 ```bash
-gcloud sql instances create eurotools-qc \
-  --database-version=POSTGRES_16 \
-  --region=europe-west1 \
-  --tier=db-custom-1-3840 \
-  --storage-auto-increase \
-  --backup-start-time=01:00 \
-  --enable-point-in-time-recovery \
-  --retained-backups-count=30
-
-gcloud sql databases create eurotools --instance=eurotools-qc
-gcloud sql users create qc_app --instance=eurotools-qc --password='...'
+npm run rules:deploy
 ```
 
-النسخ الاحتياطي والاسترجاع الزمني (PITR) ليسا اختياريين هنا: سجل الفحص مستند
-جودة يُطلب إثباته، وفقدانه ليس عطلًا بل عدم مطابقة.
+`firestore.rules` يمنع كل وصول من المتصفّح. هذا ليس إجراءً شكليًا: مفتاح الويب
+موجود في حزمة المتصفّح بحكم التصميم، وهذه القواعد هي ما يمنع من يحصل عليه من
+قراءة تاريخ الفحوص كاملًا أو الكتابة متجاوزًا فحوص الصلاحيات في `lib/server/`.
+كل وصول يمرّ عبر Admin SDK على الخادم، وهو يتجاوز القواعد بحكم تصميمه.
 
-**انتبه لعدد الاتصالات.** كل نسخة من التطبيق تفتح حتى `connection_limit`
-اتصالًا (٥ في `.env.example`)، و`maxInstances` في `apphosting.yaml` عشرة، أي ٥٠
-اتصالًا في الذروة. تأكّد أن `max_connections` في الفئة التي اخترتها أكبر من ذلك
-بهامش — الفئات المشتركة الصغيرة تسمح بعدد أقل بكثير مما تتوقّع. إذا رفعت
-`maxInstances` فارفع الفئة معها.
+### 3 · المصادقة
 
-### 2 · المصادقة
+من Console فعّل **Authentication → Sign-in method → Email/Password**. لا تفعّل
+التسجيل الذاتي؛ الحسابات يُنشئها مدير النظام من داخل التطبيق.
 
-من Firebase Console فعّل **Authentication → Sign-in method → Email/Password**.
-لا تفعّل التسجيل الذاتي؛ الحسابات يُنشئها مدير النظام من داخل التطبيق.
-
-ثم امنح حساب خدمة App Hosting صلاحية توقيع كوكي الجلسة. بدون هذه الخطوة يفشل
-تسجيل الدخول في خطوته الأخيرة برسالة صلاحيات:
+ثم امنح حساب خدمة App Hosting صلاحيتين. بدون الأولى يفشل تسجيل الدخول في خطوته
+الأخيرة برسالة صلاحيات:
 
 ```bash
 # تأكّد من اسم حساب الخدمة من Console أولًا
 SA=firebase-app-hosting-compute@PROJECT_ID.iam.gserviceaccount.com
+
+# توقيع كوكي الجلسة
 gcloud iam service-accounts add-iam-policy-binding "$SA" \
   --member="serviceAccount:$SA" \
   --role="roles/iam.serviceAccountTokenCreator"
+
+# قراءة وكتابة Firestore
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:$SA" \
+  --role="roles/datastore.user"
 ```
 
-### 3 · السر والإعداد
+### 4 · الإعداد والنشر
+
+املأ `REPLACE_WITH_...` في `apphosting.yaml` من إعدادات تطبيق الويب في Console،
+ثم:
 
 ```bash
-firebase apphosting:secrets:set qc-database-url
-# القيمة:
-# postgresql://qc_app:PASSWORD@PRIVATE_IP:5432/eurotools?schema=public&connection_limit=5&sslmode=require
-
-firebase apphosting:secrets:grantaccess qc-database-url --backend BACKEND_ID
+npx firebase init apphosting   # يربط المستودع والفرع
+npx firebase deploy --only apphosting
 ```
 
-ثم املأ `REPLACE_WITH_...` في `apphosting.yaml`، وأزِل التعليق عن `vpcAccess`
-بعد تجهيز الشبكة.
-
-### 4 · الـ migrations
-
-**لا تُشغَّل أثناء البناء.** الوصول إلى VPC متاح في الـ runtime فقط، فخطوة البناء
-لا تصل أصلًا إلى قاعدة بيانات على IP خاص. وهذا هو السلوك المطلوب على أي حال:
-تعديل مخطط قاعدة بيانات مصنع يجب أن يكون خطوة مقصودة ومراجَعة، لا شيئًا يحدث
-لأن الـ autoscaling أضاف نسخة.
-
-شغّلها بنفسك قبل نشر أي إصدار يحتاجها:
-
-```bash
-cloud-sql-proxy PROJECT_ID:europe-west1:eurotools-qc --port 5432 &
-DATABASE_URL="postgresql://qc_app:PASSWORD@127.0.0.1:5432/eurotools?schema=public" \
-  npm run migrate:deploy
-```
+بعدها كل `git push` على الفرع المربوط ينشر نسخة جديدة.
 
 ### 5 · أول حساب
 
-بنفس الاتصال، وبنفس بيانات اعتماد Google المحلية:
+من جهازك، وبنفس بيانات اعتماد Google المحلية:
 
 ```bash
 ADMIN_EMAIL=qa.manager@example.com \
 ADMIN_PASSWORD='...' \
 ADMIN_NAME='م. منى رشاد' \
 FIREBASE_PROJECT_ID=PROJECT_ID \
-DATABASE_URL="postgresql://qc_app:PASSWORD@127.0.0.1:5432/eurotools?schema=public" \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json \
   npm run create-admin
 ```
 
-كل حساب بعده يُنشأ من `/admin/users` داخل التطبيق. لا تمرّر كلمة المرور كوسيط
-في سطر الأوامر؛ تظهر في تاريخ الطرفية وقائمة العمليات.
+كل حساب بعده يُنشأ من `/admin/users` داخل التطبيق. لا تمرّر كلمة المرور كوسيط في
+سطر الأوامر؛ تظهر في تاريخ الطرفية وقائمة العمليات.
 
-### 6 · إنشاء الـ backend والنشر
+### ما الذي يُكلِّف فعلًا
 
-App Hosting ينشر أساسًا من GitHub: تربط المستودع وفرعًا واحدًا، فيبني وينشر عند
-كل دفعة على ذلك الفرع.
-
-```bash
-firebase init apphosting   # يربط المستودع والفرع وينشئ firebase.json
-```
-
-ثم اختر المنطقة `europe-west1` نفسها التي أنشأت فيها قاعدة البيانات. بعد ذلك كل
-`git push` على الفرع المربوط ينشر نسخة جديدة. للنشر يدويًا دون دفعة:
-
-```bash
-firebase deploy --only apphosting
-```
-
-**رتّب الخطوات هكذا عند كل إصدار يغيّر المخطط:** طبّق الـ migrations أولًا
-(الخطوة ٤)، ثم انشر. النسخة الجديدة تبدأ فورًا بعد البناء، فلو نشرت أولًا ستعمل
-مؤقتًا على مخطط أقدم مما تتوقّعه.
+الفحص الواحد كتابة **واحدة**، لأن بنود الكشف والقياسات مخزّنة داخل مستند الفحص
+نفسه بدل خمستاشر مستند منفصل. والتقارير لا تقرأ كل الفحوص: العدّ يتم بـ
+aggregation queries، وترتيب البنود الأكثر رسوبًا يأتي من عدّاد يُحدَّث داخل نفس
+المعاملة التي تسجّل الفحص. لذلك تكلفة فتح صفحة التقارير لا تزيد مع نمو تاريخ
+المصنع — وهو الفرق بين تقرير يفتحه الناس بحرية وتقرير يستنفد حصة اليوم.
 
 ## البنية
 
@@ -253,9 +245,11 @@ components/         ChecklistForm (قلب التطبيق) + عناصر واجه�
 lib/domain/         منطق نقي + اختباراته
                     stages.ts = مصدر الكشوف الوحيد
                     roles.ts  = مصدر الصلاحيات الوحيد
-lib/server/         الاستعلامات وServer Actions والجلسة فوق Prisma
+lib/server/         الاستعلامات وServer Actions والجلسة فوق Firestore
+                    model.ts = بنية البيانات ومستندات الحجز
 proxy.ts            فحص تفاؤلي يمنع غير المسجَّلين من الصفحات
-prisma/             schema + migrations
+tests/              اختبارات السلامة على الـ emulator
+firestore.rules     منع كل وصول من المتصفّح
 scripts/seed.ts     بيانات تجريبية
 scripts/create-admin.ts  أول حساب
 apphosting.yaml     إعداد النشر
@@ -268,5 +262,5 @@ apphosting.yaml     إعداد النشر
 ## التقنيات
 
 Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind v4 ·
-Prisma + PostgreSQL · Firebase Authentication · Vitest ·
-Firebase App Hosting (Cloud Run) + Cloud SQL.
+Firestore · Firebase Authentication · Vitest ·
+Firebase App Hosting (Cloud Run).

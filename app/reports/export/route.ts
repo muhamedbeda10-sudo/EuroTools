@@ -1,5 +1,7 @@
-import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/server/auth";
+import { getAllInspectionsForExport } from "@/lib/server/queries";
+import { db } from "@/lib/server/firestore";
+import { lots, suppliers, type LotDoc, type SupplierDoc } from "@/lib/server/model";
 import { measurementResult } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
 
@@ -17,20 +19,38 @@ function cell(value: unknown): string {
 /** One row per checklist answer and per measurement, so the export can be
  *  pivoted in Excel without going back to the app. */
 export async function GET() {
-  // This route reads straight from Prisma rather than through `queries.ts`, so
-  // it carries its own guard. The whole quality history leaves the building in
-  // one file here.
+  // The whole quality history leaves the building in one file here, so this
+  // route carries its own guard as well as the one inside the query.
   await requireUser();
 
-  const inspections = await prisma.inspection.findMany({
-    orderBy: { inspectedAt: "desc" },
-    include: {
-      checks: true,
-      measurements: { orderBy: { sortOrder: "asc" } },
-      part: { include: { material: true, lot: { include: { supplier: true } } } },
-      lot: { include: { material: true, supplier: true } },
-    },
-  });
+  const inspections = await getAllInspectionsForExport();
+
+  // The subject and part number are already on each inspection; only the
+  // supplier still needs looking up, and it is fetched once per distinct lot
+  // rather than once per row.
+  const lotIds = [...new Set(inspections.map((i) => i.lotId).filter((id): id is string => Boolean(id)))];
+  const lotDocs = lotIds.length
+    ? await db().getAll(...lotIds.map((id) => lots().doc(id)))
+    : [];
+  const supplierIdByLot = new Map<string, string>();
+  for (const snap of lotDocs) {
+    const supplierId = snap.exists ? (snap.data() as LotDoc).supplierId : null;
+    if (supplierId) supplierIdByLot.set(snap.id, supplierId);
+  }
+
+  const supplierIds = [...new Set(supplierIdByLot.values())];
+  const supplierDocs = supplierIds.length
+    ? await db().getAll(...supplierIds.map((id) => suppliers().doc(id)))
+    : [];
+  const supplierNameById = new Map<string, string>();
+  for (const snap of supplierDocs)
+    if (snap.exists) supplierNameById.set(snap.id, (snap.data() as SupplierDoc).name);
+
+  const supplierNameForLot = (lotId: string | null): string => {
+    if (!lotId) return "";
+    const supplierId = supplierIdByLot.get(lotId);
+    return supplierId ? (supplierNameById.get(supplierId) ?? "") : "";
+  };
 
   const header = [
     "Inspection ID",
@@ -57,15 +77,14 @@ export async function GET() {
 
   for (const insp of inspections) {
     const def = stageDef(insp.stage);
-    const material = insp.part?.material ?? insp.lot?.material;
     const base = [
       insp.id,
       insp.inspectedAt.toISOString(),
       def.en,
       def.ar,
-      insp.part?.serialNumber ?? insp.lot?.lotNumber ?? "",
-      material?.partNumber ?? "",
-      insp.part?.lot?.supplier?.name ?? insp.lot?.supplier?.name ?? "",
+      insp.subject,
+      insp.partNumber,
+      supplierNameForLot(insp.lotId),
       insp.inspector,
       insp.status,
     ];

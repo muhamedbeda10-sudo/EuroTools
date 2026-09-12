@@ -39,21 +39,11 @@ if not exist ".env" (
   )
 )
 
-rem The database is PostgreSQL now, so there is no local file to look for.
-rem `migrate deploy` is idempotent: it applies whatever is outstanding and does
-rem nothing when there is nothing to apply, so it is safe on every start.
+rem Firestore has no schema to migrate, so there is nothing to prepare here.
 rem
-rem Seeding is deliberately NOT offered here. It wipes every table, and a
-rem prompt that appears each time the app starts is a prompt somebody will
-rem eventually answer wrongly on a live database. Run `npm run seed` by hand.
-echo Applying any outstanding database migrations...
-call npx prisma migrate deploy
-if errorlevel 1 (
-  echo [ERROR] Could not reach the database.
-  echo         Check DATABASE_URL in .env and that PostgreSQL is running.
-  pause
-  exit /b 1
-)
+rem Seeding is deliberately NOT offered either. It wipes every collection, and
+rem a prompt that appears each time the app starts is a prompt somebody will
+rem eventually answer wrongly on live data. Run `npm run seed` by hand.
 
 rem A folder called .next is not enough - a valid build has BUILD_ID inside it.
 if not exist ".next\BUILD_ID" (

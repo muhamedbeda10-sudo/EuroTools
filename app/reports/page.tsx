@@ -137,8 +137,8 @@ export default async function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {outOfTolerance.map((o) => (
-                    <tr key={o.measurement.id}>
+                  {outOfTolerance.map((o, oi) => (
+                    <tr key={`${o.subject}-${o.measurement.featureId ?? "m"}-${oi}`}>
                       <td className="ltr text-xs font-semibold">{o.subject}</td>
                       <td className="text-xs">{stageDef(o.stage).ar}</td>
                       <td>

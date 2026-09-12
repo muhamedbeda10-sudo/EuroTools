@@ -1,5 +1,5 @@
-/** Create the first administrator, in Firebase Authentication and in the
- *  database, so a freshly deployed instance has someone who can sign in.
+/** Create the first administrator, in Firebase Authentication and in
+ *  Firestore, so a freshly deployed instance has someone who can sign in.
  *
  *  Everything after this account is created through the application. This
  *  script exists only because the very first account has nobody to create it.
@@ -10,19 +10,19 @@
  *      ADMIN_EMAIL=qa.manager@example.com \
  *      ADMIN_PASSWORD='…' \
  *      ADMIN_NAME='م. منى رشاد' \
+ *      FIREBASE_PROJECT_ID=your-project \
  *      npm run create-admin
  *
  *  Running it again for an address that already exists updates the name and
  *  role and reactivates the account; it never silently resets a password.
  */
 
-import { PrismaClient } from "@prisma/client";
-import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
+import { Timestamp } from "firebase-admin/firestore";
 
 import { ROLES, isRole } from "../lib/domain/roles";
-
-const prisma = new PrismaClient();
+import { adminAuth } from "../lib/server/firebase-admin";
+import { db } from "../lib/server/firestore";
+import { reserveUnique, userAuditEvents, users, type UserDoc } from "../lib/server/model";
 
 /** Read a value from the environment, falling back to --flag=value. */
 function arg(name: string): string | undefined {
@@ -49,12 +49,7 @@ async function main() {
   if (!displayName) fail("ADMIN_NAME is required — it is the name that signs records.");
   if (!isRole(role)) fail(`ADMIN_ROLE must be one of: ${ROLES.join(", ")}`);
 
-  if (getApps().length === 0)
-    initializeApp({
-      credential: applicationDefault(),
-      projectId: process.env.FIREBASE_PROJECT_ID ?? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    });
-  const auth = getAuth();
+  const auth = adminAuth();
 
   // Find the Firebase account or create it. An existing one is left alone
   // apart from its display name: this script must never be a way to take over
@@ -70,29 +65,53 @@ async function main() {
       fail("ADMIN_PASSWORD is required to create a new account (at least 8 characters).");
     if (password.length < 8) fail("ADMIN_PASSWORD must be at least 8 characters.");
 
-    const created = await auth.createUser({
-      email,
-      password,
-      displayName,
-      emailVerified: true,
-    });
+    const created = await auth.createUser({ email, password, displayName, emailVerified: true });
     uid = created.uid;
     console.log(`  Firebase: created ${email}`);
   }
 
-  const user = await prisma.user.upsert({
-    where: { firebaseUid: uid },
-    create: { firebaseUid: uid, email, displayName, role, active: true },
-    update: { email, displayName, role, active: true },
+  const ref = users().doc(uid);
+  await db().runTransaction(async (tx) => {
+    const existing = await tx.get(ref);
+    const claim = await reserveUnique(tx, "user.email", email, ref.path);
+    if (!claim.ok)
+      throw new Error(`the address ${email} is already reserved by ${claim.ownerPath}`);
+
+    if (existing.exists) {
+      tx.update(ref, { email, displayName, role, active: true, updatedAt: Timestamp.now() });
+    } else {
+      tx.create(ref, {
+        email,
+        displayName,
+        role,
+        employeeNo: null,
+        active: true,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        // Nobody created the first account; that is what makes it the first.
+        createdByUid: null,
+        createdByName: null,
+        signedInspections: 0,
+      } satisfies UserDoc);
+    }
+
+    tx.create(userAuditEvents().doc(), {
+      at: Timestamp.now(),
+      kind: existing.exists ? "ROLE_CHANGED" : "CREATED",
+      subjectUid: uid,
+      subjectName: displayName,
+      actorUid: uid,
+      actorName: `${displayName} (bootstrap)`,
+      fromValue: null,
+      toValue: role,
+    });
   });
 
-  console.log(`  Database: ${user.displayName} <${user.email}> is ${user.role}, active`);
+  console.log(`  Firestore: ${displayName} <${email}> is ${role}, active`);
   console.log("\n  Done. Sign in at /login.\n");
 }
 
-main()
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

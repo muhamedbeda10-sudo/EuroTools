@@ -9,11 +9,10 @@ next-env.d.ts
 .env*
 !.env.example
 
-# local database — runtime data, never in the repo
-prisma/dev.db
-prisma/dev.db-journal
-prisma/*.db
-prisma/*.db-*
+# Firebase project alias — written by `firebase use`, and different for
+# every developer and environment.
+.firebaserc
+.firebase/
 
 *.log
 .DS_Store

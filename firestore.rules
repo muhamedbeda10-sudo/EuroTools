@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// Every byte of quality data is read and written by the server, through the
+// Firebase Admin SDK, which bypasses these rules by design. Nothing in the
+// browser ever talks to Firestore directly: the pages call Server Actions, and
+// those actions check the caller's role against the User document before they
+// touch anything.
+//
+// So the correct rule here is to deny everything. It is not a formality — it is
+// the second lock. If a Firebase Web API key leaks (and it is public by
+// design, it is in the browser bundle), these rules are what stops somebody
+// reading the whole inspection history straight out of the database, or
+// signing an inspection without going through the permission checks in
+// `lib/server/`.
+//
+// If a future feature genuinely needs a client to read Firestore directly,
+// open exactly that path and nothing more — and remember that a client-side
+// rule cannot consult the User table the way `requirePermission` does.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

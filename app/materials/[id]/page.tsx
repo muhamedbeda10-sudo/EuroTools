@@ -15,7 +15,7 @@ const MEASURED_STAGES = STAGE_DEFS.filter((d) => d.subject === "PART");
 
 export default async function MaterialPage({ params }: PageProps<"/materials/[id]">) {
   const { id } = await params;
-  const material = await getMaterial(Number(id));
+  const material = await getMaterial(id);
   if (!material) notFound();
 
   return (

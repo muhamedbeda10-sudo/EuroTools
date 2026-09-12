@@ -3,9 +3,9 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { prisma } from "@/lib/db";
 import { SESSION_COOKIE, SESSION_MAX_AGE_MS } from "@/lib/server/auth";
 import { adminAuth } from "@/lib/server/firebase-admin";
+import { users, type UserDoc } from "@/lib/server/model";
 
 /** How stale an ID token may be before we refuse to mint a long session from
  *  it. Without this, a token captured hours ago could still be traded for a
@@ -43,10 +43,10 @@ export async function createSession(idToken: string): Promise<SessionResult> {
   if (Date.now() - authTimeMs > MAX_SIGN_IN_AGE_MS)
     return { ok: false, error: "انتهت مهلة تسجيل الدخول. برجاء المحاولة مرة أخرى." };
 
-  const user = await prisma.user.findUnique({ where: { firebaseUid: uid } });
-  if (!user)
+  const snapshot = await users().doc(uid).get();
+  if (!snapshot.exists)
     return { ok: false, error: "هذا الحساب غير مُسجَّل في النظام. راجع مدير النظام." };
-  if (!user.active)
+  if (!(snapshot.data() as UserDoc).active)
     return { ok: false, error: "هذا الحساب موقوف. راجع مدير النظام." };
 
   const sessionCookie = await auth.createSessionCookie(idToken, {

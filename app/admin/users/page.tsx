@@ -115,7 +115,7 @@ export default async function UsersPage() {
         ) : (
           <ul className="grid gap-2">
             {users.map((user) => {
-              const isMe = user.id === me.id;
+              const isMe = user.id === me.uid;
               return (
                 <li
                   key={user.id}

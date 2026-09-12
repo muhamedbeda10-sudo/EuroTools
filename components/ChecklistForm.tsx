@@ -29,7 +29,7 @@ export interface Signatory {
 }
 
 export interface FeatureRow {
-  id: number;
+  id: string;
   name: string;
   kind: string;
   nominal: number | null;
@@ -78,7 +78,7 @@ export function ChecklistForm({
   const [checks, setChecks] = useState<Record<string, boolean | null>>(() =>
     Object.fromEntries(def.items.map((i) => [i.key, null]))
   );
-  const [actuals, setActuals] = useState<Record<number, string>>({});
+  const [actuals, setActuals] = useState<Record<string, string>>({});
   const [hardness, setHardness] = useState("");
   const [ra, setRa] = useState("");
   const [override, setOverride] = useState("");
