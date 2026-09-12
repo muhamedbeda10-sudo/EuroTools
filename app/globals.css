@@ -94,6 +94,19 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), "Segoe UI", system-ui, sans-serif;
+  /* The viewport reaches under a phone's notch and rounded corners so the
+     header's own background does too; these keep the content clear of them. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  /* A tap should act, not select the label it happened to land on. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Installed on a phone, the page is the whole screen: nothing behind it should
+   rubber-band into view when a table is scrolled to its end. */
+html {
+  overscroll-behavior-y: none;
 }
 
 /* Part numbers, drawing numbers and measurements are isolated runs. The
@@ -115,6 +128,20 @@ body {
 /* These primitives live in the components layer on purpose: unlayered CSS
    outranks anything Tailwind emits, so an unlayered `.btn` would beat a
    `md:hidden` utility sitting next to it in the class list. */
+/* An implicit grid column is `auto`, and an `auto` track takes its *maximum*
+   from its content. One long part number inside a card therefore widens the
+   column — and the card, and the page — past the phone holding it, whatever
+   minimum the card itself declares: the item's min-width does not constrain
+   the track above it.
+   
+   Every grid here wants the other behaviour: take the width that is available,
+   and let whatever does not fit wrap or scroll inside. Grids that name their
+   own columns are untouched, because `grid-auto-columns` only governs the
+   implicit ones. */
+.grid {
+  grid-auto-columns: minmax(0, 1fr);
+}
+
 @layer components {
   /* ── primitives ─────────────────────────────────────────────── */
   .card {
@@ -122,6 +149,11 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-sm);
+    /* A grid or flex child is sized by its content unless told otherwise, so
+       a card holding a wide table grows past the phone rather than letting
+       the table scroll inside it. This is what makes `.scroll-x` work at all
+       on a narrow screen. */
+    min-width: 0;
   }
 
   .btn {
@@ -210,7 +242,43 @@ body {
   .tbl tbody tr:nth-child(even) { background: var(--zebra); }
   .tbl tbody tr:hover { background: var(--brand-light); }
 
-  .scroll-x { overflow-x: auto; }
+  /* Tables are the one thing on these pages that cannot be made narrow: a
+     measurement, its tolerance and its verdict only mean anything on the same
+     row. They scroll sideways instead, with momentum on a touch screen. */
+  .scroll-x {
+    overflow-x: auto;
+    min-width: 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  /* A control meant for a gloved thumb. 44px is the size a hand actually
+     hits; the browser's default is about two thirds of that. */
+  .btn,
+  .input,
+  .select,
+  .textarea {
+    min-height: 2.75rem;
+  }
+
+  @media (min-width: 768px) {
+    .btn,
+    .input,
+    .select,
+    .textarea {
+      min-height: 2.25rem;
+    }
+  }
+
+  /* Phone keyboards zoom the page when a field's text is under 16px, and then
+     leave it zoomed. Sizing up below the tablet breakpoint avoids it. */
+  @media (max-width: 767px) {
+    .input,
+    .select,
+    .textarea {
+      font-size: 1rem;
+    }
+  }
 
   /* theme toggle: only the icon for the *other* theme is shown */
   .theme-icon-dark { display: none; }

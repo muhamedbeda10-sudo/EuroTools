@@ -53,7 +53,7 @@ function ReportsView({
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Accepted" value={totals.passed} tone="ok" />
         <Stat label="Rework" value={totals.rework} tone="warn" />
         <Stat label="Further investigation" value={totals.investigation} tone="warn" />

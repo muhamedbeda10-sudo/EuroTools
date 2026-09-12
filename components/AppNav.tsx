@@ -37,15 +37,18 @@ export function AppNav() {
 
   return (
     <header className="no-print sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--surface)]">
-      <div className="flex items-center gap-3 px-4 py-2.5 md:px-6">
+      {/* Three columns with equal outer tracks, so the tabs sit on the centre
+          line of the window rather than in whatever space the mark and the
+          account controls happen to leave over. */}
+      <div className="grid grid-cols-[auto_1fr] items-center gap-3 px-3 py-2 lg:grid-cols-[1fr_auto_1fr] lg:px-6 lg:py-2.5">
         <BrandLink />
 
-        <nav className="hidden flex-1 items-center gap-1 md:flex">
+        <nav className="hidden items-center justify-center gap-0.5 lg:flex xl:gap-1">
           {links.map((l) => (
             <Link
               key={l.href}
               href={l.href}
-              className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+              className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold whitespace-nowrap transition xl:px-3 ${
                 isActive(l.href)
                   ? "bg-[var(--brand-light)] text-[var(--brand-dark)]"
                   : "text-[var(--muted)] hover:bg-[var(--surface-2)]"
@@ -56,50 +59,72 @@ export function AppNav() {
           ))}
         </nav>
 
-        <div className="ms-auto flex items-center gap-2 md:ms-0">
-          <div className="hidden text-end leading-tight sm:block">
+        <div className="flex items-center justify-end gap-2">
+          <div className="hidden text-end leading-tight xl:block">
             <div className="text-sm font-semibold">{user.displayName}</div>
             <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].en}</div>
           </div>
 
-          <button
-            type="button"
-            className="btn"
-            title="Sign out"
-            onClick={() => void signOut()}
-          >
-            Sign out
-          </button>
+          <div className="hidden lg:flex lg:items-center lg:gap-2">
+            <button type="button" className="btn" title="Sign out" onClick={() => void signOut()}>
+              Sign out
+            </button>
+            <ThemeToggle />
+          </div>
 
-          <ThemeToggle />
+          {/* One control on a phone. Everything else moves into the sheet
+              below, where a gloved thumb can actually hit it. */}
           <button
             type="button"
-            className="btn md:hidden"
+            className="btn min-h-11 px-3 lg:hidden"
             aria-expanded={open}
+            aria-controls="app-menu"
+            aria-label={open ? "Close menu" : "Open menu"}
             onClick={() => setOpen((v) => !v)}
           >
-            Menu
+            <span aria-hidden className="text-lg leading-none">
+              {open ? "✕" : "☰"}
+            </span>
           </button>
         </div>
       </div>
 
       {open && (
-        <nav className="grid gap-1 border-t border-[var(--border)] px-4 py-2 md:hidden">
-          {links.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              onClick={() => setOpen(false)}
-              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                isActive(l.href)
-                  ? "bg-[var(--brand-light)] text-[var(--brand-dark)]"
-                  : "text-[var(--muted)]"
-              }`}
-            >
-              {l.label}
-            </Link>
-          ))}
-        </nav>
+        <div id="app-menu" className="border-t border-[var(--border)] lg:hidden">
+          <nav className="grid gap-1 px-3 py-2">
+            {links.map((l) => (
+              <Link
+                key={l.href}
+                href={l.href}
+                onClick={() => setOpen(false)}
+                className={`flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold ${
+                  isActive(l.href)
+                    ? "bg-[var(--brand-light)] text-[var(--brand-dark)]"
+                    : "text-[var(--muted)]"
+                }`}
+              >
+                {l.label}
+              </Link>
+            ))}
+          </nav>
+
+          <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-3 py-2">
+            <div className="leading-tight">
+              <div className="text-sm font-semibold">{user.displayName}</div>
+              <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].en}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <button
+                type="button"
+                className="btn min-h-11"
+                onClick={() => void signOut()}
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </header>
   );

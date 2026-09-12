@@ -34,7 +34,7 @@ function DashboardView({
         subtitle="From goods-in to final release"
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat
           label="Lots awaiting inspection"
           value={lotCounts.pending}
@@ -76,7 +76,7 @@ function DashboardView({
             </Link>
           }
         >
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {queues.map((q) => {
               const def = stageDef(q.stage);
               return (

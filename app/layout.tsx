@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppNav } from "@/components/AppNav";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import { SessionProvider } from "@/lib/client/session";
 
 const inter = Inter({
@@ -12,8 +13,37 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "QC — EURO Tools & Automation",
+  applicationName: "QC",
+  manifest: "/manifest.webmanifest",
+  // Naming any icon here replaces the set Next.js builds from `app/icon.svg`,
+  // so the tab icon has to be named too — otherwise the browser finds no icon
+  // link at all and falls back to probing /favicon.ico, which does not exist.
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
+  // iOS has no install event; this is what makes Add to Home Screen open the
+  // application full screen instead of inside Safari's chrome.
+  appleWebApp: { capable: true, title: "QC", statusBarStyle: "black-translucent" },
   description:
     "From goods-in to final release: material analysis, post-roughing, heat treatment, post-grinding and final inspection with CMM.",
+};
+
+/** `viewportFit: "cover"` lets the page reach under a phone's rounded corners
+ *  and notch; the padding that keeps content clear of them is in `globals.css`.
+ *  Zoom is deliberately not capped — a shop-floor tablet gets read through
+ *  safety glasses. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f5f7f9" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d1218" },
+  ],
 };
 
 // Applied before paint so there is no light/dark flash on load.
@@ -39,6 +69,7 @@ export default function RootLayout({
           <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 md:px-6 md:py-6">
             {children}
           </main>
+          <InstallPrompt />
         </SessionProvider>
       </body>
     </html>

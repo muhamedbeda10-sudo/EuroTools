@@ -44,8 +44,13 @@ const consoleErrors = [];
 page.on("console", (m) => {
   if (m.type() === "error") consoleErrors.push(m.text());
 });
+const missing = [];
 page.on("response", (r) => {
   if (r.status() === 403) denials.push(r.url());
+  // A 404 reaches the console as a bare "failed to load resource" with no clue
+  // which one. Naming it here is the difference between a five-minute fix and
+  // an afternoon.
+  if (r.status() === 404) missing.push(r.url());
 });
 
 /** Firestore holds a connection open, so `networkidle` never settles; every
@@ -127,7 +132,90 @@ try {
       !e.includes("403") &&
       !e.toLowerCase().includes("permission")
   );
-  check("no unexpected console errors", unexpected.length === 0, unexpected.slice(0, 2).join(" | "));
+  check(
+    "no unexpected console errors",
+    unexpected.length === 0,
+    [...unexpected.slice(0, 2), ...missing.slice(0, 3)].join(" | ")
+  );
+
+  // ── on a phone ──
+  //
+  // A page that scrolls sideways on a tablet is not a cosmetic complaint: the
+  // verdict buttons end up off the edge, and the inspector reaches for them
+  // with a gloved hand and misses. This is measured rather than looked at,
+  // because it came back twice before it was measured.
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const small = await phone.newPage();
+  await small.goto(`${BASE}/login/`, { waitUntil: "domcontentloaded" });
+  await small.waitForSelector('input[name="email"]', { timeout: 20000 });
+  await small.fill('input[name="email"]', EMAIL);
+  await small.fill('input[name="password"]', PASSWORD);
+  await small.click('button[type="submit"]');
+  await small.waitForSelector("text=LOT-2026-001", { timeout: 25000 });
+
+  const overflowing = [];
+  for (const path of ["/", "/queue/", "/parts/", "/lots/", "/reports/", "/materials/", "/admin/users/"]) {
+    await small.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const over = await small.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    if (over > 0) overflowing.push(`${path} +${over}px`);
+  }
+  check("no page scrolls sideways on a phone", overflowing.length === 0, overflowing.join(", "));
+
+  // The tabs collapse into one control, and it is big enough to hit.
+  const menu = small.locator('button[aria-controls="app-menu"]');
+  const box = await menu.boundingBox();
+  check(
+    "the menu button is a touch target, not a link",
+    box !== null && box.height >= 40,
+    box ? `${Math.round(box.height)}px tall` : "missing"
+  );
+
+  await menu.click();
+  await small.waitForSelector("#app-menu", { timeout: 5000 });
+  check(
+    "every section is reachable from the phone menu",
+    (await small.locator("#app-menu a").count()) >= 6
+  );
+
+  // ── installable ──
+  //
+  // These are exactly what a browser looks for before it will offer to put the
+  // application on a home screen. Any one of them missing and the option never
+  // appears, silently.
+  const install = await small.evaluate(async () => {
+    const link = document.querySelector('link[rel="manifest"]');
+    if (!link) return null;
+    const m = await (await fetch(link.getAttribute("href"))).json();
+    const sizes = (m.icons ?? []).map((i) => i.sizes);
+    return {
+      standalone: m.display === "standalone",
+      named: Boolean(m.name && m.short_name),
+      icons: sizes.includes("192x192") && sizes.includes("512x512"),
+      maskable: (m.icons ?? []).some((i) => (i.purpose ?? "").includes("maskable")),
+      workers: (await navigator.serviceWorker.getRegistrations()).length,
+    };
+  });
+  check(
+    "the browser has what it needs to offer an install",
+    Boolean(
+      install &&
+        install.standalone &&
+        install.named &&
+        install.icons &&
+        install.maskable &&
+        install.workers > 0
+    ),
+    JSON.stringify(install)
+  );
+
+  await phone.close();
 } finally {
   await browser.close();
 }

@@ -180,7 +180,7 @@ function PartView({
         </Card>
 
         {/* ── inspection form ── */}
-        <div className="lg:col-span-2" id="inspect">
+        <div className="min-w-0 lg:col-span-2" id="inspect">
           {gate.ok && stage !== "DONE" ? (
             <Card
               title={`${stageDef(stage).order}. ${stageDef(stage).en}`}
