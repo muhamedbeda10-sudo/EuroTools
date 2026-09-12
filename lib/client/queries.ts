@@ -666,6 +666,39 @@ export async function recomputeAnalysisStatus(lotId: string, analysisId: string)
 
 // ───────────────────────── administration ─────────────────────────
 
+/** One row of the staff list, from the stored document.
+ *
+ *  Pulled out of `getUsers` and exported so it can be tested against the
+ *  sparsest document the system ever holds: the founding administrator's,
+ *  typed into the Firestore console by hand before there was an application
+ *  to create it. Everything the application writes is richer than that, so a
+ *  mapping that survives it survives the rest.
+ */
+export function toUserRow(id: string, data: UserDoc) {
+  return {
+    ...data,
+    id,
+    // Nullable, unlike every other timestamp in this file, because that
+    // founding document has no creation date — see «أول حساب» in the README.
+    // A staff list that will not open because of a missing date locks an
+    // administrator out of the only screen that can let anybody else in.
+    createdAt: toDate(data.createdAt),
+    updatedAt: toDate(data.updatedAt),
+    createdBy: data.createdByName ? { displayName: data.createdByName } : null,
+    _count: { inspections: data.signedInspections ?? 0 },
+  };
+}
+
+/** Active first, then by name. Firestore will not order on two fields without
+ *  a composite index, and the staff list is small enough that sorting it here
+ *  is cheaper than carrying an index for it. */
+export function byActiveThenName(
+  a: { active: boolean; displayName: string },
+  b: { active: boolean; displayName: string }
+) {
+  return Number(b.active) - Number(a.active) || a.displayName.localeCompare(b.displayName);
+}
+
 export async function getUsers() {
   const [userSnap, eventSnap] = await Promise.all([
     getDocs(query(users(), orderBy("displayName", "asc"))),
@@ -673,23 +706,8 @@ export async function getUsers() {
   ]);
 
   const userRows = userSnap.docs
-    .map((d) => {
-      const data = asDoc<UserDoc>(d);
-      return {
-        ...data,
-        id: d.id,
-        createdAt: toDateRequired(data.createdAt),
-        updatedAt: toDateRequired(data.updatedAt),
-        createdBy: data.createdByName ? { displayName: data.createdByName } : null,
-        _count: { inspections: data.signedInspections ?? 0 },
-      };
-    })
-    // Active first, then by name. Firestore will not order on two fields
-    // without a composite index, and the staff list is small enough that
-    // sorting it here is cheaper than carrying an index for it.
-    .sort(
-      (a, b) => Number(b.active) - Number(a.active) || a.displayName.localeCompare(b.displayName)
-    );
+    .map((d) => toUserRow(d.id, asDoc<UserDoc>(d)))
+    .sort(byActiveThenName);
 
   const events = eventSnap.docs.map((d) => {
     const data = asDoc<UserAuditEventDoc>(d);

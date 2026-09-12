@@ -284,6 +284,9 @@ Service accounts → Keys → احذف المفتاح، لا بتغيير كلم
    | `active` | boolean | `true` |
    | `signedInspections` | number | `0` |
 
+   هذه الخمسة تكفي. لا تحتاج `createdAt` ولا `updatedAt`: لا أحد أنشأ هذا
+   الحساب، وهذا ما يجعله الأول، وقائمة الموظفين تفتح عليه بدونهما.
+
 **أو بأمر واحد**، إن نزّلت مفتاح خدمة من Settings → Project settings →
 Service accounts → Generate new private key:
 
