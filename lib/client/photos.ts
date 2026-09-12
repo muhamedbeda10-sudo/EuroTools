@@ -79,7 +79,7 @@ function draw(source: CanvasImageSource, width: number, height: number): HTMLCan
   canvas.height = height;
 
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("هذا المتصفّح لا يدعم معالجة الصور.");
+  if (!context) throw new Error("This browser cannot process images.");
 
   // White rather than transparent: a JPEG has no alpha channel, and a
   // transparent corner would otherwise come out black.
@@ -100,23 +100,23 @@ function load(file: File): Promise<HTMLImageElement> {
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error("تعذّر قراءة الصورة."));
+      reject(new Error("That image could not be read."));
     };
     image.src = url;
   });
 }
 
-/** One camera file, ready to store. Throws in Arabic — the message is shown
- *  to whoever is holding the tablet. */
+/** One camera file, ready to store. What it throws is shown to whoever is
+ *  holding the tablet, so it says what to do rather than what went wrong. */
 export async function prepare(file: File): Promise<Prepared> {
-  if (!file.type.startsWith("image/")) throw new Error("الملف ليس صورة.");
+  if (!file.type.startsWith("image/")) throw new Error("That file is not an image.");
 
   const image = await load(file);
   const full = fitWithin(image.naturalWidth, image.naturalHeight, PHOTO_MAX_EDGE);
   const data = encodeWithinBudget(draw(image, full.width, full.height), PHOTO_MAX_BYTES);
 
   if (encodedBytes(data) > PHOTO_MAX_BYTES)
-    throw new Error("الصورة كبيرة جدًا حتى بعد الضغط. جرّب لقطة أقرب أو أقل تفصيلًا.");
+    throw new Error("Still too large after compression. Try a closer or less detailed shot.");
 
   const small = fitWithin(image.naturalWidth, image.naturalHeight, THUMB_MAX_EDGE);
   const thumb = draw(image, small.width, small.height).toDataURL("image/jpeg", 0.6);

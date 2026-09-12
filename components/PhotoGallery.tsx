@@ -41,7 +41,7 @@ export function PhotoGallery({ inspectionId }: { inspectionId: string }) {
 
   return (
     <div className="mt-3">
-      <p className="label">صور العيب</p>
+      <p className="label">Defect photographs</p>
 
       <div className="flex flex-wrap gap-2">
         {photos.map((photo) => (
@@ -55,7 +55,7 @@ export function PhotoGallery({ inspectionId }: { inspectionId: string }) {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={photo.thumb}
-              alt={`صورة عيب — ${photo.capturedByName}`}
+              alt={`Defect photograph by ${photo.capturedByName}`}
               className="h-20 w-20 object-cover"
               loading="lazy"
             />
@@ -67,7 +67,7 @@ export function PhotoGallery({ inspectionId }: { inspectionId: string }) {
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="صورة العيب"
+          aria-label="Defect photograph"
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-4"
           onClick={() => setOpen(null)}
         >
@@ -75,18 +75,18 @@ export function PhotoGallery({ inspectionId }: { inspectionId: string }) {
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={full.data}
-              alt={`صورة عيب — ${current.capturedByName}`}
+              alt={`Defect photograph by ${current.capturedByName}`}
               className="max-h-[80vh] max-w-full rounded-[var(--radius)] object-contain"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <p className="text-sm text-white">…جارٍ التحميل</p>
+            <p className="text-sm text-white">Loading…</p>
           )}
 
           <p className="text-center text-xs text-white/80">
             {current.capturedByName} · {fmtDateTime(current.capturedAt)}
             <br />
-            اضغط في أي مكان للإغلاق
+            Click anywhere to close
           </p>
         </div>
       )}

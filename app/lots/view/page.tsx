@@ -38,7 +38,7 @@ function LotLoader() {
 
   if (!user) return null;
   return (
-    <Async state={state} empty={<Empty>التشغيلة غير موجودة.</Empty>}>
+    <Async state={state} empty={<Empty>That lot does not exist.</Empty>}>
       {(lot) => <LotView lot={lot} user={user} refresh={state.refresh} />}
     </Async>
   );
@@ -60,56 +60,56 @@ function LotView({
   return (
     <>
       <PageHeader
-        title={`تشغيلة ${lot.lotNumber}`}
+        title={`Lot ${lot.lotNumber}`}
         subtitle={`${lot.material.partNumber}${lot.material.spec ? ` — ${lot.material.spec}` : ""}`}
         action={<StatusPill status={lot.status} />}
       />
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="بيانات الوارد">
-          <Kv k="رقم الجزء" v={<span className="ltr">{lot.material.partNumber}</span>} />
-          <Kv k="المواصفة" v={<span className="ltr">{lot.material.spec ?? "—"}</span>} />
-          <Kv k="المورد" v={lot.supplier?.name ?? "—"} />
-          <Kv k="أمر الشراء" v={<span className="ltr">{lot.poNumber ?? "—"}</span>} />
-          <Kv k="رقم الصهرة" v={<span className="ltr">{lot.heatNumber ?? "—"}</span>} />
+        <Card title="Delivery">
+          <Kv k="Part number" v={<span className="ltr">{lot.material.partNumber}</span>} />
+          <Kv k="Specification" v={<span className="ltr">{lot.material.spec ?? "—"}</span>} />
+          <Kv k="Supplier" v={lot.supplier?.name ?? "—"} />
+          <Kv k="Purchase order" v={<span className="ltr">{lot.poNumber ?? "—"}</span>} />
+          <Kv k="Heat number" v={<span className="ltr">{lot.heatNumber ?? "—"}</span>} />
           <Kv
-            k="الكمية"
+            k="Quantity"
             v={
               <span className="num">
                 {fmtNum(lot.receivedQty)} {lot.unit}
               </span>
             }
           />
-          <Kv k="تاريخ الاستلام" v={<span className="num">{fmtDate(lot.receivedAt)}</span>} />
-          {lot.notes && <Kv k="ملاحظات" v={lot.notes} />}
+          <Kv k="Date received" v={<span className="num">{fmtDate(lot.receivedAt)}</span>} />
+          {lot.notes && <Kv k="Notes" v={lot.notes} />}
         </Card>
 
         <Card
-          title="الشهادات المطلوبة"
+          title="Required certificates"
           subtitle={
             lot.missingCerts.length === 0
-              ? "كل الشهادات المطلوبة مستلمة"
-              : `ناقص: ${lot.missingCerts.join("، ")}`
+              ? "Every required certificate has been received"
+              : `Missing: ${lot.missingCerts.join(", ")}`
           }
           className="lg:col-span-2"
         >
           {lot.certificates.length === 0 ? (
-            <Empty>لا توجد شهادات مسجلة على هذه التشغيلة.</Empty>
+            <Empty>No certificates recorded against this lot.</Empty>
           ) : (
             <ul className="grid gap-2">
               {lot.certificates.map((c) => (
                 <li key={c.id} className="rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5">
                   <InlineForm action={setCertificate(user)}
-              onSuccess={refresh} submitLabel="حفظ">
+              onSuccess={refresh} submitLabel="Save">
                     <input type="hidden" name="id" value={c.id} />
                     <div className="min-w-[10rem] flex-1">
                       <div className="text-sm font-bold">{c.type}</div>
                       <div className="mt-1 flex gap-3 text-xs">
                         <label className="flex items-center gap-1">
-                          <input type="checkbox" name="received" defaultChecked={c.received} /> مستلمة
+                          <input type="checkbox" name="received" defaultChecked={c.received} /> Received
                         </label>
                         <label className="flex items-center gap-1">
-                          <input type="checkbox" name="verified" defaultChecked={c.verified} /> مُراجَعة
+                          <input type="checkbox" name="verified" defaultChecked={c.verified} /> Verified
                         </label>
                       </div>
                     </div>
@@ -117,13 +117,13 @@ function LotView({
                       className="input ltr w-40"
                       name="number"
                       defaultValue={c.number ?? ""}
-                      placeholder="رقم الشهادة"
+                      placeholder="Certificate number"
                     />
                     <input
                       className="input w-40"
                       name="notes"
                       defaultValue={c.notes ?? ""}
-                      placeholder="ملاحظة"
+                      placeholder="Note"
                     />
                   </InlineForm>
                 </li>
@@ -133,17 +133,17 @@ function LotView({
 
           <details className="mt-3">
             <summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">
-              إضافة شهادة غير مدرجة
+              Add a certificate that is not listed
             </summary>
             <div className="mt-2 max-w-md">
               <ActionForm action={addCertificate(user)}
-              onSuccess={refresh} submitLabel="إضافة" submitClassName="">
+              onSuccess={refresh} submitLabel="Add" submitClassName="">
                 <input type="hidden" name="lotId" value={lot.id} />
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Field label="نوع الشهادة">
+                  <Field label="Certificate type">
                     <input className="input" name="type" required placeholder="Mill Test Certificate" />
                   </Field>
-                  <Field label="رقم الشهادة">
+                  <Field label="Certificate number">
                     <input className="input ltr" name="number" />
                   </Field>
                 </div>
@@ -156,12 +156,12 @@ function LotView({
       {/* ── 1 · receiving checklist ── */}
       <Card
         className="mt-4"
-        title={`${receivingDef.order}. ${receivingDef.ar}`}
+        title={`${receivingDef.order}. ${receivingDef.en}`}
         subtitle={receivingDef.en}
         action={
           lastReceiving ? (
             <span className="text-xs text-[var(--muted)]">
-              آخر فحص: {lastReceiving.inspector} — {fmtDateTime(lastReceiving.inspectedAt)}
+              Last inspected by {lastReceiving.inspector} — {fmtDateTime(lastReceiving.inspectedAt)}
             </span>
           ) : undefined
         }
@@ -181,8 +181,8 @@ function LotView({
       {/* ── issuing parts ── */}
       <Card
         className="mt-4"
-        title="إصدار الأجزاء إلى خط الإنتاج"
-        subtitle="لا تُصدر الأجزاء إلا بعد قبول الاستلام واعتماد التحليل"
+        title="Raise parts to production"
+        subtitle="Parts are only raised once goods-in is accepted and the analysis is approved"
       >
         {!gate.ok ? (
           <p className="rounded-lg bg-[var(--warn-bg)] px-3 py-2 text-sm font-semibold text-[var(--warn-fg)]">
@@ -191,10 +191,10 @@ function LotView({
         ) : (
           <div className="max-w-xl">
             <ActionForm action={raiseParts(user)}
-              onSuccess={refresh} submitLabel="إصدار الأجزاء">
+              onSuccess={refresh} submitLabel="Raise parts">
               <input type="hidden" name="lotId" value={lot.id} />
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="بادئة الرقم المسلسل" hint="سيُضاف رقم تسلسلي من 4 خانات">
+                <Field label="Serial number prefix" hint="A four-digit sequence is appended">
                   <input
                     className="input ltr"
                     name="prefix"
@@ -202,7 +202,7 @@ function LotView({
                     defaultValue={lot.lotNumber}
                   />
                 </Field>
-                <Field label="عدد الأجزاء">
+                <Field label="How many parts">
                   <input
                     className="input num"
                     name="count"
@@ -221,7 +221,7 @@ function LotView({
         {lot.parts.length > 0 && (
           <div className="mt-4">
             <h3 className="mb-2 text-sm font-bold">
-              الأجزاء الصادرة ({lot.parts.length})
+              Parts raised ({lot.parts.length})
             </h3>
             <div className="flex flex-wrap gap-1.5">
               {lot.parts.map((p) => (
@@ -240,16 +240,16 @@ function LotView({
 
       {/* ── history ── */}
       {lot.inspections.length > 0 && (
-        <Card className="mt-4" title="سجل فحوص هذه التشغيلة">
+        <Card className="mt-4" title="Inspections against this lot">
           <div className="scroll-x">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>المرحلة</th>
-                  <th>الفاحص</th>
-                  <th>الحالة</th>
-                  <th>بنود غير مطابقة</th>
-                  <th>التاريخ</th>
+                  <th>Stage</th>
+                  <th>Inspector</th>
+                  <th>Verdict</th>
+                  <th>Failed items</th>
+                  <th>Date</th>
                 </tr>
               </thead>
               <tbody>
@@ -257,7 +257,7 @@ function LotView({
                   const failed = i.checks.filter((c) => c.ok === false);
                   return (
                     <tr key={i.id}>
-                      <td>{stageDef(i.stage).ar}</td>
+                      <td>{stageDef(i.stage).en}</td>
                       <td>{i.inspector}</td>
                       <td>
                         <StatusPill status={i.status} />
@@ -269,10 +269,10 @@ function LotView({
                           failed
                             .map(
                               (c) =>
-                                stageDef(i.stage).items.find((it) => it.key === c.key)?.ar ??
+                                stageDef(i.stage).items.find((it) => it.key === c.key)?.en ??
                                 c.key
                             )
-                            .join("، ")
+                            .join(", ")
                         )}
                       </td>
                       <td className="num text-xs">{fmtDateTime(i.inspectedAt)}</td>

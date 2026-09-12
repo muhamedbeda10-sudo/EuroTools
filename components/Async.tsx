@@ -21,7 +21,7 @@ export function Async<T>({
   if (state.loading)
     return (
       <div className="grid place-items-center py-16 text-sm text-[var(--muted)]">
-        جارٍ التحميل…
+        Loading…
       </div>
     );
 
@@ -35,7 +35,7 @@ export function Async<T>({
       </p>
     );
 
-  if (state.data == null) return <>{empty ?? <Empty>لا توجد بيانات.</Empty>}</>;
+  if (state.data == null) return <>{empty ?? <Empty>Nothing to show.</Empty>}</>;
 
   return <>{children(state.data)}</>;
 }

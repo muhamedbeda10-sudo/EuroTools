@@ -73,7 +73,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setState({
             user: null,
             loading: false,
-            rejection: "هذا الحساب غير مُسجَّل في النظام. راجع مدير النظام.",
+            rejection: "This account is not registered in the system. Speak to your system administrator.",
           });
           return;
         }
@@ -84,7 +84,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setState({
             user: null,
             loading: false,
-            rejection: "هذا الحساب موقوف. راجع مدير النظام.",
+            rejection: "This account is deactivated. Speak to your system administrator.",
           });
           return;
         }
@@ -96,7 +96,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setState({
             user: null,
             loading: false,
-            rejection: "صلاحية هذا الحساب غير معروفة. راجع مدير النظام.",
+            rejection: "This account has an unrecognised role. Speak to your system administrator.",
           });
           return;
         }

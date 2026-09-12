@@ -149,7 +149,7 @@ export async function buildInspectionCsv(): Promise<string> {
           ...base,
           "HARDNESS",
           "Hardness",
-          "الصلادة",
+          "Hardness",
           "",
           `${insp.hardnessMin ?? ""} - ${insp.hardnessMax ?? ""}`,
           insp.hardnessValue,

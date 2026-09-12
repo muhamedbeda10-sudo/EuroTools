@@ -63,7 +63,7 @@ export function ActionForm({
 
       <div className="mt-3">
         <button type="submit" className={`btn ${submitClassName}`} disabled={pending}>
-          {pending ? "جارٍ الحفظ…" : submitLabel}
+          {pending ? "Saving…" : submitLabel}
         </button>
       </div>
     </form>

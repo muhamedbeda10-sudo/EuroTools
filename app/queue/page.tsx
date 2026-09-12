@@ -22,8 +22,8 @@ function QueueView({ queues }: { queues: Awaited<ReturnType<typeof getQueues>> }
   return (
     <>
       <PageHeader
-        title="طوابير الفحص"
-        subtitle="الأجزاء الواقفة عند كل مرحلة، بالترتيب الذي تمشي به"
+        title="Inspection Queue"
+        subtitle="Parts waiting at each stage, in the order a traveller walks them"
       />
 
       <div className="grid gap-4">
@@ -32,30 +32,30 @@ function QueueView({ queues }: { queues: Awaited<ReturnType<typeof getQueues>> }
             key={stage}
             title={
               <span id={stage}>
-                {def.order}. {def.ar}
+                {def.order}. {def.en}
               </span>
             }
             subtitle={
               def.precedingOperation
-                ? `${def.en} — بعد ${def.precedingOperation.ar}`
+                ? `${def.en} — after ${def.precedingOperation.en}`
                 : def.en
             }
             action={
-              <span className="pill pill-neutral">{parts.length} جزء</span>
+              <span className="pill pill-neutral">{parts.length} parts</span>
             }
           >
             {parts.length === 0 ? (
-              <Empty>لا توجد أجزاء في هذا الطابور.</Empty>
+              <Empty>Nothing waiting at this stage.</Empty>
             ) : (
               <div className="scroll-x">
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>الرقم المسلسل</th>
-                      <th>رقم الجزء</th>
-                      <th>التشغيلة</th>
-                      <th>الحالة</th>
-                      <th>تاريخ الإصدار</th>
+                      <th>Serial number</th>
+                      <th>Part number</th>
+                      <th>Lot</th>
+                      <th>Status</th>
+                      <th>Raised</th>
                       <th />
                     </tr>
                   </thead>
@@ -78,7 +78,7 @@ function QueueView({ queues }: { queues: Awaited<ReturnType<typeof getQueues>> }
                         <td className="num text-xs">{fmtDate(p.createdAt)}</td>
                         <td>
                           <Link href={`/parts/view?id=${p.id}#inspect`} className="btn">
-                            فحص
+                            Inspect
                           </Link>
                         </td>
                       </tr>

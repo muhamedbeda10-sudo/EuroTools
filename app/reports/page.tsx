@@ -43,8 +43,8 @@ function ReportsView({
   return (
     <>
       <PageHeader
-        title="تقارير الجودة"
-        subtitle={`${total} عملية فحص مسجلة`}
+        title="Quality Reports"
+        subtitle={`${total} inspections recorded`}
         action={
           <div className="flex gap-2">
             <ExportCsvButton />
@@ -54,25 +54,25 @@ function ReportsView({
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="فحوص مقبولة" value={totals.passed} tone="ok" />
-        <Stat label="إعادة تشغيل" value={totals.rework} tone="warn" />
-        <Stat label="فحص إضافي" value={totals.investigation} tone="warn" />
-        <Stat label="مرفوض" value={totals.rejected} tone="bad" />
+        <Stat label="Accepted" value={totals.passed} tone="ok" />
+        <Stat label="Rework" value={totals.rework} tone="warn" />
+        <Stat label="Further investigation" value={totals.investigation} tone="warn" />
+        <Stat label="Rejected" value={totals.rejected} tone="bad" />
       </div>
 
-      <Card className="mt-4" title="أداء كل مرحلة">
+      <Card className="mt-4" title="Performance by stage">
         <div className="scroll-x">
           <table className="tbl">
             <thead>
               <tr>
-                <th>المرحلة</th>
-                <th>إجمالي الفحوص</th>
-                <th>مقبول</th>
-                <th>إعادة تشغيل</th>
-                <th>فحص إضافي</th>
-                <th>مرفوض</th>
-                <th>قيد الانتظار</th>
-                <th>نسبة القبول</th>
+                <th>Stage</th>
+                <th>Inspections</th>
+                <th>Accepted</th>
+                <th>Rework</th>
+                <th>Further investigation</th>
+                <th>Rejected</th>
+                <th>Pending</th>
+                <th>Pass rate</th>
               </tr>
             </thead>
             <tbody>
@@ -80,7 +80,7 @@ function ReportsView({
                 <tr key={s.def.stage}>
                   <td>
                     <span className="font-semibold">
-                      {s.def.order}. {s.def.ar}
+                      {s.def.order}. {s.def.en}
                     </span>
                     <div className="ltr text-xs text-[var(--muted)]">{s.def.en}</div>
                   </td>
@@ -102,19 +102,19 @@ function ReportsView({
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card
-          title="أكثر البنود تكرارًا في عدم المطابقة"
-          subtitle="من واقع إجابات الكشوف — لا من الحالة النهائية فقط"
+          title="Most frequent non-conformances"
+          subtitle="Counted from the checklist answers themselves, not only from the final verdict"
         >
           {topFailures.length === 0 ? (
-            <Empty>لا توجد بنود غير مطابقة مسجلة.</Empty>
+            <Empty>No failed checklist items recorded.</Empty>
           ) : (
             <div className="scroll-x">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>المرحلة</th>
-                    <th>البند</th>
-                    <th>التكرار</th>
+                    <th>Stage</th>
+                    <th>Item</th>
+                    <th>Count</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -123,8 +123,8 @@ function ReportsView({
                     const item = def.items.find((i) => i.key === f.key);
                     return (
                       <tr key={`${f.stage}-${f.key}`}>
-                        <td className="text-xs">{def.ar}</td>
-                        <td>{item?.ar ?? f.key}</td>
+                        <td className="text-xs">{def.en}</td>
+                        <td>{item?.en ?? f.key}</td>
                         <td className="num font-bold">{f.count}</td>
                       </tr>
                     );
@@ -135,27 +135,27 @@ function ReportsView({
           )}
         </Card>
 
-        <Card title="قياسات خارج السماحية" subtitle="أحدث 50 قياسًا غير مطابق">
+        <Card title="Measurements outside tolerance" subtitle="The 50 most recent">
           {outOfTolerance.length === 0 ? (
-            <Empty>لا توجد قياسات خارج السماحية.</Empty>
+            <Empty>No measurement is outside tolerance.</Empty>
           ) : (
             <div className="scroll-x">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>الجزء</th>
-                    <th>المرحلة</th>
-                    <th>الخاصية</th>
-                    <th>المطلوب</th>
-                    <th>المقاس</th>
-                    <th>الانحراف</th>
+                    <th>Part</th>
+                    <th>Stage</th>
+                    <th>Feature</th>
+                    <th>Required</th>
+                    <th>Measured</th>
+                    <th>Deviation</th>
                   </tr>
                 </thead>
                 <tbody>
                   {outOfTolerance.map((o, oi) => (
                     <tr key={`${o.subject}-${o.measurement.featureId ?? "m"}-${oi}`}>
                       <td className="ltr text-xs font-semibold">{o.subject}</td>
-                      <td className="text-xs">{stageDef(o.stage).ar}</td>
+                      <td className="text-xs">{stageDef(o.stage).en}</td>
                       <td>
                         {o.measurement.name}
                         {o.measurement.critical && (
@@ -186,22 +186,22 @@ function ReportsView({
 
       <Card
         className="mt-4 page-break"
-        title="الإفراج النهائي عن الجودة"
+        title="Final quality release"
         subtitle="Final Quality Release"
-        action={<span className="pill pill-ok">{released.length} جزء</span>}
+        action={<span className="pill pill-ok">{released.length} parts</span>}
       >
         {released.length === 0 ? (
-          <Empty>لم يُفرج عن أي جزء بعد.</Empty>
+          <Empty>No part has been released yet.</Empty>
         ) : (
           <div className="scroll-x">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>الرقم المسلسل</th>
-                  <th>رقم الجزء</th>
-                  <th>التشغيلة</th>
-                  <th>تاريخ الإفراج</th>
-                  <th>الحالة</th>
+                  <th>Serial number</th>
+                  <th>Part number</th>
+                  <th>Lot</th>
+                  <th>Released</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>

@@ -30,36 +30,36 @@ function DashboardView({
   return (
     <>
       <PageHeader
-        title="لوحة متابعة الجودة"
-        subtitle="من استلام الخامة حتى الإفراج النهائي"
+        title="Quality Dashboard"
+        subtitle="From goods-in to final release"
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
-          label="تشغيلات خامات بانتظار الفحص"
+          label="Lots awaiting inspection"
           value={lotCounts.pending}
-          hint={`${lotCounts.total} تشغيلة مسجلة`}
+          hint={`${lotCounts.total} lots recorded`}
           tone={lotCounts.pending > 0 ? "warn" : "ok"}
           href="/lots"
         />
         <Stat
-          label="أجزاء قيد التشغيل"
+          label="Parts in process"
           value={partCounts.inProcess}
-          hint={`${partCounts.rework} إعادة تشغيل · ${partCounts.hold} موقوف`}
+          hint={`${partCounts.rework} in rework · ${partCounts.hold} on hold`}
           tone="info"
           href="/parts"
         />
         <Stat
-          label="تم الإفراج عنه"
+          label="Released"
           value={partCounts.released}
-          hint={`${partCounts.rejected} مرفوض`}
+          hint={`${partCounts.rejected} rejected`}
           tone="ok"
           href="/parts?status=RELEASED"
         />
         <Stat
-          label="نسبة القبول النهائي"
+          label="First-pass yield"
           value={firstPassYield == null ? "—" : pct(firstPassYield, 1)}
-          hint="مُفرج عنه ÷ (مُفرج عنه + مرفوض)"
+          hint="released ÷ (released + rejected)"
           tone={firstPassYield != null && firstPassYield < 0.9 ? "warn" : "ok"}
           href="/reports"
         />
@@ -67,12 +67,12 @@ function DashboardView({
 
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <Card
-          title="طوابير الفحص"
-          subtitle="الأجزاء الواقفة عند كل مرحلة"
+          title="Inspection queues"
+          subtitle="Parts waiting at each stage"
           className="lg:col-span-2"
           action={
             <Link href="/queue" className="btn">
-              فتح الطوابير
+              Open the queues
             </Link>
           }
         >
@@ -86,12 +86,12 @@ function DashboardView({
                   className="rounded-[var(--radius-sm)] border border-[var(--border)] p-3 transition hover:border-[var(--brand)]"
                 >
                   <div className="text-xs font-semibold text-[var(--muted)]">
-                    {def.order}. {def.ar}
+                    {def.order}. {def.en}
                   </div>
                   <div className="num mt-1 text-2xl font-bold">{q.waiting}</div>
                   {q.onHold > 0 && (
                     <div className="mt-1 text-xs font-semibold text-[var(--warn-fg)]">
-                      {q.onHold} موقوف
+                      {q.onHold} on hold
                     </div>
                   )}
                 </Link>
@@ -100,9 +100,9 @@ function DashboardView({
           </div>
         </Card>
 
-        <Card title="خامات تحتاج متابعة" subtitle="شهادات ناقصة أو تحليل غير مكتمل">
+        <Card title="Materials needing attention" subtitle="Missing certificates or an unfinished analysis">
           {blocked.length === 0 ? (
-            <Empty>لا توجد ملاحظات على الخامات.</Empty>
+            <Empty>Nothing outstanding on any material.</Empty>
           ) : (
             <ul className="grid gap-2">
               {blocked.slice(0, 8).map((b) => (
@@ -117,10 +117,10 @@ function DashboardView({
                     </div>
                     <ul className="mt-1 grid gap-0.5 text-xs text-[var(--muted)]">
                       {b.missingCerts.length > 0 && (
-                        <li>شهادات ناقصة: <span className="ltr">{b.missingCerts.join("، ")}</span></li>
+                        <li>Missing certificates: <span className="ltr">{b.missingCerts.join(", ")}</span></li>
                       )}
-                      {b.analysisRejected && <li>تحليل مرفوض</li>}
-                      {b.analysisPending && !b.analysisRejected && <li>تحليل قيد التنفيذ</li>}
+                      {b.analysisRejected && <li>Analysis rejected</li>}
+                      {b.analysisPending && !b.analysisRejected && <li>Analysis in progress</li>}
                     </ul>
                   </Link>
                 </li>
@@ -130,25 +130,25 @@ function DashboardView({
         </Card>
       </div>
 
-      <Card className="mt-4" title="آخر عمليات الفحص">
+      <Card className="mt-4" title="Latest inspections">
         {inspections.length === 0 ? (
-          <Empty>لم يُسجَّل أي فحص بعد.</Empty>
+          <Empty>No inspection has been recorded yet.</Empty>
         ) : (
           <div className="scroll-x">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>المرحلة</th>
-                  <th>الجزء / التشغيلة</th>
-                  <th>الفاحص</th>
-                  <th>الحالة</th>
-                  <th>التاريخ</th>
+                  <th>Stage</th>
+                  <th>Part / Lot</th>
+                  <th>Inspector</th>
+                  <th>Verdict</th>
+                  <th>Date</th>
                 </tr>
               </thead>
               <tbody>
                 {inspections.map((i) => (
                   <tr key={i.id}>
-                    <td>{stageDef(i.stage).ar}</td>
+                    <td>{stageDef(i.stage).en}</td>
                     <td className="ltr font-semibold">
                       {i.part?.serialNumber ?? i.lot?.lotNumber ?? "—"}
                     </td>

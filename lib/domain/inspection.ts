@@ -244,13 +244,13 @@ export function canInspect(
   part: { currentStage: string; status: string },
   stage: Stage
 ): { ok: boolean; reason?: string } {
-  if (part.status === "REJECTED") return { ok: false, reason: "الجزء مرفوض ولا يمكن استكمال فحصه." };
-  if (part.status === "RELEASED") return { ok: false, reason: "الجزء تم الإفراج عنه بالفعل." };
-  if (part.currentStage === "DONE") return { ok: false, reason: "انتهت مراحل هذا الجزء." };
+  if (part.status === "REJECTED") return { ok: false, reason: "This part was rejected; its inspection cannot continue." };
+  if (part.status === "RELEASED") return { ok: false, reason: "This part has already been released." };
+  if (part.currentStage === "DONE") return { ok: false, reason: "This part has finished every stage." };
   if (part.currentStage !== stage)
     return {
       ok: false,
-      reason: `الجزء في مرحلة ${stageDef(part.currentStage).ar} ولا يمكن فحصه في ${stageDef(stage).ar}.`,
+      reason: `This part is at ${stageDef(part.currentStage).en} and cannot be inspected at ${stageDef(stage).en}.`,
     };
   return { ok: true };
 }
@@ -262,12 +262,12 @@ export function canRaiseParts(lot: {
   analyses?: { status: string }[];
 }): { ok: boolean; reason?: string } {
   if (lot.status !== "ACCEPTED")
-    return { ok: false, reason: "لم يتم قبول الخامة في الاستلام بعد." };
+    return { ok: false, reason: "The material has not been accepted at goods-in yet." };
   const analyses = lot.analyses ?? [];
   if (analyses.some((a) => a.status === "REJECTED"))
-    return { ok: false, reason: "يوجد تحليل مرفوض على هذه الخامة." };
+    return { ok: false, reason: "This material has a rejected analysis against it." };
   if (analyses.length > 0 && analyses.every((a) => a.status === "PENDING"))
-    return { ok: false, reason: "تحليل الخامة ما زال قيد التنفيذ." };
+    return { ok: false, reason: "The material analysis is still in progress." };
   return { ok: true };
 }
 

@@ -1,10 +1,10 @@
-# Eurotools — فحص الجودة / Quality Inspection
+# QC — EURO Tools & Automation
 
-تطبيق تتبّع الجودة من **استلام الخامة حتى الإفراج النهائي**، بواجهة عربية (RTL)
-وبيانات إنجليزية.
+تطبيق تتبّع الجودة من **استلام الخامة حتى الإفراج النهائي**. الواجهة إنجليزية،
+وهذا الملف بالعربية لأنه موجَّه لمن يشغّل النظام ويصيانه.
 
 A quality-inspection app covering the full route from raw-material receiving
-to final quality release. Arabic RTL UI, English data values.
+to final quality release.
 
 ## المسار (Process flow)
 

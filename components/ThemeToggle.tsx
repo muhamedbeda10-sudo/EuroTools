@@ -16,7 +16,7 @@ export function ThemeToggle() {
   }
 
   return (
-    <button type="button" className="btn" onClick={toggle} aria-label="تبديل السمة">
+    <button type="button" className="btn" onClick={toggle} aria-label="Toggle theme">
       <span className="theme-icon-light" aria-hidden>
         ☾
       </span>

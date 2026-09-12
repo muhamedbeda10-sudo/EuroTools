@@ -17,16 +17,16 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 const EXTRA_LABELS: Record<string, string> = {
-  IN_PROCESS: "قيد التشغيل",
-  HOLD: "موقوف",
-  DONE: "منتهي",
-  PASS: "مطابق",
-  FAIL: "غير مطابق",
+  IN_PROCESS: "In process",
+  HOLD: "On hold",
+  DONE: "Complete",
+  PASS: "Pass",
+  FAIL: "Fail",
 };
 
 export function StatusPill({ status }: { status: string }) {
   const label =
-    STATUS_LABELS[status as Status]?.ar ?? EXTRA_LABELS[status] ?? status;
+    STATUS_LABELS[status as Status]?.en ?? EXTRA_LABELS[status] ?? status;
   return <span className={`pill ${STATUS_TONE[status] ?? "pill-neutral"}`}>{label}</span>;
 }
 

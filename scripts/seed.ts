@@ -118,11 +118,11 @@ async function main() {
   // data, not a set of accounts anyone can sign in with. Create the real first
   // account with `npm run create-admin`.
   const STAFF = [
-    { displayName: "م. هالة فؤاد", email: "hala@example.invalid", role: "INSPECTOR" },
-    { displayName: "م. كريم عادل", email: "karim@example.invalid", role: "INSPECTOR" },
-    { displayName: "م. أحمد سالم", email: "ahmed@example.invalid", role: "INSPECTOR" },
-    { displayName: "م. طارق سليم", email: "tarek@example.invalid", role: "SUPERVISOR" },
-    { displayName: "م. منى رشاد", email: "mona@example.invalid", role: "QUALITY_MANAGER" },
+    { displayName: "Hala Fouad", email: "hala@example.invalid", role: "INSPECTOR" },
+    { displayName: "Karim Adel", email: "karim@example.invalid", role: "INSPECTOR" },
+    { displayName: "Ahmed Salem", email: "ahmed@example.invalid", role: "INSPECTOR" },
+    { displayName: "Tarek Selim", email: "tarek@example.invalid", role: "SUPERVISOR" },
+    { displayName: "Mona Rashad", email: "mona@example.invalid", role: "QUALITY_MANAGER" },
   ] as const;
 
   const staffUid = new Map<string, string>();
@@ -190,14 +190,14 @@ async function main() {
   });
 
   const punchFeatures: FeatureEntry[] = [
-    feature({ stage: "POST_ROUGHING", name: "القطر الخارجي (rough)", nominal: 50.6, tolMinus: 0.2, tolPlus: 0.2, sortOrder: 1 }),
-    feature({ stage: "POST_ROUGHING", name: "الطول الكلي (rough)", nominal: 120.5, tolMinus: 0.3, tolPlus: 0.3, sortOrder: 2 }),
-    feature({ stage: "POST_GRINDING", name: "القطر الخارجي", nominal: 50.02, tolMinus: 0.01, tolPlus: 0.01, critical: true, sortOrder: 1 }),
-    feature({ stage: "POST_GRINDING", name: "الطول الكلي", nominal: 120, tolMinus: 0.05, tolPlus: 0.05, sortOrder: 2 }),
-    feature({ stage: "FINAL", name: "القطر الخارجي النهائي", nominal: 50, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
-    feature({ stage: "FINAL", name: "الطول الكلي النهائي", nominal: 120, tolMinus: 0.02, tolPlus: 0.02, sortOrder: 2 }),
-    feature({ stage: "FINAL", name: "الاستدارة (Runout A-B)", kind: "GDT", gdtSymbol: "⌭", gdtLimit: 0.02, critical: true, sortOrder: 3 }),
-    feature({ stage: "FINAL", name: "التعامد (Perpendicularity)", kind: "GDT", gdtSymbol: "⊥", gdtLimit: 0.03, sortOrder: 4 }),
+    feature({ stage: "POST_ROUGHING", name: "Outside diameter (rough)", nominal: 50.6, tolMinus: 0.2, tolPlus: 0.2, sortOrder: 1 }),
+    feature({ stage: "POST_ROUGHING", name: "Overall length (rough)", nominal: 120.5, tolMinus: 0.3, tolPlus: 0.3, sortOrder: 2 }),
+    feature({ stage: "POST_GRINDING", name: "Outside diameter", nominal: 50.02, tolMinus: 0.01, tolPlus: 0.01, critical: true, sortOrder: 1 }),
+    feature({ stage: "POST_GRINDING", name: "Overall length", nominal: 120, tolMinus: 0.05, tolPlus: 0.05, sortOrder: 2 }),
+    feature({ stage: "FINAL", name: "Outside diameter (final)", nominal: 50, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
+    feature({ stage: "FINAL", name: "Overall length (final)", nominal: 120, tolMinus: 0.02, tolPlus: 0.02, sortOrder: 2 }),
+    feature({ stage: "FINAL", name: "Runout A-B", kind: "GDT", gdtSymbol: "⌭", gdtLimit: 0.02, critical: true, sortOrder: 3 }),
+    feature({ stage: "FINAL", name: "Perpendicularity", kind: "GDT", gdtSymbol: "⊥", gdtLimit: 0.03, sortOrder: 4 }),
   ];
 
   const punchId = newId();
@@ -245,10 +245,10 @@ async function main() {
     ...shaft,
     createdAt: daysAgo(60),
     features: [
-      feature({ stage: "POST_ROUGHING", name: "قطر المحمل (rough)", nominal: 35.4, tolMinus: 0.15, tolPlus: 0.15, sortOrder: 1 }),
-      feature({ stage: "POST_GRINDING", name: "قطر المحمل", nominal: 35.01, tolMinus: 0.008, tolPlus: 0.008, critical: true, sortOrder: 1 }),
-      feature({ stage: "FINAL", name: "قطر المحمل النهائي", nominal: 35, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
-      feature({ stage: "FINAL", name: "التوازي (Concentricity)", kind: "GDT", gdtSymbol: "⌾", gdtLimit: 0.015, sortOrder: 2 }),
+      feature({ stage: "POST_ROUGHING", name: "Bearing diameter (rough)", nominal: 35.4, tolMinus: 0.15, tolPlus: 0.15, sortOrder: 1 }),
+      feature({ stage: "POST_GRINDING", name: "Bearing diameter", nominal: 35.01, tolMinus: 0.008, tolPlus: 0.008, critical: true, sortOrder: 1 }),
+      feature({ stage: "FINAL", name: "Bearing diameter (final)", nominal: 35, tolMinus: 0.005, tolPlus: 0.005, critical: true, sortOrder: 1 }),
+      feature({ stage: "FINAL", name: "Concentricity", kind: "GDT", gdtSymbol: "⌾", gdtLimit: 0.015, sortOrder: 2 }),
     ],
     lotCount: 1,
     partCount: 0,
@@ -316,7 +316,7 @@ async function main() {
     receivedQty: 25,
     unit: "pcs",
     status: "REJECTED",
-    notes: "صدأ سطحي واضح على 6 قطع + شهادة المصنع غير مطابقة للصهرة.",
+    notes: "Visible surface rust on 6 pieces, and the mill certificate does not match the heat number.",
     createdAt: daysAgo(4),
     certificates: [
       certificate({ type: "Mill Test Certificate", number: "MTC-61190", received: true, verified: false }),
@@ -340,7 +340,7 @@ async function main() {
     const checks = def.items.map((i) => ({
       key: i.key,
       ok: !failedKeys.includes(i.key),
-      note: failedKeys.includes(i.key) ? "غير مطابق — راجع الملاحظات" : null,
+      note: failedKeys.includes(i.key) ? "Does not conform — see notes" : null,
     }));
     const verdict =
       forced ??
@@ -375,12 +375,12 @@ async function main() {
     });
   }
 
-  receivingInspection(lotAId, lotA.lotNumber, punch.partNumber, "م. أحمد سالم", daysAgo(21));
+  receivingInspection(lotAId, lotA.lotNumber, punch.partNumber, "Ahmed Salem", daysAgo(21));
   receivingInspection(
     lotCId,
     lotC.lotNumber,
     punch.partNumber,
-    "م. أحمد سالم",
+    "Ahmed Salem",
     daysAgo(4),
     ["visual_inspection", "review_certificates"],
     "REJECTED"
@@ -412,11 +412,11 @@ async function main() {
     sampleRef: "S-001",
     method: "Spectro",
     performedAt: daysAgo(20),
-    performedBy: "معمل التحاليل",
-    recordedByUid: uid("م. منى رشاد"),
-    recordedByName: "م. منى رشاد",
+    performedBy: "Materials laboratory",
+    recordedByUid: uid("Mona Rashad"),
+    recordedByName: "Mona Rashad",
     status: analysisStatus(analysisAResults),
-    conclusion: "مطابق للمواصفة DIN 1.2379.",
+    conclusion: "Conforms to DIN 1.2379.",
     actionTaken: null,
     results: analysisAResults,
   });
@@ -426,9 +426,9 @@ async function main() {
     sampleRef: "S-014",
     method: "Spectro",
     performedAt: daysAgo(8),
-    performedBy: "معمل التحاليل",
-    recordedByUid: uid("م. منى رشاد"),
-    recordedByName: "م. منى رشاد",
+    performedBy: "Materials laboratory",
+    recordedByUid: uid("Mona Rashad"),
+    recordedByName: "Mona Rashad",
     status: "PENDING",
     conclusion: null,
     actionTaken: null,
@@ -462,9 +462,9 @@ async function main() {
       stage: "POST_ROUGHING",
       fromValue: null,
       toValue: "POST_ROUGHING/IN_PROCESS",
-      note: `صدر من التشغيلة ${lotA.lotNumber}`,
-      actorUid: uid("م. طارق سليم"),
-      actor: "م. طارق سليم",
+      note: `Raised from lot ${lotA.lotNumber}`,
+      actorUid: uid("Tarek Selim"),
+      actor: "Tarek Selim",
     });
 
     let currentStage: Stage | "DONE" = "POST_ROUGHING";
@@ -477,7 +477,7 @@ async function main() {
       const checks = def.items.map((i) => ({
         key: i.key,
         ok: !failed.includes(i.key),
-        note: failed.includes(i.key) ? "غير مطابق" : null,
+        note: failed.includes(i.key) ? "Does not conform" : null,
       }));
 
       const stageFeatures = punchFeatures.filter((f) => f.stage === step.stage);
@@ -572,25 +572,25 @@ async function main() {
   }
 
   const goodActuals = {
-    roughing: { "القطر الخارجي (rough)": 50.62, "الطول الكلي (rough)": 120.48 },
-    grinding: { "القطر الخارجي": 50.021, "الطول الكلي": 120.01 },
+    roughing: { "Outside diameter (rough)": 50.62, "Overall length (rough)": 120.48 },
+    grinding: { "Outside diameter": 50.021, "Overall length": 120.01 },
     final: {
-      "القطر الخارجي النهائي": 50.002,
-      "الطول الكلي النهائي": 120.005,
-      "الاستدارة (Runout A-B)": 0.011,
-      "التعامد (Perpendicularity)": 0.018,
+      "Outside diameter (final)": 50.002,
+      "Overall length (final)": 120.005,
+      "Runout A-B": 0.011,
+      "Perpendicularity": 0.018,
     },
   };
 
   // Three parts released clean.
   for (let i = 1; i <= 3; i++) {
     runPart(`LOT-2026-001-${String(i).padStart(4, "0")}`, [
-      { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
-      { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(14), hardness: 60 + i * 0.3 },
-      { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(10), actuals: goodActuals.grinding },
+      { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(17), actuals: goodActuals.roughing },
+      { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(14), hardness: 60 + i * 0.3 },
+      { stage: "POST_GRINDING", inspector: "Hala Fouad", at: daysAgo(10), actuals: goodActuals.grinding },
       {
         stage: "FINAL",
-        inspector: "م. منى رشاد",
+        inspector: "Mona Rashad",
         at: daysAgo(6),
         actuals: goodActuals.final,
         ra: 0.3,
@@ -601,14 +601,14 @@ async function main() {
 
   // Rejected at final on a critical runout.
   runPart("LOT-2026-001-0004", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(14), hardness: 59.4 },
-    { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(10), actuals: goodActuals.grinding },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(17), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(14), hardness: 59.4 },
+    { stage: "POST_GRINDING", inspector: "Hala Fouad", at: daysAgo(10), actuals: goodActuals.grinding },
     {
       stage: "FINAL",
-      inspector: "م. منى رشاد",
+      inspector: "Mona Rashad",
       at: daysAgo(5),
-      actuals: { ...goodActuals.final, "الاستدارة (Runout A-B)": 0.045 },
+      actuals: { ...goodActuals.final, "Runout A-B": 0.045 },
       ra: 0.35,
       cmmRef: "CMM-2026-014",
     },
@@ -616,23 +616,23 @@ async function main() {
 
   // Soft after heat treatment → rejected there.
   runPart("LOT-2026-001-0005", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 54.5 },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(17), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(13), hardness: 54.5 },
   ]);
 
   // Over-hard → further investigation, sits on hold.
   runPart("LOT-2026-001-0006", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 64.2 },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(17), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(13), hardness: 64.2 },
   ]);
 
   // Grinding burn → rework, waiting to be sent back.
   runPart("LOT-2026-001-0007", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(17), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(13), hardness: 60.1 },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(17), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(13), hardness: 60.1 },
     {
       stage: "POST_GRINDING",
-      inspector: "م. هالة فؤاد",
+      inspector: "Hala Fouad",
       at: daysAgo(8),
       failedKeys: ["no_grinding_burn"],
       actuals: goodActuals.grinding,
@@ -641,13 +641,13 @@ async function main() {
 
   // Three still walking the line, one per queue.
   runPart("LOT-2026-001-0008", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(16), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(11), hardness: 61 },
-    { stage: "POST_GRINDING", inspector: "م. هالة فؤاد", at: daysAgo(7), actuals: goodActuals.grinding },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(16), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(11), hardness: 61 },
+    { stage: "POST_GRINDING", inspector: "Hala Fouad", at: daysAgo(7), actuals: goodActuals.grinding },
   ]);
   runPart("LOT-2026-001-0009", [
-    { stage: "POST_ROUGHING", inspector: "م. هالة فؤاد", at: daysAgo(16), actuals: goodActuals.roughing },
-    { stage: "HEAT_TREATMENT", inspector: "م. كريم عادل", at: daysAgo(11), hardness: 59.8 },
+    { stage: "POST_ROUGHING", inspector: "Hala Fouad", at: daysAgo(16), actuals: goodActuals.roughing },
+    { stage: "HEAT_TREATMENT", inspector: "Karim Adel", at: daysAgo(11), hardness: 59.8 },
   ]);
   runPart("LOT-2026-001-0010", []);
 

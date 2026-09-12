@@ -22,11 +22,11 @@ function LotsView({ lots }: { lots: Awaited<ReturnType<typeof getLots>> }) {
   return (
     <>
       <PageHeader
-        title="استلام الخامات"
-        subtitle="Raw Material Receiving — كل تشغيلة واردة وحالتها"
+        title="Goods In"
+        subtitle="Raw material receiving — every incoming lot and where it stands"
         action={
           <Link href="/lots/new" className="btn btn-primary">
-            تسجيل استلام جديد
+            Receive a lot
           </Link>
         }
       />
@@ -34,9 +34,9 @@ function LotsView({ lots }: { lots: Awaited<ReturnType<typeof getLots>> }) {
       <Card>
         {lots.length === 0 ? (
           <Empty>
-            لا توجد تشغيلات مسجلة.{" "}
+            No lots recorded yet.{" "}
             <Link href="/lots/new" className="font-bold text-[var(--brand)]">
-              سجّل أول استلام
+              Receive the first one
             </Link>
             .
           </Empty>
@@ -45,15 +45,15 @@ function LotsView({ lots }: { lots: Awaited<ReturnType<typeof getLots>> }) {
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>رقم التشغيلة</th>
-                  <th>رقم الجزء</th>
-                  <th>المورد</th>
-                  <th>الكمية</th>
-                  <th>تاريخ الاستلام</th>
-                  <th>الشهادات</th>
-                  <th>التحليل</th>
-                  <th>الأجزاء</th>
-                  <th>الحالة</th>
+                  <th>Lot number</th>
+                  <th>Part number</th>
+                  <th>Supplier</th>
+                  <th>Quantity</th>
+                  <th>Received</th>
+                  <th>Certificates</th>
+                  <th>Analysis</th>
+                  <th>Parts</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -84,16 +84,16 @@ function LotsView({ lots }: { lots: Awaited<ReturnType<typeof getLots>> }) {
                       <td className="num text-xs">{fmtDate(l.receivedAt)}</td>
                       <td>
                         {l.missingCerts.length === 0 ? (
-                          <span className="pill pill-ok">مكتملة</span>
+                          <span className="pill pill-ok">Complete</span>
                         ) : (
                           <span className="pill pill-warn">
-                            ناقص {l.missingCerts.length}
+                            {l.missingCerts.length} missing
                           </span>
                         )}
                       </td>
                       <td>
                         {analysisState === "—" ? (
-                          <span className="text-xs text-[var(--muted)]">لا يوجد</span>
+                          <span className="text-xs text-[var(--muted)]">None</span>
                         ) : (
                           <StatusPill status={analysisState} />
                         )}

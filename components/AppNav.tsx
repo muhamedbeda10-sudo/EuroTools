@@ -9,12 +9,12 @@ import { ROLE_LABELS, can } from "@/lib/domain/roles";
 import { signOut, useSession } from "@/lib/client/session";
 
 const LINKS = [
-  { href: "/", label: "لوحة المتابعة" },
-  { href: "/lots", label: "استلام الخامات" },
-  { href: "/queue", label: "طوابير الفحص" },
-  { href: "/parts", label: "الأجزاء" },
-  { href: "/materials", label: "المواصفات" },
-  { href: "/reports", label: "التقارير" },
+  { href: "/", label: "Dashboard" },
+  { href: "/lots", label: "Goods In" },
+  { href: "/queue", label: "Inspection Queue" },
+  { href: "/parts", label: "Parts" },
+  { href: "/materials", label: "Specifications" },
+  { href: "/reports", label: "Reports" },
 ];
 
 export function AppNav() {
@@ -25,7 +25,7 @@ export function AppNav() {
   // Hiding a link the account cannot use is a courtesy, not a control: the
   // security rules refuse the reads behind it either way.
   const links = user && can(user.role, "user.manage")
-    ? [...LINKS, { href: "/admin/users", label: "المستخدمون" }]
+    ? [...LINKS, { href: "/admin/users", label: "Users" }]
     : LINKS;
 
   // Signed out — on the login page, or still restoring a session. There is
@@ -59,16 +59,16 @@ export function AppNav() {
         <div className="ms-auto flex items-center gap-2 md:ms-0">
           <div className="hidden text-end leading-tight sm:block">
             <div className="text-sm font-semibold">{user.displayName}</div>
-            <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].ar}</div>
+            <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].en}</div>
           </div>
 
           <button
             type="button"
             className="btn"
-            title="تسجيل الخروج"
+            title="Sign out"
             onClick={() => void signOut()}
           >
-            خروج
+            Sign out
           </button>
 
           <ThemeToggle />
@@ -78,7 +78,7 @@ export function AppNav() {
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
           >
-            القائمة
+            Menu
           </button>
         </div>
       </div>

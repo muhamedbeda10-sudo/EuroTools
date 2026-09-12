@@ -26,13 +26,13 @@ export function ExportCsvButton() {
           try {
             await downloadInspectionCsv();
           } catch {
-            setError("تعذّر تجهيز الملف. تحقّق من الاتصال وأعد المحاولة.");
+            setError("Could not build the file. Check the connection and try again.");
           } finally {
             setBusy(false);
           }
         }}
       >
-        {busy ? "جارٍ التجهيز…" : "تصدير CSV"}
+        {busy ? "Preparing…" : "Export CSV"}
       </button>
       {error && <span className="text-xs font-semibold text-[var(--bad-fg)]">{error}</span>}
     </span>

@@ -16,9 +16,9 @@ function LoginPanel() {
     <div className="mx-auto grid w-full max-w-sm gap-6 py-10">
       <div className="grid justify-items-center gap-2 text-center">
         <Brand />
-        <h1 className="mt-1 text-lg font-bold">فحص الجودة</h1>
+        <h1 className="mt-1 text-lg font-bold">Quality Inspection</h1>
         <p className="text-sm text-[var(--muted)]">
-          سجّل دخولك للمتابعة. كل فحص يُوقَّع باسم صاحب الحساب.
+          Sign in to continue. Every inspection is signed in the name of the account that records it.
         </p>
       </div>
 

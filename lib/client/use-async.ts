@@ -56,8 +56,8 @@ export function useAsync<T>(run: () => Promise<T>, deps: readonly unknown[]): As
           key,
           data: null,
           error: code.includes("permission-denied")
-            ? "لا تملك صلاحية الاطّلاع على هذه البيانات."
-            : "تعذّر تحميل البيانات. تحقّق من الاتصال وأعد المحاولة.",
+            ? "You do not have permission to view this."
+            : "Could not load this. Check the connection and try again.",
         });
       });
 

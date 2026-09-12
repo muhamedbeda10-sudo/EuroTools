@@ -43,7 +43,7 @@ export function PhotoField() {
   return (
     <div className="mt-3">
       <label className="label" htmlFor="photos">
-        صور العيب (اختياري)
+        Defect photographs (optional)
       </label>
 
       <input
@@ -59,14 +59,16 @@ export function PhotoField() {
       />
 
       <p className="mt-1 text-xs text-[var(--muted)]">
-        حتى {PHOTO_MAX_PER_INSPECTION} صور. تُصغَّر على الجهاز قبل الرفع، وتُحفظ
-        مع الفحص ولا يمكن تغييرها أو حذفها بعد التوقيع.
+        Up to {PHOTO_MAX_PER_INSPECTION}. They are resized on this device before
+        upload, saved with the inspection, and cannot be changed or removed once
+        the sheet is signed.
       </p>
 
       {tooMany && (
         <p className="mt-1 text-xs font-semibold text-[var(--bad-fg)]">
-          اخترت أكثر من {PHOTO_MAX_PER_INSPECTION} صور — سيُرفَض الحفظ. امسح
-          الاختيار وأعد اختيار {PHOTO_MAX_PER_INSPECTION} على الأكثر.
+          You chose more than {PHOTO_MAX_PER_INSPECTION} photographs, so the
+          sheet will be refused. Clear them and choose at most
+          {PHOTO_MAX_PER_INSPECTION}.
         </p>
       )}
 
@@ -82,7 +84,7 @@ export function PhotoField() {
             />
           ))}
           <button type="button" className="btn" onClick={clear}>
-            مسح الصور
+            Clear photographs
           </button>
         </div>
       )}

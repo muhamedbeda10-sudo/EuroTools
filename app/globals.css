@@ -93,11 +93,13 @@ html.dark {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans-arabic), "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-sans), "Segoe UI", system-ui, sans-serif;
 }
 
-/* Latin runs (part numbers, drawing numbers, measurements) stay LTR inside an
-   RTL sentence — otherwise "50.05 ±0.01" reorders on screen. */
+/* Part numbers, drawing numbers and measurements are isolated runs. The
+   interface reads left to right now, so this no longer changes direction, but
+   it still stops "50.05 ±0.01" being reordered by any Arabic that a part
+   number, a supplier name or an inspector's signature may still contain. */
 .ltr {
   direction: ltr;
   unicode-bidi: isolate;

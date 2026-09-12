@@ -76,7 +76,7 @@ try {
   check("lots are listed", dashboard.includes("LOT-2026-001") && dashboard.includes("LOT-2026-003"));
   // Three released against two rejected, which is what the seed walks.
   check("first-pass yield is computed from the data", /60(\.0)?%/.test(dashboard));
-  check("the signed-in name is in the header", dashboard.includes("م. منى رشاد"));
+  check("the signed-in name is in the header", dashboard.includes("Mona Rashad"));
 
   // ── queues ──
   await go("/queue/", "text=LOT-2026-001-");
@@ -84,27 +84,27 @@ try {
 
   // ── a traveller ──
   const partHref = await page.getAttribute('a[href*="/parts/view/?id="]', "href");
-  await go(partHref, "text=الفاحص الموقِّع");
+  await go(partHref, "text=Signed by");
   const part = await page.textContent("body");
-  check("the traveller opens with its checklist", part.includes("الفاحص الموقِّع"));
-  check("the sheet is signed by the signed-in account", part.includes("م. منى رشاد"));
+  check("the traveller opens with its checklist", part.includes("Signed by"));
+  check("the sheet is signed by the signed-in account", part.includes("Mona Rashad"));
 
   // ── reports ──
-  await go("/reports/", "text=كل النتائج مطابقة");
+  await go("/reports/", "text=Every stored verdict agrees");
   const reports = await page.textContent("body");
   check(
     "the failure tally comes from its counter, not a scan",
-    reports.includes("Grinding Burn") && reports.includes("مراجعة شهادات الخامة المطلوبة")
+    reports.includes("No grinding burn") && reports.includes("Required material certificates reviewed")
   );
-  check("every stored verdict still matches its evidence", reports.includes("كل النتائج مطابقة"));
+  check("every stored verdict still matches its evidence", reports.includes("Every stored verdict agrees"));
 
   // ── administration ──
-  await go("/admin/users/", "text=المستخدمون والصلاحيات");
-  check("the staff list loads for an administrator", (await page.textContent("body")).includes("م. هالة فؤاد"));
+  await go("/admin/users/", "text=Users and Permissions");
+  check("the staff list loads for an administrator", (await page.textContent("body")).includes("Hala Fouad"));
 
   // ── signing out ──
   denials.length = 0;
-  await page.click("text=خروج");
+  await page.click("text=Sign out");
   await page.waitForURL(/\/login/, { timeout: 25000 });
   check("signing out returns to the login page", page.url().includes("/login"));
 

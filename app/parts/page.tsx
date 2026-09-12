@@ -13,12 +13,12 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 const STATUS_FILTERS = [
-  { value: "", label: "الكل" },
-  { value: "IN_PROCESS", label: "قيد التشغيل" },
-  { value: "REWORK", label: "إعادة تشغيل" },
-  { value: "HOLD", label: "موقوف" },
-  { value: "RELEASED", label: "مُفرج عنه" },
-  { value: "REJECTED", label: "مرفوض" },
+  { value: "", label: "All" },
+  { value: "IN_PROCESS", label: "In process" },
+  { value: "REWORK", label: "Rework" },
+  { value: "HOLD", label: "On hold" },
+  { value: "RELEASED", label: "Released" },
+  { value: "REJECTED", label: "Rejected" },
 ];
 
 export default function PartsPage() {
@@ -74,12 +74,12 @@ function PartsView({
 
   return (
     <>
-      <PageHeader title="الأجزاء" subtitle="سجل تتبع كل جزء عبر المراحل" />
+      <PageHeader title="Parts" subtitle="The traveller record for every part, stage by stage" />
 
       <Card className="mb-4">
         <div className="flex flex-wrap gap-4">
           <div>
-            <div className="label">الحالة</div>
+            <div className="label">Status</div>
             <div className="flex flex-wrap gap-1">
               {STATUS_FILTERS.map((f) => (
                 <Link
@@ -98,7 +98,7 @@ function PartsView({
           </div>
 
           <div>
-            <div className="label">المرحلة</div>
+            <div className="label">Stage</div>
             <div className="flex flex-wrap gap-1">
               <Link
                 href={q({ status: statusRaw, stage: "" })}
@@ -106,7 +106,7 @@ function PartsView({
                   !stageRaw ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"
                 }`}
               >
-                الكل
+                All
               </Link>
               {STAGE_DEFS.filter((d) => d.subject === "PART").map((d) => (
                 <Link
@@ -118,7 +118,7 @@ function PartsView({
                       : "bg-[var(--surface-2)] text-[var(--muted)]"
                   }`}
                 >
-                  {d.ar}
+                  {d.en}
                 </Link>
               ))}
             </div>
@@ -126,21 +126,21 @@ function PartsView({
         </div>
       </Card>
 
-      <Card action={<span className="pill pill-neutral">{parts.length} جزء</span>}>
+      <Card action={<span className="pill pill-neutral">{parts.length} parts</span>}>
         {parts.length === 0 ? (
-          <Empty>لا توجد أجزاء مطابقة لهذا التصفية.</Empty>
+          <Empty>No parts match this filter.</Empty>
         ) : (
           <div className="scroll-x">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>الرقم المسلسل</th>
-                  <th>رقم الجزء</th>
-                  <th>التشغيلة</th>
-                  <th>المرحلة الحالية</th>
-                  <th>التقدم</th>
-                  <th>آخر فحص</th>
-                  <th>الحالة</th>
+                  <th>Serial number</th>
+                  <th>Part number</th>
+                  <th>Lot</th>
+                  <th>Current stage</th>
+                  <th>Progress</th>
+                  <th>Last inspection</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -160,9 +160,9 @@ function PartsView({
                       <td className="ltr text-xs">{p.lot?.lotNumber ?? "—"}</td>
                       <td>
                         {p.currentStage === "DONE" ? (
-                          <span className="text-xs text-[var(--muted)]">انتهى</span>
+                          <span className="text-xs text-[var(--muted)]">Finished</span>
                         ) : (
-                          stageDef(p.currentStage).ar
+                          stageDef(p.currentStage).en
                         )}
                       </td>
                       <td>

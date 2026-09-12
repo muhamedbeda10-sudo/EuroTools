@@ -1,19 +1,19 @@
 import type { Metadata } from "next";
-import { Cairo } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppNav } from "@/components/AppNav";
 import { SessionProvider } from "@/lib/client/session";
 
-const cairo = Cairo({
-  variable: "--font-sans-arabic",
-  subsets: ["arabic", "latin"],
+const inter = Inter({
+  variable: "--font-sans",
+  subsets: ["latin"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "EURO Tools — فحص الجودة",
+  title: "QC — EURO Tools & Automation",
   description:
-    "من استلام الخامة حتى الإفراج النهائي: تحليل، فحص بعد الخشونة، المعالجة الحرارية، التجليخ، والفحص النهائي مع CMM.",
+    "From goods-in to final release: material analysis, post-roughing, heat treatment, post-grinding and final inspection with CMM.",
 };
 
 // Applied before paint so there is no light/dark flash on load.
@@ -27,7 +27,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ar" dir="rtl" className={`${cairo.variable} h-full`} suppressHydrationWarning>
+    <html lang="en" dir="ltr" className={`${inter.variable} h-full`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>

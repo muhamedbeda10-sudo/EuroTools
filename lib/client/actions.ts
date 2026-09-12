@@ -95,7 +95,7 @@ const now = () => Timestamp.now();
 /** The interface's own check, before the rules get a chance to refuse. */
 function allow(actor: SessionUser, permission: Permission): ActionResult | null {
   if (!can(actor.role, permission))
-    return { ok: false, error: "ليس لديك صلاحية لتنفيذ هذا الإجراء." };
+    return { ok: false, error: "You do not have permission to do that." };
   return null;
 }
 
@@ -103,10 +103,10 @@ function allow(actor: SessionUser, permission: Permission): ActionResult | null 
 function explain(error: unknown, fallback: string): ActionResult {
   const code = (error as { code?: string }).code ?? "";
   if (code.includes("permission-denied"))
-    return { ok: false, error: "رفض النظام هذه العملية — راجع صلاحيتك أو حالة السجل." };
+    return { ok: false, error: "The system refused that. Check your permissions and the state of the record." };
   if (code.includes("already-exists")) return { ok: false, error: fallback };
   if (code.includes("unavailable"))
-    return { ok: false, error: "تعذّر الوصول إلى قاعدة البيانات. تحقّق من الاتصال." };
+    return { ok: false, error: "Could not reach the database. Check the connection." };
   return { ok: false, error: fallback };
 }
 
@@ -133,7 +133,7 @@ function releaseUnique(tx: Transaction, scope: UniqueScope, value: string): void
 }
 
 function clashMessage(what: string, value: string): string {
-  return `${what} ${value} مسجل بالفعل.`;
+  return `${what} ${value} is already taken.`;
 }
 
 /** Read the tri-state answers for a stage out of the posted form. */
@@ -170,7 +170,7 @@ export const saveMaterial =
     if (denied) return denied;
 
     const partNumber = String(formData.get("partNumber") ?? "").trim();
-    if (!partNumber) return { ok: false, error: "رقم الجزء مطلوب." };
+    if (!partNumber) return { ok: false, error: "A part number is required." };
 
     const id = optionalString(formData.get("id"));
     const data = {
@@ -189,7 +189,7 @@ export const saveMaterial =
     };
 
     if (data.hardnessMin != null && data.hardnessMax != null && data.hardnessMin > data.hardnessMax)
-      return { ok: false, error: "الحد الأدنى للصلادة أكبر من الحد الأقصى." };
+      return { ok: false, error: "The minimum hardness is above the maximum." };
 
     const ref = docIn(materials(), id ?? undefined);
 
@@ -212,12 +212,12 @@ export const saveMaterial =
       });
     } catch (error) {
       const message = (error as Error).message;
-      if (message === "CLASH") return { ok: false, error: clashMessage("رقم الجزء", partNumber) };
-      if (message === "NOT_FOUND") return { ok: false, error: "المواصفة غير موجودة." };
-      return explain(error, "تعذّر حفظ المواصفة.");
+      if (message === "CLASH") return { ok: false, error: clashMessage("Part number", partNumber) };
+      if (message === "NOT_FOUND") return { ok: false, error: "That specification no longer exists." };
+      return explain(error, "Could not save the specification.");
     }
 
-    return { ok: true, info: "تم حفظ المواصفة." };
+    return { ok: true, info: "Specification saved." };
   };
 
 export const addFeature =
@@ -229,9 +229,9 @@ export const addFeature =
     const materialId = optionalString(formData.get("materialId"));
     const stage = String(formData.get("stage") ?? "").trim();
     const name = String(formData.get("name") ?? "").trim();
-    if (!materialId) return { ok: false, error: "معرّف المواصفة غير صالح." };
-    if (!name) return { ok: false, error: "اسم الخاصية مطلوب." };
-    if (!isStage(stage)) return { ok: false, error: "مرحلة غير معروفة." };
+    if (!materialId) return { ok: false, error: "That specification reference is not valid." };
+    if (!name) return { ok: false, error: "A feature name is required." };
+    if (!isStage(stage)) return { ok: false, error: "Unknown stage." };
 
     const ref = docIn(materials(), materialId);
     try {
@@ -259,11 +259,11 @@ export const addFeature =
       });
     } catch (error) {
       if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "المواصفة غير موجودة." };
-      return explain(error, "تعذّر إضافة الخاصية.");
+        return { ok: false, error: "That specification no longer exists." };
+      return explain(error, "Could not add the feature.");
     }
 
-    return { ok: true, info: "تمت إضافة الخاصية." };
+    return { ok: true, info: "Feature added." };
   };
 
 export const deleteFeature =
@@ -274,7 +274,7 @@ export const deleteFeature =
 
     const materialId = optionalString(formData.get("materialId"));
     const featureId = optionalString(formData.get("id"));
-    if (!materialId || !featureId) return { ok: false, error: "معرّف غير صالح." };
+    if (!materialId || !featureId) return { ok: false, error: "That reference is not valid." };
 
     const ref = docIn(materials(), materialId);
     try {
@@ -285,10 +285,10 @@ export const deleteFeature =
         tx.update(ref, { features: features.filter((f) => f.id !== featureId) });
       });
     } catch (error) {
-      return explain(error, "تعذّر حذف الخاصية.");
+      return explain(error, "Could not remove the feature.");
     }
 
-    return { ok: true, info: "تم حذف الخاصية." };
+    return { ok: true, info: "Feature removed." };
   };
 
 export const saveSupplier =
@@ -298,7 +298,7 @@ export const saveSupplier =
     if (denied) return denied;
 
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return { ok: false, error: "اسم المورد مطلوب." };
+    if (!name) return { ok: false, error: "A supplier name is required." };
 
     const id = optionalString(formData.get("id"));
     const data = {
@@ -322,11 +322,11 @@ export const saveSupplier =
       });
     } catch (error) {
       if ((error as Error).message === "CLASH")
-        return { ok: false, error: clashMessage("اسم المورد", name) };
-      return explain(error, "تعذّر حفظ المورد.");
+        return { ok: false, error: clashMessage("Supplier name", name) };
+      return explain(error, "Could not save the supplier.");
     }
 
-    return { ok: true, info: "تم حفظ المورد." };
+    return { ok: true, info: "Supplier saved." };
   };
 
 // ───────────────────── raw material receiving ─────────────────────
@@ -341,14 +341,14 @@ export const receiveLot =
     const materialId = optionalString(formData.get("materialId"));
     const receivedQty = optionalNumber(formData.get("receivedQty"));
 
-    if (!lotNumber) return { ok: false, error: "رقم التشغيلة مطلوب." };
-    if (!materialId) return { ok: false, error: "اختر المواصفة." };
+    if (!lotNumber) return { ok: false, error: "A lot number is required." };
+    if (!materialId) return { ok: false, error: "Choose a specification." };
     if (receivedQty == null || receivedQty <= 0)
-      return { ok: false, error: "الكمية المستلمة يجب أن تكون أكبر من صفر." };
+      return { ok: false, error: "The quantity received must be greater than zero." };
 
     const receivedAtRaw = optionalString(formData.get("receivedAt"));
     const receivedAt = receivedAtRaw ? new Date(receivedAtRaw) : new Date();
-    if (Number.isNaN(receivedAt.getTime())) return { ok: false, error: "تاريخ الاستلام غير صالح." };
+    if (Number.isNaN(receivedAt.getTime())) return { ok: false, error: "That receiving date is not valid." };
 
     const ref = docIn(lots());
     try {
@@ -380,12 +380,12 @@ export const receiveLot =
       });
     } catch (error) {
       const message = (error as Error).message;
-      if (message === "CLASH") return { ok: false, error: clashMessage("رقم التشغيلة", lotNumber) };
-      if (message === "NO_MATERIAL") return { ok: false, error: "المواصفة غير موجودة." };
-      return explain(error, "تعذّر تسجيل الاستلام.");
+      if (message === "CLASH") return { ok: false, error: clashMessage("Lot number", lotNumber) };
+      if (message === "NO_MATERIAL") return { ok: false, error: "That specification no longer exists." };
+      return explain(error, "Could not record the receipt.");
     }
 
-    return { ok: true, info: `تم تسجيل استلام التشغيلة ${lotNumber}.`, };
+    return { ok: true, info: `Lot ${lotNumber} received.`, };
   };
 
 export const addCertificate =
@@ -396,13 +396,13 @@ export const addCertificate =
 
     const lotId = optionalString(formData.get("lotId"));
     const type = String(formData.get("type") ?? "").trim();
-    if (!lotId) return { ok: false, error: "معرّف التشغيلة غير صالح." };
-    if (!type) return { ok: false, error: "نوع الشهادة مطلوب." };
+    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
+    if (!type) return { ok: false, error: "A certificate type is required." };
 
     const issuedAtRaw = optionalString(formData.get("issuedAt"));
     const issuedAt = issuedAtRaw ? new Date(issuedAtRaw) : null;
     if (issuedAt && Number.isNaN(issuedAt.getTime()))
-      return { ok: false, error: "تاريخ الإصدار غير صالح." };
+      return { ok: false, error: "That issue date is not valid." };
 
     const ref = docIn(lots(), lotId);
     try {
@@ -425,11 +425,11 @@ export const addCertificate =
       });
     } catch (error) {
       if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "التشغيلة غير موجودة." };
-      return explain(error, "تعذّر إضافة الشهادة.");
+        return { ok: false, error: "That lot no longer exists." };
+      return explain(error, "Could not add the certificate.");
     }
 
-    return { ok: true, info: "تمت إضافة الشهادة." };
+    return { ok: true, info: "Certificate added." };
   };
 
 export const setCertificate =
@@ -440,7 +440,7 @@ export const setCertificate =
 
     const lotId = optionalString(formData.get("lotId"));
     const certificateId = optionalString(formData.get("id"));
-    if (!lotId || !certificateId) return { ok: false, error: "معرّف غير صالح." };
+    if (!lotId || !certificateId) return { ok: false, error: "That reference is not valid." };
 
     const ref = docIn(lots(), lotId);
     try {
@@ -460,10 +460,10 @@ export const setCertificate =
         });
       });
     } catch (error) {
-      return explain(error, "تعذّر تحديث الشهادة.");
+      return explain(error, "Could not update the certificate.");
     }
 
-    return { ok: true, info: "تم تحديث الشهادة." };
+    return { ok: true, info: "Certificate updated." };
   };
 
 // ───────────────────── raw material analysis ─────────────────────
@@ -476,7 +476,7 @@ export const createAnalysis =
 
     const lotId = optionalString(formData.get("lotId"));
     const sampleRef = String(formData.get("sampleRef") ?? "").trim();
-    if (!lotId || !sampleRef) return { ok: false, error: "مرجع العينة مطلوب." };
+    if (!lotId || !sampleRef) return { ok: false, error: "A sample reference is required." };
 
     // Chemistry lines the lab fills in. Kept as free rows so a different alloy
     // can be analysed without a schema change.
@@ -522,10 +522,10 @@ export const createAnalysis =
       });
       await batch.commit();
     } catch (error) {
-      return explain(error, "تعذّر فتح التحليل.");
+      return explain(error, "Could not open the analysis.");
     }
 
-    return { ok: true, info: "تم فتح تحليل جديد." };
+    return { ok: true, info: "Analysis opened." };
   };
 
 export const saveAnalysisResults =
@@ -536,7 +536,7 @@ export const saveAnalysisResults =
 
     const lotId = optionalString(formData.get("lotId"));
     const analysisId = optionalString(formData.get("analysisId"));
-    if (!lotId || !analysisId) return { ok: false, error: "معرّف غير صالح." };
+    if (!lotId || !analysisId) return { ok: false, error: "That reference is not valid." };
 
     const { analysisStatus } = await import("@/lib/domain/inspection");
     let status: Status = "PENDING";
@@ -580,11 +580,11 @@ export const saveAnalysisResults =
       });
     } catch (error) {
       if ((error as Error).message === "NOT_FOUND")
-        return { ok: false, error: "التحليل غير موجود." };
-      return explain(error, "تعذّر حفظ النتائج.");
+        return { ok: false, error: "That analysis no longer exists." };
+      return explain(error, "Could not save the results.");
     }
 
-    return { ok: true, info: `تم حفظ النتائج — الحالة: ${status}.` };
+    return { ok: true, info: `Results saved. Verdict: ${status}.` };
   };
 
 // ─────────────── the checklist submit path ───────────────
@@ -596,10 +596,10 @@ export const submitLotInspection =
     if (denied) return denied;
 
     const lotId = optionalString(formData.get("lotId"));
-    if (!lotId) return { ok: false, error: "معرّف التشغيلة غير صالح." };
+    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
 
     const lotSnap = await getDoc(docIn(lots(), lotId));
-    if (!lotSnap.exists()) return { ok: false, error: "التشغيلة غير موجودة." };
+    if (!lotSnap.exists()) return { ok: false, error: "That lot no longer exists." };
     const lot = lotSnap.data() as LotDoc;
 
     const materialSnap = await getDoc(docIn(materials(), lot.materialId));
@@ -617,7 +617,7 @@ export const submitLotInspection =
     // back to the suggestion would file a record saying something the
     // inspector did not choose.
     if (chosen !== "" && !stageDef(stage).outcomes.includes(chosen as Status))
-      return { ok: false, error: "حالة غير مسموح بها في هذه المرحلة." };
+      return { ok: false, error: "That verdict is not allowed at this stage." };
     const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
 
     const verdictDenied = allow(actor, verdictPermission(status, suggestion.suggested));
@@ -657,10 +657,10 @@ export const submitLotInspection =
         tallyFailures(tx, stage, checks);
       });
     } catch (error) {
-      return explain(error, "تعذّر تسجيل الفحص.");
+      return explain(error, "Could not record the inspection.");
     }
 
-    return { ok: true, info: `تم تسجيل الفحص — الحالة: ${status}.` };
+    return { ok: true, info: `Inspection recorded. Verdict: ${status}.` };
   };
 
 
@@ -678,7 +678,7 @@ async function readPhotos(formData: FormData) {
     .filter((f): f is File => f instanceof File && f.size > 0);
 
   if (files.length > PHOTO_MAX_PER_INSPECTION)
-    throw new Error(`الحد ${PHOTO_MAX_PER_INSPECTION} صور للفحص الواحد.`);
+    throw new Error(`At most ${PHOTO_MAX_PER_INSPECTION} photographs per inspection.`);
 
   return Promise.all(files.map((file) => prepare(file)));
 }
@@ -691,22 +691,22 @@ export const submitPartInspection =
 
     const partId = optionalString(formData.get("partId"));
     const stageRaw = String(formData.get("stage") ?? "");
-    if (!partId) return { ok: false, error: "معرّف الجزء غير صالح." };
-    if (!isStage(stageRaw)) return { ok: false, error: "مرحلة غير معروفة." };
+    if (!partId) return { ok: false, error: "That part reference is not valid." };
+    if (!isStage(stageRaw)) return { ok: false, error: "Unknown stage." };
 
     const stage = stageRaw as Stage;
     const def = stageDef(stage);
-    if (def.subject !== "PART") return { ok: false, error: "هذه المرحلة ليست مرحلة أجزاء." };
+    if (def.subject !== "PART") return { ok: false, error: "That stage does not apply to parts." };
 
     const partSnap = await getDoc(docIn(parts(), partId));
-    if (!partSnap.exists()) return { ok: false, error: "الجزء غير موجود." };
+    if (!partSnap.exists()) return { ok: false, error: "That part no longer exists." };
     const part = partSnap.data() as PartDoc;
 
     const gate = canInspect(part, stage);
     if (!gate.ok) return { ok: false, error: gate.reason };
 
     const materialSnap = await getDoc(docIn(materials(), part.materialId));
-    if (!materialSnap.exists()) return { ok: false, error: "مواصفة الجزء غير موجودة." };
+    if (!materialSnap.exists()) return { ok: false, error: "The part's specification no longer exists." };
     const material = materialSnap.data() as MaterialDoc;
 
     const checks = readChecks(stage, formData);
@@ -757,7 +757,7 @@ export const submitPartInspection =
 
     const chosen = String(formData.get("status") ?? "").trim();
     if (chosen !== "" && !def.outcomes.includes(chosen as Status))
-      return { ok: false, error: "حالة غير مسموح بها في هذه المرحلة." };
+      return { ok: false, error: "That verdict is not allowed at this stage." };
     const status: Status = chosen === "" ? suggestion.suggested : (chosen as Status);
 
     // Releasing product needs its own authority; departing from the derived
@@ -777,7 +777,7 @@ export const submitPartInspection =
     try {
       photos = await readPhotos(formData);
     } catch (error) {
-      return { ok: false, error: String((error as Error)?.message ?? "تعذّرت معالجة الصور.") };
+      return { ok: false, error: String((error as Error)?.message ?? "Could not process the photographs.") };
     }
 
     try {
@@ -852,12 +852,12 @@ export const submitPartInspection =
         tallyFailures(tx, stage, checks);
       });
     } catch (error) {
-      return explain(error, "تعذّر تسجيل الفحص.");
+      return explain(error, "Could not record the inspection.");
     }
 
     return {
       ok: true,
-      info: `تم تسجيل الفحص — الحالة: ${status}. الجزء الآن في: ${transition.stage}.`,
+      info: `Inspection recorded. Verdict: ${status}. The part is now at ${transition.stage}.`,
     };
   };
 
@@ -878,13 +878,13 @@ export const raiseParts =
     const count = optionalNumber(formData.get("count"));
     const prefix = String(formData.get("prefix") ?? "").trim();
 
-    if (!lotId) return { ok: false, error: "معرّف التشغيلة غير صالح." };
+    if (!lotId) return { ok: false, error: "That lot reference is not valid." };
     if (count == null || count < 1 || count > 500)
-      return { ok: false, error: "العدد يجب أن يكون بين 1 و 500." };
-    if (!prefix) return { ok: false, error: "بادئة الرقم المسلسل مطلوبة." };
+      return { ok: false, error: "The count must be between 1 and 500." };
+    if (!prefix) return { ok: false, error: "A serial number prefix is required." };
 
     const lotSnap = await getDoc(docIn(lots(), lotId));
-    if (!lotSnap.exists()) return { ok: false, error: "التشغيلة غير موجودة." };
+    if (!lotSnap.exists()) return { ok: false, error: "That lot no longer exists." };
     const lot = lotSnap.data() as LotDoc;
 
     // `canRaiseParts` wants the verdicts themselves; the lot keeps a tally of
@@ -939,7 +939,7 @@ export const raiseParts =
             stage: "POST_ROUGHING",
             fromValue: null,
             toValue: "POST_ROUGHING/IN_PROCESS",
-            note: `صدر من التشغيلة ${lot.lotNumber}`,
+            note: `Raised from lot ${lot.lotNumber}`,
             actorUid: actor.uid,
             actor: actor.displayName,
           });
@@ -953,14 +953,14 @@ export const raiseParts =
         await bumpPartCounts(lotId, lot.materialId, created);
         return {
           ok: false,
-          error: `تم إصدار ${created} جزء ثم تعذّر إكمال الباقي — على الأرجح رقم مسلسل مستخدم. أعد المحاولة بالعدد الناقص.`,
+          error: `${created} parts were raised and the rest could not be. A serial number is most likely already in use. Try again for the remainder.`,
         };
       }
-      return explain(error, "تعذّر إصدار الأجزاء — على الأرجح رقم مسلسل مستخدم بالفعل.");
+      return explain(error, "Could not raise the parts. A serial number is most likely already in use.");
     }
 
     await bumpPartCounts(lotId, lot.materialId, created);
-    return { ok: true, info: `تم إصدار ${created} جزء.` };
+    return { ok: true, info: `${created} parts raised.` };
   };
 
 /** Keep the lot's and the material's part tallies in step with what was
@@ -980,7 +980,7 @@ export const returnPartToQueue =
     if (denied) return denied;
 
     const partId = optionalString(formData.get("partId"));
-    if (!partId) return { ok: false, error: "معرّف غير صالح." };
+    if (!partId) return { ok: false, error: "That reference is not valid." };
 
     try {
       await runTransaction(clientDb(), async (tx) => {
@@ -998,20 +998,20 @@ export const returnPartToQueue =
           stage: part.currentStage,
           fromValue: part.status,
           toValue: "IN_PROCESS",
-          note: "أُعيد إلى طابور الفحص بعد المعالجة",
+          note: "Returned to the inspection queue after rework",
           actorUid: actor.uid,
           actor: actor.displayName,
         });
       });
     } catch (error) {
       const message = (error as Error).message;
-      if (message === "NOT_FOUND") return { ok: false, error: "الجزء غير موجود." };
+      if (message === "NOT_FOUND") return { ok: false, error: "That part no longer exists." };
       if (message === "NOT_REWORK")
-        return { ok: false, error: "هذا الجزء ليس في إعادة تشغيل أو إيقاف." };
-      return explain(error, "تعذّرت إعادة الجزء.");
+        return { ok: false, error: "That part is not in rework or on hold." };
+      return explain(error, "Could not return the part.");
     }
 
-    return { ok: true, info: "تمت إعادة الجزء إلى الطابور." };
+    return { ok: true, info: "Part returned to the queue." };
   };
 
 // ───────────────────────── accounts ─────────────────────────
@@ -1035,16 +1035,16 @@ export const grantAccess =
     const displayName = String(formData.get("displayName") ?? "").trim();
     const role = String(formData.get("role") ?? "").trim();
 
-    if (!uid) return { ok: false, error: "معرّف Firebase (UID) مطلوب — انسخه من Console." };
+    if (!uid) return { ok: false, error: "A Firebase UID is required. Copy it from the Firebase console." };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-      return { ok: false, error: "البريد الإلكتروني غير صالح." };
+      return { ok: false, error: "That email address is not valid." };
     if (!displayName)
-      return { ok: false, error: "الاسم مطلوب — هو الاسم الذي يُوقَّع به على الفحوص." };
+      return { ok: false, error: "A name is required. It is the name that signs every inspection." };
 
     const { isRole } = await import("@/lib/domain/roles");
-    if (!isRole(role)) return { ok: false, error: "الصلاحية غير معروفة." };
+    if (!isRole(role)) return { ok: false, error: "Unknown role." };
     if (uid === actor.uid)
-      return { ok: false, error: "لا يمكنك تعديل حسابك بنفسك. يجب أن يقوم بذلك مدير نظام آخر." };
+      return { ok: false, error: "You cannot edit your own account. Another administrator has to." };
 
     try {
       const ref = docIn(users(), uid);
@@ -1079,10 +1079,10 @@ export const grantAccess =
         toValue: role,
       });
     } catch (error) {
-      return explain(error, "تعذّر حفظ الحساب.");
+      return explain(error, "Could not save the account.");
     }
 
-    return { ok: true, info: `تم منح ${displayName} صلاحية ${role}.` };
+    return { ok: true, info: `${displayName} now has the ${role} role.` };
   };
 
 export const setUserRole =
@@ -1093,17 +1093,17 @@ export const setUserRole =
 
     const uid = optionalString(formData.get("id"));
     const role = String(formData.get("role") ?? "").trim();
-    if (!uid) return { ok: false, error: "معرّف غير صالح." };
+    if (!uid) return { ok: false, error: "That reference is not valid." };
 
     const { ROLES, isRole } = await import("@/lib/domain/roles");
-    if (!isRole(role)) return { ok: false, error: `الصلاحية يجب أن تكون إحدى: ${ROLES.join(", ")}` };
+    if (!isRole(role)) return { ok: false, error: `The role must be one of: ${ROLES.join(", ")}` };
     if (uid === actor.uid)
-      return { ok: false, error: "لا يمكنك تعديل صلاحيتك بنفسك. يجب أن يقوم بذلك مدير نظام آخر." };
+      return { ok: false, error: "You cannot change your own role. Another administrator has to." };
 
     const snapshot = await getDoc(docIn(users(), uid));
-    if (!snapshot.exists()) return { ok: false, error: "الحساب غير موجود." };
+    if (!snapshot.exists()) return { ok: false, error: "That account no longer exists." };
     const subject = snapshot.data() as { role: string; active: boolean; displayName: string };
-    if (subject.role === role) return { ok: true, info: "لا تغيير." };
+    if (subject.role === role) return { ok: true, info: "Nothing changed." };
 
     if (role !== "ADMIN") {
       const refusal = await lastAdminRefusal(subject);
@@ -1125,10 +1125,10 @@ export const setUserRole =
       });
       await batch.commit();
     } catch (error) {
-      return explain(error, "تعذّر تغيير الصلاحية.");
+      return explain(error, "Could not change the role.");
     }
 
-    return { ok: true, info: `تم تغيير صلاحية ${subject.displayName}.` };
+    return { ok: true, info: `${subject.displayName}'s role has changed.` };
   };
 
 export const setUserActive =
@@ -1139,16 +1139,16 @@ export const setUserActive =
 
     const uid = optionalString(formData.get("id"));
     const active = formData.get("active") === "true";
-    if (!uid) return { ok: false, error: "معرّف غير صالح." };
+    if (!uid) return { ok: false, error: "That reference is not valid." };
 
     const snapshot = await getDoc(docIn(users(), uid));
-    if (!snapshot.exists()) return { ok: false, error: "الحساب غير موجود." };
+    if (!snapshot.exists()) return { ok: false, error: "That account no longer exists." };
     const subject = snapshot.data() as { role: string; active: boolean; displayName: string };
-    if (subject.active === active) return { ok: true, info: "لا تغيير." };
+    if (subject.active === active) return { ok: true, info: "Nothing changed." };
 
     if (!active) {
       if (uid === actor.uid)
-        return { ok: false, error: "لا يمكنك إيقاف حسابك بنفسك. يجب أن يقوم بذلك مدير نظام آخر." };
+        return { ok: false, error: "You cannot deactivate your own account. Another administrator has to." };
       const refusal = await lastAdminRefusal(subject);
       if (refusal) return { ok: false, error: refusal };
     }
@@ -1168,14 +1168,14 @@ export const setUserActive =
       });
       await batch.commit();
     } catch (error) {
-      return explain(error, "تعذّر تغيير حالة الحساب.");
+      return explain(error, "Could not change the account's state.");
     }
 
     return {
       ok: true,
       info: active
-        ? `تم تفعيل ${subject.displayName}.`
-        : `تم إيقاف ${subject.displayName}. لن يستطيع الدخول من الطلب التالي.`,
+        ? `${subject.displayName} is active again.`
+        : `${subject.displayName} is deactivated, and is refused from their next request onwards.`,
     };
   };
 
@@ -1196,6 +1196,6 @@ async function lastAdminRefusal(subject: {
     query(users(), where("role", "==", "ADMIN"), where("active", "==", true))
   );
   // The subject is still counted here, so "only them" reads as one.
-  if (others.data().count <= 1) return "هذا هو مدير النظام النشط الوحيد. عيّن مدير نظام آخر أولًا.";
+  if (others.data().count <= 1) return "This is the only active administrator. Appoint another one first.";
   return null;
 }

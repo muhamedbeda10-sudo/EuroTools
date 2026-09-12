@@ -33,7 +33,7 @@ function PartLoader() {
 
   if (!user) return null;
   return (
-    <Async state={state} empty={<Empty>الجزء غير موجود.</Empty>}>
+    <Async state={state} empty={<Empty>That part does not exist.</Empty>}>
       {(part) => <PartView part={part} user={user} refresh={state.refresh} />}
     </Async>
   );
@@ -51,7 +51,7 @@ function PartView({
   const stage = part.currentStage as Stage | "DONE";
   const gate =
     stage === "DONE"
-      ? { ok: false, reason: "انتهت مراحل هذا الجزء." }
+      ? { ok: false, reason: "This part has finished every stage." }
       : canInspect(part, stage);
 
   // `inspections` comes back newest-first from the query layer.
@@ -78,9 +78,9 @@ function PartView({
   return (
     <>
       <PageHeader
-        title={`جزء ${part.serialNumber}`}
+        title={`Part ${part.serialNumber}`}
         subtitle={`${part.material.partNumber}${
-          part.material.drawingNumber ? ` — رسم ${part.material.drawingNumber}` : ""
+          part.material.drawingNumber ? ` — drawing ${part.material.drawingNumber}` : ""
         }`}
         action={
           <div className="flex items-center gap-2">
@@ -91,7 +91,7 @@ function PartView({
       />
 
       {/* ── traveller ── */}
-      <Card className="mb-4" title="مسار الجزء">
+      <Card className="mb-4" title="Traveller">
         <ol className="grid gap-2 sm:grid-cols-4">
           {PART_STAGES.map((s, i) => {
             const def = stageDef(s);
@@ -110,16 +110,16 @@ function PartView({
                 }`}
               >
                 <div className="text-xs font-semibold text-[var(--muted)]">
-                  المرحلة {i + 1}
+                  Stage {i + 1}
                 </div>
-                <div className="mt-0.5 text-sm font-bold">{def.ar}</div>
+                <div className="mt-0.5 text-sm font-bold">{def.en}</div>
                 <div className="mt-1 text-xs">
                   {done ? (
-                    <span className="text-[var(--ok-fg)]">✓ تمت</span>
+                    <span className="text-[var(--ok-fg)]">✓ Done</span>
                   ) : here ? (
-                    <span className="text-[var(--brand-dark)]">الموقع الحالي</span>
+                    <span className="text-[var(--brand-dark)]">Here now</span>
                   ) : (
-                    <span className="text-[var(--muted)]">لم تبدأ</span>
+                    <span className="text-[var(--muted)]">Not started</span>
                   )}
                 </div>
               </li>
@@ -138,13 +138,13 @@ function PartView({
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="بيانات الجزء">
-          <Kv k="الرقم المسلسل" v={<span className="ltr">{part.serialNumber}</span>} />
-          <Kv k="رقم الجزء" v={<span className="ltr">{part.material.partNumber}</span>} />
-          <Kv k="رقم الرسم" v={<span className="ltr">{part.material.drawingNumber ?? "—"}</span>} />
-          <Kv k="المواصفة" v={<span className="ltr">{part.material.spec ?? "—"}</span>} />
+        <Card title="Part">
+          <Kv k="Serial number" v={<span className="ltr">{part.serialNumber}</span>} />
+          <Kv k="Part number" v={<span className="ltr">{part.material.partNumber}</span>} />
+          <Kv k="Drawing number" v={<span className="ltr">{part.material.drawingNumber ?? "—"}</span>} />
+          <Kv k="Specification" v={<span className="ltr">{part.material.spec ?? "—"}</span>} />
           <Kv
-            k="التشغيلة"
+            k="Lot"
             v={
               part.lot ? (
                 <Link href={`/lots/view?id=${part.lot.id}`} className="ltr text-[var(--brand)]">
@@ -155,10 +155,10 @@ function PartView({
               )
             }
           />
-          <Kv k="المورد" v={part.lot?.supplier?.name ?? "—"} />
-          <Kv k="تاريخ الإصدار" v={<span className="num">{fmtDate(part.createdAt)}</span>} />
+          <Kv k="Supplier" v={part.lot?.supplier?.name ?? "—"} />
+          <Kv k="Raised" v={<span className="num">{fmtDate(part.createdAt)}</span>} />
           <Kv
-            k="مدى الصلادة المطلوب"
+            k="Required hardness range"
             v={
               <span className="num">
                 {part.material.hardnessMin == null && part.material.hardnessMax == null
@@ -168,7 +168,7 @@ function PartView({
             }
           />
           <Kv
-            k="Surface Finish المطلوب"
+            k="Required surface finish"
             v={
               <span className="num">
                 {part.material.surfaceFinishRa == null
@@ -183,7 +183,7 @@ function PartView({
         <div className="lg:col-span-2" id="inspect">
           {gate.ok && stage !== "DONE" ? (
             <Card
-              title={`${stageDef(stage).order}. ${stageDef(stage).ar}`}
+              title={`${stageDef(stage).order}. ${stageDef(stage).en}`}
               subtitle={stageDef(stage).en}
             >
               <ChecklistForm
@@ -206,14 +206,14 @@ function PartView({
               />
             </Card>
           ) : (
-            <Card title="الفحص غير متاح">
+            <Card title="Inspection not available">
               {/* After a submit the checklist is replaced by this card, so the
                   last verdict is repeated here — otherwise the inspector loses
                   the confirmation of what they just recorded. */}
               {latest && (
                 <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2">
-                  <span className="text-sm font-semibold">آخر فحص مُسجَّل:</span>
-                  <span className="text-sm">{stageDef(latest.stage).ar}</span>
+                  <span className="text-sm font-semibold">Last inspection:</span>
+                  <span className="text-sm">{stageDef(latest.stage).en}</span>
                   <StatusPill status={latest.status} />
                   <span className="text-xs text-[var(--muted)]">
                     {latest.inspector} · {fmtDateTime(latest.inspectedAt)}
@@ -228,13 +228,13 @@ function PartView({
               {(part.status === "REWORK" || part.status === "HOLD") && (
                 <div className="mt-4 max-w-sm">
                   <p className="mb-2 text-sm text-[var(--muted)]">
-                    بعد إتمام المعالجة في الورشة، أعِد الجزء إلى الطابور ليُفحص مرة أخرى في
-                    نفس المرحلة.
+                    Once the rework is finished on the shop floor, return the part to the
+                    queue to be inspected again at the same stage.
                   </p>
                   <ActionForm
                     action={returnPartToQueue(user)}
               onSuccess={refresh}
-                    submitLabel="إعادة إلى طابور الفحص"
+                    submitLabel="Return to the inspection queue"
                     submitClassName="btn-primary"
                   >
                     <input type="hidden" name="partId" value={part.id} />
@@ -247,9 +247,9 @@ function PartView({
       </div>
 
       {/* ── history ── */}
-      <Card className="mt-4 page-break" title="سجل الفحوص">
+      <Card className="mt-4 page-break" title="Inspection history">
         {part.inspections.length === 0 ? (
-          <Empty>لم يُسجَّل أي فحص على هذا الجزء بعد.</Empty>
+          <Empty>No inspection has been recorded on this part yet.</Empty>
         ) : (
           <div className="grid gap-4">
             {part.inspections.map((insp) => {
@@ -262,7 +262,7 @@ function PartView({
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <span className="font-bold">
-                        {def.order}. {def.ar}
+                        {def.order}. {def.en}
                       </span>
                       <span className="ms-2 text-xs text-[var(--muted)]">
                         {insp.inspector} · {fmtDateTime(insp.inspectedAt)}
@@ -273,8 +273,8 @@ function PartView({
 
                   {insp.hardnessValue != null && (
                     <p className="num mb-2 text-sm">
-                      الصلادة المقاسة: <strong>{fmtNum(insp.hardnessValue)} {insp.hardnessUnit}</strong>
-                      {" — "}المدى المطلوب: {fmtNum(insp.hardnessMin)} – {fmtNum(insp.hardnessMax)}
+                      Measured hardness: <strong>{fmtNum(insp.hardnessValue)} {insp.hardnessUnit}</strong>
+                      {" — "}required range: {fmtNum(insp.hardnessMin)} – {fmtNum(insp.hardnessMax)}
                     </p>
                   )}
                   {insp.surfaceFinishRa != null && (
@@ -284,14 +284,14 @@ function PartView({
                   )}
                   {insp.cmmReportRef && (
                     <p className="mb-2 text-sm">
-                      تقرير CMM: <span className="ltr font-bold">{insp.cmmReportRef}</span>
-                      {insp.cmmReviewed ? " — تمت المراجعة" : " — لم تُراجع بعد"}
+                      CMM report: <span className="ltr font-bold">{insp.cmmReportRef}</span>
+                      {insp.cmmReviewed ? " — reviewed" : " — not reviewed yet"}
                     </p>
                   )}
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <div>
-                      <h4 className="mb-1 text-xs font-bold text-[var(--muted)]">بنود الكشف</h4>
+                      <h4 className="mb-1 text-xs font-bold text-[var(--muted)]">Checklist</h4>
                       <ul className="grid gap-0.5 text-xs">
                         {def.items.map((item) => {
                           const c = insp.checks.find((x) => x.key === item.key);
@@ -309,10 +309,10 @@ function PartView({
                               <span>
                                 {item.group && (
                                   <span className="text-[var(--muted)]">
-                                    [{GROUP_LABELS[item.group]?.ar ?? item.group}]{" "}
+                                    [{GROUP_LABELS[item.group]?.en ?? item.group}]{" "}
                                   </span>
                                 )}
-                                {item.ar}
+                                {item.en}
                                 {c?.note && (
                                   <span className="text-[var(--muted)]"> — {c.note}</span>
                                 )}
@@ -325,15 +325,15 @@ function PartView({
 
                     {insp.measurements.length > 0 && (
                       <div>
-                        <h4 className="mb-1 text-xs font-bold text-[var(--muted)]">القياسات</h4>
+                        <h4 className="mb-1 text-xs font-bold text-[var(--muted)]">Measurements</h4>
                         <div className="scroll-x">
                           <table className="tbl">
                             <thead>
                               <tr>
-                                <th>الخاصية</th>
-                                <th>المطلوب</th>
-                                <th>المقاس</th>
-                                <th>النتيجة</th>
+                                <th>Feature</th>
+                                <th>Required</th>
+                                <th>Measured</th>
+                                <th>Result</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -367,7 +367,7 @@ function PartView({
                   <PhotoGallery inspectionId={insp.id} />
 
                   {insp.notes && (
-                    <p className="mt-2 text-sm text-[var(--muted)]">ملاحظات: {insp.notes}</p>
+                    <p className="mt-2 text-sm text-[var(--muted)]">Notes: {insp.notes}</p>
                   )}
                 </div>
               );
@@ -376,7 +376,7 @@ function PartView({
         )}
       </Card>
 
-      <Card className="mt-4" title="سجل الحركة">
+      <Card className="mt-4" title="Movement history">
         <ul className="grid gap-1.5 text-sm">
           {part.events.map((e) => (
             <li key={e.id} className="flex flex-wrap gap-2 border-b border-[var(--border)] pb-1.5 last:border-0">

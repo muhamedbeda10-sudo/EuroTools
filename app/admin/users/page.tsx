@@ -12,10 +12,10 @@ import { useAsync } from "@/lib/client/use-async";
 import { useRequireSession, type SessionUser } from "@/lib/client/session";
 
 const EVENT_LABELS: Record<string, string> = {
-  CREATED: "إنشاء حساب",
-  ROLE_CHANGED: "تغيير صلاحية",
-  ACTIVATED: "تفعيل",
-  DEACTIVATED: "إيقاف",
+  CREATED: "Account created",
+  ROLE_CHANGED: "Role changed",
+  ACTIVATED: "Activated",
+  DEACTIVATED: "Deactivated",
 };
 
 export default function UsersPage() {
@@ -49,18 +49,18 @@ function UsersView({
   return (
     <>
       <PageHeader
-        title="المستخدمون والصلاحيات"
+        title="Users and Permissions"
         subtitle="Users and permissions"
       />
 
       {/* ── what each role may do ── */}
-      <Card className="mt-4" title="الصلاحيات لكل دور">
+      <Card className="mt-4" title="What each role may do">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-start text-[var(--muted)]">
-                <th className="p-2 text-start">الدور</th>
-                <th className="p-2 text-start">ما يستطيع فعله</th>
+                <th className="p-2 text-start">Role</th>
+                <th className="p-2 text-start">Permissions</th>
               </tr>
             </thead>
             <tbody>
@@ -69,12 +69,12 @@ function UsersView({
                 return (
                   <tr key={role} className="border-t border-[var(--border)] align-top">
                     <td className="p-2 font-semibold whitespace-nowrap">
-                      {ROLE_LABELS[role].ar}
+                      {ROLE_LABELS[role].en}
                       <div className="ltr text-xs font-normal text-[var(--muted)]">{role}</div>
                     </td>
                     <td className="p-2 text-xs text-[var(--muted)]">
                       {permissions.length === 0 ? (
-                        "الاطّلاع والتقارير فقط — بدون أي كتابة."
+                        "Reads and reports only. No writes of any kind."
                       ) : (
                         <span className="ltr">{permissions.join(" · ")}</span>
                       )}
@@ -88,24 +88,25 @@ function UsersView({
       </Card>
 
       {/* ── create ── */}
-      <Card className="mt-4" title="إنشاء حساب جديد">
+      <Card className="mt-4" title="Create an account">
         <p className="mb-3 text-sm text-[var(--muted)]">
-          الاسم المكتوب هنا هو الاسم الذي سيُوقَّع به على كل فحص، فاكتبه كما يجب أن يظهر في
-          التقارير. سلّم كلمة المرور للموظف واطلب منه تغييرها.
+          The name entered here signs every inspection this person records, so write it
+          the way it should appear on a report. Hand the password over in person and ask
+          them to change it.
         </p>
         <ActionForm action={grantAccess(me)}
-              onSuccess={refresh} submitLabel="إنشاء الحساب">
+              onSuccess={refresh} submitLabel="Create account">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="label">الاسم</label>
-              <input className="input" name="displayName" required placeholder="م. منى رشاد" />
+              <label className="label">Name</label>
+              <input className="input" name="displayName" required placeholder="Mona Rashad" />
             </div>
             <div>
-              <label className="label">البريد الإلكتروني</label>
+              <label className="label">Email address</label>
               <input className="input ltr" name="email" type="email" required dir="ltr" />
             </div>
             <div>
-              <label className="label">كلمة المرور المبدئية</label>
+              <label className="label">Initial password</label>
               <input
                 className="input ltr"
                 name="password"
@@ -116,15 +117,15 @@ function UsersView({
               />
             </div>
             <div>
-              <label className="label">الرقم الوظيفي (اختياري)</label>
+              <label className="label">Employee number (optional)</label>
               <input className="input ltr" name="employeeNo" dir="ltr" />
             </div>
             <div>
-              <label className="label">الصلاحية</label>
+              <label className="label">Role</label>
               <select className="select" name="role" defaultValue="INSPECTOR" required>
                 {ROLES.map((role) => (
                   <option key={role} value={role}>
-                    {ROLE_LABELS[role].ar}
+                    {ROLE_LABELS[role].en}
                   </option>
                 ))}
               </select>
@@ -134,9 +135,9 @@ function UsersView({
       </Card>
 
       {/* ── the accounts ── */}
-      <Card className="mt-4" title={`الحسابات (${users.length})`}>
+      <Card className="mt-4" title={`Accounts (${users.length})`}>
         {users.length === 0 ? (
-          <Empty>لا توجد حسابات.</Empty>
+          <Empty>No accounts.</Empty>
         ) : (
           <ul className="grid gap-2">
             {users.map((user) => {
@@ -152,8 +153,8 @@ function UsersView({
                 >
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="font-semibold">{user.displayName}</span>
-                    {isMe && <span className="pill">أنت</span>}
-                    {!user.active && <span className="pill pill-warn">موقوف</span>}
+                    {isMe && <span className="pill">You</span>}
+                    {!user.active && <span className="pill pill-warn">Deactivated</span>}
                     <span className="ltr text-xs text-[var(--muted)]">{user.email}</span>
                     {user.employeeNo && (
                       <span className="ltr text-xs text-[var(--muted)]">
@@ -163,24 +164,24 @@ function UsersView({
                   </div>
 
                   <div className="mt-1 text-xs text-[var(--muted)]">
-                    {ROLE_LABELS[user.role as (typeof ROLES)[number]]?.ar ?? user.role} ·{" "}
-                    {user._count.inspections} فحص موقَّع
-                    {user.createdBy && ` · أنشأه ${user.createdBy.displayName}`}
+                    {ROLE_LABELS[user.role as (typeof ROLES)[number]]?.en ?? user.role} ·{" "}
+                    {user._count.inspections} inspections signed
+                    {user.createdBy && ` · created by ${user.createdBy.displayName}`}
                   </div>
 
                   {isMe ? (
                     <p className="mt-2 text-xs text-[var(--muted)]">
-                      لا يمكنك تغيير صلاحيتك أو إيقاف حسابك بنفسك. يقوم بذلك مدير نظام آخر.
+                      You cannot change your own role or deactivate your own account. Another administrator has to.
                     </p>
                   ) : (
                     <div className="mt-2 flex flex-wrap items-end gap-4">
                       <InlineForm action={setUserRole(me)}
-              onSuccess={refresh} submitLabel="تغيير الصلاحية">
+              onSuccess={refresh} submitLabel="Change role">
                         <input type="hidden" name="id" value={user.id} />
                         <select className="select" name="role" defaultValue={user.role}>
                           {ROLES.map((role) => (
                             <option key={role} value={role}>
-                              {ROLE_LABELS[role].ar}
+                              {ROLE_LABELS[role].en}
                             </option>
                           ))}
                         </select>
@@ -189,10 +190,10 @@ function UsersView({
                       <InlineForm
                         action={setUserActive(me)}
               onSuccess={refresh}
-                        submitLabel={user.active ? "إيقاف الحساب" : "إعادة التفعيل"}
+                        submitLabel={user.active ? "Deactivate" : "Reactivate"}
                         confirm={
                           user.active
-                            ? `إيقاف حساب ${user.displayName}؟ سيُمنع من الدخول فورًا، وتبقى كل فحوصه في السجل.`
+                            ? `Deactivate ${user.displayName}? They are refused access immediately, and every inspection they signed stays on the record.`
                             : undefined
                         }
                       >
@@ -209,22 +210,22 @@ function UsersView({
       </Card>
 
       {/* ── audit ── */}
-      <Card className="mt-4" title="سجل تغييرات الصلاحيات">
+      <Card className="mt-4" title="Permission history">
         <p className="mb-3 text-sm text-[var(--muted)]">
-          منح صلاحية الإفراج النهائي قرار يُسأل عنه في التدقيق، فيُسجَّل من غيّر ماذا ومتى.
+          Granting the authority to release product is a decision an audit will ask about, so who changed what, and when, is recorded.
         </p>
         {events.length === 0 ? (
-          <Empty>لا توجد تغييرات مسجَّلة بعد.</Empty>
+          <Empty>No changes recorded yet.</Empty>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-[var(--muted)]">
-                  <th className="p-2 text-start">التاريخ</th>
-                  <th className="p-2 text-start">الإجراء</th>
-                  <th className="p-2 text-start">الحساب</th>
-                  <th className="p-2 text-start">من ← إلى</th>
-                  <th className="p-2 text-start">بواسطة</th>
+                  <th className="p-2 text-start">Date</th>
+                  <th className="p-2 text-start">Action</th>
+                  <th className="p-2 text-start">Account</th>
+                  <th className="p-2 text-start">From → To</th>
+                  <th className="p-2 text-start">By</th>
                 </tr>
               </thead>
               <tbody>

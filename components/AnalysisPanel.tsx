@@ -61,11 +61,11 @@ export function AnalysisPanel({
   return (
     <Card
       className="mt-4"
-      title={`${def.order}. ${def.ar}`}
-      subtitle={`${def.en} — عينات عشوائية تُقارن نتائجها بالمواصفة`}
+      title={`${def.order}. ${def.en}`}
+      subtitle={`${def.en} — random samples, compared against the specification`}
     >
       {analyses.length === 0 ? (
-        <Empty>لم يُفتح أي تحليل على هذه التشغيلة بعد.</Empty>
+        <Empty>No analysis has been opened on this lot yet.</Empty>
       ) : (
         <div className="grid gap-4">
           {analyses.map((a) => (
@@ -76,38 +76,38 @@ export function AnalysisPanel({
 
       <details className="mt-4">
         <summary className="cursor-pointer text-sm font-bold text-[var(--brand)]">
-          فتح تحليل عينة جديد
+          Open a new sample analysis
         </summary>
 
         <div className="mt-3">
-          <ActionForm action={createAnalysis(user)} onSuccess={onSaved} submitLabel="فتح التحليل">
+          <ActionForm action={createAnalysis(user)} onSuccess={onSaved} submitLabel="Open analysis">
             <input type="hidden" name="lotId" value={lotId} />
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="مرجع العينة">
+              <Field label="Sample reference">
                 <input className="input ltr" name="sampleRef" required placeholder="S-001" />
               </Field>
-              <Field label="طريقة الاختبار">
+              <Field label="Test method">
                 <select className="select" name="method" defaultValue="Spectro">
-                  <option value="Spectro">تحليل طيفي (Spectro)</option>
-                  <option value="Tensile">اختبار شد (Tensile)</option>
-                  <option value="Hardness">صلادة (Hardness)</option>
-                  <option value="Metallography">فحص مجهري (Metallography)</option>
+                  <option value="Spectro">Spectrographic</option>
+                  <option value="Tensile">Tensile</option>
+                  <option value="Hardness">Hardness</option>
+                  <option value="Metallography">Metallography</option>
                 </select>
               </Field>
-              <Field label="أجراه">
+              <Field label="Performed by">
                 <input className="input" name="performedBy" />
               </Field>
             </div>
 
-            <h4 className="mt-4 mb-2 text-sm font-bold">الخواص المطلوب قياسها</h4>
+            <h4 className="mt-4 mb-2 text-sm font-bold">Properties to measure</h4>
             <div className="scroll-x">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>الخاصية</th>
-                    <th>الحد الأدنى</th>
-                    <th>الحد الأقصى</th>
-                    <th>الوحدة</th>
+                    <th>Property</th>
+                    <th>Minimum</th>
+                    <th>Maximum</th>
+                    <th>Unit</th>
                     <th />
                   </tr>
                 </thead>
@@ -172,7 +172,7 @@ export function AnalysisPanel({
                           className="btn"
                           onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
                         >
-                          حذف
+                          Remove
                         </button>
                       </td>
                     </tr>
@@ -187,7 +187,7 @@ export function AnalysisPanel({
                 setRows((rs) => [...rs, { property: "", requiredMin: "", requiredMax: "", unit: "%" }])
               }
             >
-              + إضافة خاصية
+              + Add property
             </button>
           </ActionForm>
         </div>
@@ -222,7 +222,7 @@ function AnalysisCard({
       <ActionForm
         action={saveAnalysisResults(user)}
         onSuccess={onSaved}
-        submitLabel="حفظ النتائج"
+        submitLabel="Save results"
       >
         <input type="hidden" name="lotId" value={lotId} />
         <input type="hidden" name="analysisId" value={analysis.id} />
@@ -231,10 +231,10 @@ function AnalysisCard({
           <table className="tbl">
             <thead>
               <tr>
-                <th>الخاصية</th>
-                <th>المطلوب</th>
-                <th>النتيجة الفعلية</th>
-                <th>الحكم</th>
+                <th>Property</th>
+                <th>Required</th>
+                <th>Measured</th>
+                <th>Verdict</th>
               </tr>
             </thead>
             <tbody>
@@ -286,13 +286,13 @@ function AnalysisCard({
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <Field label="أجراه">
+          <Field label="Performed by">
             <input className="input" name="performedBy" defaultValue={analysis.performedBy ?? ""} />
           </Field>
-          <Field label="الخلاصة">
+          <Field label="Conclusion">
             <input className="input" name="conclusion" defaultValue={analysis.conclusion ?? ""} />
           </Field>
-          <Field label="الإجراء المتخذ عند عدم المطابقة">
+          <Field label="Action taken on non-conformance">
             <input className="input" name="actionTaken" defaultValue={analysis.actionTaken ?? ""} />
           </Field>
         </div>

@@ -51,29 +51,29 @@ function MaterialsView({
   return (
     <>
       <PageHeader
-        title="المواصفات والموردون"
-        subtitle="رقم الجزء، المواصفة، مدى الصلادة، الشهادات المطلوبة، والخواص المقاسة"
+        title="Specifications and Suppliers"
+        subtitle="Part number, specification, hardness range, required certificates and measured features"
       />
 
       <Card
-        title="أرقام الأجزاء"
+        title="Part numbers"
         action={<span className="pill pill-neutral">{materials.length}</span>}
       >
         {materials.length === 0 ? (
-          <Empty>لا توجد مواصفات مسجلة. أضف واحدة من النموذج بالأسفل.</Empty>
+          <Empty>No specifications yet. Add one with the form below.</Empty>
         ) : (
           <div className="scroll-x">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>رقم الجزء</th>
-                  <th>المواصفة</th>
-                  <th>رقم الرسم</th>
-                  <th>مدى الصلادة</th>
-                  <th>Ra المطلوب</th>
-                  <th>الشهادات</th>
-                  <th>الخواص</th>
-                  <th>تشغيلات / أجزاء</th>
+                  <th>Part number</th>
+                  <th>Specification</th>
+                  <th>Drawing number</th>
+                  <th>Hardness range</th>
+                  <th>Required Ra</th>
+                  <th>Certificates</th>
+                  <th>Features</th>
+                  <th>Lots / Parts</th>
                 </tr>
               </thead>
               <tbody>
@@ -117,50 +117,50 @@ function MaterialsView({
       </Card>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card title="إضافة مواصفة جديدة" className="lg:col-span-2">
+        <Card title="Add a specification" className="lg:col-span-2">
           <ActionForm action={saveMaterial(user)}
-              onSuccess={refresh} submitLabel="حفظ المواصفة">
+              onSuccess={refresh} submitLabel="Save specification">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="رقم الجزء / Part No.">
+              <Field label="Part number">
                 <input className="input ltr" name="partNumber" required placeholder="PN-1042-A" />
               </Field>
-              <Field label="رقم الخامة / Material No.">
+              <Field label="Material number">
                 <input className="input ltr" name="materialNumber" />
               </Field>
-              <Field label="المواصفة / Spec">
+              <Field label="Specification">
                 <input className="input ltr" name="spec" placeholder="DIN 1.2379" />
               </Field>
-              <Field label="رقم الرسم / Drawing No.">
+              <Field label="Drawing number">
                 <input className="input ltr" name="drawingNumber" />
               </Field>
-              <Field label="مراجعة الرسم / Rev">
+              <Field label="Drawing revision">
                 <input className="input ltr" name="drawingRev" placeholder="B" />
               </Field>
-              <Field label="الوصف">
+              <Field label="Description">
                 <input className="input" name="description" />
               </Field>
-              <Field label="أقل صلادة">
+              <Field label="Minimum hardness">
                 <input className="input num" name="hardnessMin" type="number" step="0.1" />
               </Field>
-              <Field label="أقصى صلادة">
+              <Field label="Maximum hardness">
                 <input className="input num" name="hardnessMax" type="number" step="0.1" />
               </Field>
-              <Field label="وحدة الصلادة">
+              <Field label="Hardness unit">
                 <select className="select" name="hardnessUnit" defaultValue="HRC">
                   <option value="HRC">HRC</option>
                   <option value="HB">HB</option>
                   <option value="HV">HV</option>
                 </select>
               </Field>
-              <Field label="Surface Finish المطلوب (Ra µm)">
+              <Field label="Required surface finish (Ra µm)">
                 <input className="input num" name="surfaceFinishRa" type="number" step="0.01" />
               </Field>
-              <Field label="Allowance بعد الخشونة (mm)">
+              <Field label="Allowance after roughing (mm)">
                 <input className="input num" name="roughingAllowance" type="number" step="0.01" />
               </Field>
               <Field
-                label="الشهادات المطلوبة"
-                hint="مفصولة بفواصل — تُنشأ تلقائيًا مع كل تشغيلة"
+                label="Required certificates"
+                hint="Comma separated. Created automatically with every lot."
               >
                 <input
                   className="input ltr"
@@ -172,7 +172,7 @@ function MaterialsView({
           </ActionForm>
         </Card>
 
-        <Card title="الموردون" action={<span className="pill pill-neutral">{suppliers.length}</span>}>
+        <Card title="Suppliers" action={<span className="pill pill-neutral">{suppliers.length}</span>}>
           {suppliers.length > 0 && (
             <ul className="mb-3 grid gap-1 text-sm">
               {suppliers.map((s) => (
@@ -184,15 +184,15 @@ function MaterialsView({
             </ul>
           )}
           <ActionForm action={saveSupplier(user)}
-              onSuccess={refresh} submitLabel="إضافة مورد" submitClassName="">
+              onSuccess={refresh} submitLabel="Add supplier" submitClassName="">
             <div className="grid gap-2">
-              <Field label="اسم المورد">
+              <Field label="Supplier name">
                 <input className="input" name="name" required />
               </Field>
-              <Field label="الكود">
+              <Field label="Code">
                 <input className="input ltr" name="code" />
               </Field>
-              <Field label="جهة الاتصال">
+              <Field label="Contact">
                 <input className="input" name="contact" />
               </Field>
             </div>

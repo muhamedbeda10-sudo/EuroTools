@@ -45,32 +45,32 @@ function NewLotView({
   return (
     <>
       <PageHeader
-        title="تسجيل استلام خامة"
-        subtitle="الخطوة 1 — بيانات الوارد. كشف الفحص يُملأ بعد الحفظ."
+        title="Receive Material"
+        subtitle="Step 1 — the delivery. The inspection sheet is filled in after saving."
       />
 
       {materials.length === 0 ? (
         <Card>
           <Empty>
-            يجب تسجيل مواصفة (رقم جزء) واحدة على الأقل أولًا.{" "}
+            At least one specification (part number) has to exist first.{" "}
             <Link href="/materials" className="font-bold text-[var(--brand)]">
-              اذهب إلى المواصفات
+              Go to specifications
             </Link>
             .
           </Empty>
         </Card>
       ) : (
         <Card className="max-w-3xl">
-          <ActionForm action={receiveLot(user)} submitLabel="حفظ والانتقال لكشف الفحص">
+          <ActionForm action={receiveLot(user)} submitLabel="Save and open the inspection sheet">
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="رقم التشغيلة / Lot No.">
+              <Field label="Lot number">
                 <input className="input ltr" name="lotNumber" required placeholder="LOT-2026-001" />
               </Field>
 
-              <Field label="الخامة / رقم الجزء">
+              <Field label="Material / part number">
                 <select className="select" name="materialId" required defaultValue="">
                   <option value="" disabled>
-                    — اختر —
+                    — Choose —
                   </option>
                   {materials.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -81,9 +81,9 @@ function NewLotView({
                 </select>
               </Field>
 
-              <Field label="المورد">
+              <Field label="Supplier">
                 <select className="select" name="supplierId" defaultValue="">
-                  <option value="">— غير محدد —</option>
+                  <option value="">— Not specified —</option>
                   {suppliers.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
@@ -92,11 +92,11 @@ function NewLotView({
                 </select>
               </Field>
 
-              <Field label="تاريخ الاستلام">
+              <Field label="Date received">
                 <input className="input num" name="receivedAt" type="date" defaultValue={today} />
               </Field>
 
-              <Field label="الكمية المستلمة">
+              <Field label="Quantity received">
                 <input
                   className="input num"
                   name="receivedQty"
@@ -107,31 +107,31 @@ function NewLotView({
                 />
               </Field>
 
-              <Field label="الوحدة">
+              <Field label="Unit">
                 <select className="select" name="unit" defaultValue="pcs">
-                  <option value="pcs">قطعة (pcs)</option>
-                  <option value="kg">كيلوجرام (kg)</option>
-                  <option value="m">متر (m)</option>
+                  <option value="pcs">Pieces (pcs)</option>
+                  <option value="kg">Kilograms (kg)</option>
+                  <option value="m">Metres (m)</option>
                 </select>
               </Field>
 
-              <Field label="رقم أمر الشراء / PO">
+              <Field label="Purchase order">
                 <input className="input ltr" name="poNumber" />
               </Field>
 
-              <Field label="رقم الصهرة / Heat No." hint="من شهادة المصنع">
+              <Field label="Heat number" hint="From the mill certificate">
                 <input className="input ltr" name="heatNumber" />
               </Field>
             </div>
 
             <div className="mt-3">
-              <Field label="ملاحظات">
+              <Field label="Notes">
                 <textarea className="textarea" name="notes" rows={2} />
               </Field>
             </div>
 
             <p className="mt-3 text-xs text-[var(--muted)]">
-              الشهادات المطلوبة في مواصفة الجزء ستُضاف تلقائيًا كبنود بانتظار الاستلام.
+              The certificates the specification requires are added automatically, each awaiting receipt.
             </p>
           </ActionForm>
         </Card>

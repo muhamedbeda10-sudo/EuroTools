@@ -47,7 +47,7 @@ export function LoginForm({ destination }: { destination: string }) {
     const password = String(form.get("password") ?? "");
 
     if (!email || !password) {
-      setError("البريد الإلكتروني وكلمة المرور مطلوبان.");
+      setError("Enter your email address and password.");
       setPending(false);
       return;
     }
@@ -56,7 +56,7 @@ export function LoginForm({ destination }: { destination: string }) {
       await signInWithEmailAndPassword(clientAuth(), email, password);
       // The session provider takes it from here; the effect above navigates.
     } catch {
-      setError("البريد الإلكتروني أو كلمة المرور غير صحيحة.");
+      setError("That email address or password is not correct.");
       setPending(false);
     }
   }
@@ -64,7 +64,7 @@ export function LoginForm({ destination }: { destination: string }) {
   return (
     <form onSubmit={onSubmit} className="grid gap-4">
       <label className="grid gap-1.5">
-        <span className="text-sm font-semibold">البريد الإلكتروني</span>
+        <span className="text-sm font-semibold">Email address</span>
         <input
           className="input"
           name="email"
@@ -77,7 +77,7 @@ export function LoginForm({ destination }: { destination: string }) {
       </label>
 
       <label className="grid gap-1.5">
-        <span className="text-sm font-semibold">كلمة المرور</span>
+        <span className="text-sm font-semibold">Password</span>
         <input
           className="input"
           name="password"
@@ -98,11 +98,11 @@ export function LoginForm({ destination }: { destination: string }) {
       )}
 
       <button type="submit" className="btn btn-primary w-full justify-center" disabled={busy}>
-        {busy ? "جارٍ الدخول…" : "تسجيل الدخول"}
+        {busy ? "Signing in…" : "Sign in"}
       </button>
 
       <p className="text-center text-xs text-[var(--muted)]">
-        الحسابات يُنشئها مدير النظام. لا يوجد تسجيل ذاتي.
+        Accounts are created by a system administrator. There is no self sign-up.
       </p>
     </form>
   );

@@ -32,36 +32,38 @@ export function VerdictReconciliation() {
   return (
     <Card
       className="mt-4 page-break"
-      title="مطابقة النتائج المخزّنة"
+      title="Stored verdicts, reconciled"
       subtitle="Verdict reconciliation"
     >
       <p className="mb-3 text-sm text-[var(--muted)]">
-        يُعيد النظام اشتقاق نتيجة كل فحص من بنوده وقياساته ويقارنها بالنتيجة المحفوظة. أي
-        اختلاف هنا معناه أن السجل لم يُكتب من التطبيق كما هو، ويستحق المراجعة.
+        Every inspection&rsquo;s verdict is derived again from its own answers and
+        measurements, then compared with the verdict that was stored. A difference
+        here means the record was not written by this application as it stands, and
+        is worth looking into.
       </p>
 
       <Async state={state}>
         {({ disagreements, checked }) =>
           disagreements.length === 0 ? (
             <p className="rounded-lg bg-[var(--ok-bg)] px-3 py-2 text-sm font-semibold text-[var(--ok-fg)]">
-              كل النتائج مطابقة — تمت مراجعة {checked} فحصًا.
+              Every stored verdict agrees with its evidence. {checked} checked.
             </p>
           ) : (
             <>
               <p className="mb-3 rounded-lg bg-[var(--bad-bg)] px-3 py-2 text-sm font-semibold text-[var(--bad-fg)]">
-                {disagreements.length} سجل لا تطابق نتيجته المحفوظة ما تقوله بياناته — من أصل{" "}
+                {disagreements.length} of them disagree with what their own evidence says, out of{" "}
                 {checked}.
               </p>
               <div className="scroll-x">
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>الجزء / التشغيلة</th>
-                      <th>المرحلة</th>
-                      <th>التاريخ</th>
-                      <th>الفاحص</th>
-                      <th>المحفوظة</th>
-                      <th>المحسوبة</th>
+                      <th>Part / Lot</th>
+                      <th>Stage</th>
+                      <th>Date</th>
+                      <th>Inspector</th>
+                      <th>Stored</th>
+                      <th>Derived</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -76,7 +78,7 @@ export function VerdictReconciliation() {
                             inspection.subject
                           )}
                         </td>
-                        <td className="text-xs">{stageDef(inspection.stage).ar}</td>
+                        <td className="text-xs">{stageDef(inspection.stage).en}</td>
                         <td className="text-xs">{fmtDateTime(inspection.inspectedAt)}</td>
                         <td className="text-xs">{inspection.inspector}</td>
                         <td>
@@ -91,9 +93,9 @@ export function VerdictReconciliation() {
                 </table>
               </div>
               <p className="mt-2 text-xs text-[var(--muted)]">
-                المحسوبة هي ما تقتضيه البنود والقياسات المسجّلة:{" "}
+                Derived is what the recorded answers and measurements require:{" "}
                 {disagreements
-                  .map(({ derived }) => STATUS_LABELS[derived as keyof typeof STATUS_LABELS]?.ar)
+                  .map(({ derived }) => STATUS_LABELS[derived as keyof typeof STATUS_LABELS]?.en)
                   .filter(Boolean)
                   .slice(0, 3)
                   .join(" · ")}
