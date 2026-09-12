@@ -68,6 +68,7 @@ npm run test:e2e          # 14 فحصًا في متصفّح حقيقي — ان�
 npm run typecheck && npm run lint
 npm run build             # يُخرج موقعًا ثابتًا في out/
 npm run serve             # يقدّم out/ على 5000
+npm run deploy            # يبني وينشر على Firebase
 ```
 
 ## الصفحات
@@ -185,61 +186,68 @@ Spark ضمن حصص يومية.
 كل نتيجة وتسرد ما لا يطابق. راجع هذا التقرير دوريًا؛ وجود سطر فيه يعني أن السجل
 لم يُكتب من التطبيق كما هو.
 
-### 1 · المشروع
+### الخطوات
 
-من Firebase Console أنشئ مشروعًا (خطة Spark تكفي)، ثم أنشئ قاعدة **Firestore**
-في وضع Production واختر منطقة قريبة مثل `europe-west1`.
-
-لا يوجد schema تنشئه: المجموعات تظهر عند أول كتابة، وبنيتها موصوفة بالكامل في
-`lib/model.ts`.
-
-**النسخ الاحتياطي**: جدولة النسخ التلقائي في Firestore تتطلّب Blaze. على Spark
-صدّر البيانات دوريًا بنفسك — أبسط طريقة هي زر **تصدير CSV** في صفحة التقارير،
-واحتفظ بالملف خارج المشروع. سجل الفحص مستند جودة يُطلب إثباته، وفقدانه ليس عطلًا
-بل عدم مطابقة.
-
-### 2 · قواعد الأمان والمصادقة
+الأمر الوحيد الذي لا يمكن أتمتته هو تسجيل دخولك بحساب Google — تفويض شخصي لا
+ينوب عنك فيه أحد. الباقي أمر واحد.
 
 ```bash
-npx firebase login
-npx firebase use YOUR_PROJECT_ID
-npm run rules:deploy
+npx firebase login          # يفتح المتصفّح، مرة واحدة
+npx firebase use <project-id>
+npm run deploy              # يقرأ الإعدادات، يبني، وينشر الموقع والقواعد معًا
 ```
 
-ثم من Console فعّل **Authentication → Sign-in method → Email/Password**، ولا
-تفعّل التسجيل الذاتي.
+`npm run deploy` يقرأ إعدادات تطبيق الويب من المشروع نفسه ويكتب
+`.env.production`، فلا تنسخ قيمًا من Console ولا يسقط حرف من معرّف المشروع
+فيُبنى تطبيق لا يتكلّم مع شيء. وينشر الموقع والقواعد **معًا** عمدًا: نشر الموقع
+على قواعد قديمة هو الترتيب الوحيد الذي يمكن أن يترك البيانات مكشوفة.
 
-### 3 · أول حساب
+إن نقص شيء، السكربت يقف ويقول أي خطوة في Console تحلّه.
 
-على Spark بدون مفتاح خدمة، أنشئ الحساب من Console ثم امنحه الصلاحية:
+### ما يبقى في Console
 
-1. **Authentication → Users → Add user** بالبريد وكلمة المرور، وانسخ الـ **UID**.
-2. **Firestore → Start collection** باسم `users`، ومعرّف المستند هو الـ UID نفسه،
-   وبالحقول: `email` و`displayName` نصًّا، و`role` بقيمة `ADMIN`، و`active`
-   بقيمة `true` منطقية، و`signedInspections` بقيمة `0`.
+ثلاثة أشياء لا تملك أوامر في الـ CLI:
 
-بعدها ادخل بهذا الحساب وأنشئ باقي الحسابات من `/admin/users` — الصفحة تطلب الـ
-UID من Console وتتولّى الباقي.
+1. **تطبيق ويب**: Project Overview → Add app → الويب (`</>`). سمّه أي اسم وتخطَّ
+   خطوة Hosting. (هذا ما يقرأه `npm run deploy`.)
+2. **قاعدة Firestore**: Firestore Database → Create database → وضع Production
+   ومنطقة قريبة مثل `europe-west1`.
+3. **طريقة الدخول**: Authentication → Sign-in method → فعّل **Email/Password**.
+   لا تفعّل التسجيل الذاتي.
 
-ولو كان معك مفتاح خدمة، السطر الواحد يغني عن ذلك كله:
+### أول حساب
+
+الحسابات يُنشئها مدير النظام من داخل التطبيق — إلا الأول، فلا أحد ينشئه. طريقتان:
+
+**بدون أي مفتاح، من Console** (دقيقتان):
+
+1. **Authentication → Users → Add user** بالبريد وكلمة المرور، ثم انسخ الـ **UID**.
+2. **Firestore Database → Start collection** باسم `users`، ومعرّف المستند هو
+   الـ UID نفسه، بهذه الحقول بالضبط:
+
+   | الحقل | النوع | القيمة |
+   | --- | --- | --- |
+   | `email` | string | بريد الحساب |
+   | `displayName` | string | الاسم الذي يُوقَّع به على الفحوص |
+   | `role` | string | `ADMIN` |
+   | `active` | boolean | `true` |
+   | `signedInspections` | number | `0` |
+
+**أو بأمر واحد**، إن نزّلت مفتاح خدمة من Settings → Project settings →
+Service accounts → Generate new private key:
 
 ```bash
-ADMIN_EMAIL=qa.manager@example.com ADMIN_PASSWORD='...' \
-ADMIN_NAME='م. منى رشاد' FIREBASE_PROJECT_ID=PROJECT_ID \
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json npm run create-admin
+FIREBASE_PROJECT_ID=<project-id> \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json \
+ADMIN_EMAIL=qa.manager@example.com ADMIN_NAME='م. منى رشاد' \
+ADMIN_PASSWORD='...' npm run create-admin
 ```
 
-لا تمرّر كلمة المرور كوسيط في سطر الأوامر؛ تظهر في تاريخ الطرفية.
+احفظ المفتاح خارج المستودع، ولا تمرّر كلمة المرور كوسيط في سطر الأوامر؛ تظهر في
+تاريخ الطرفية.
 
-### 4 · الإعداد والنشر
-
-املأ قيم `NEXT_PUBLIC_FIREBASE_*` في `.env` من إعدادات تطبيق الويب في Console
-(هذه القيم تصل المتصفّح بحكم التصميم، وهي تعرّف المشروع ولا تمنح شيئًا)، ثم:
-
-```bash
-npm run build
-npx firebase deploy --only hosting,firestore:rules
-```
+بعد ذلك ادخل على `https://<project-id>.web.app` وأنشئ باقي الحسابات من
+`/admin/users`.
 
 ### ما الذي يستهلك الحصة
 

@@ -18,7 +18,8 @@
     "test:integration": "vitest run tests/integrity.test.ts",
     "test:rules": "vitest run tests/rules.test.ts",
     "test:e2e": "node tests/e2e.mjs",
-    "serve": "firebase emulators:start --only hosting"
+    "serve": "firebase emulators:start --only hosting",
+    "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
     "firebase": "^12.19.0",
