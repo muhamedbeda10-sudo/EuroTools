@@ -9,8 +9,8 @@ import { InlineForm } from "@/components/InlineForm";
 import { InspectionSheet } from "@/components/InspectionSheet";
 import { PhotoGallery } from "@/components/PhotoGallery";
 import { PrintButton } from "@/components/PrintButton";
-import { Card, Empty, Kv, PageHeader, StatusPill } from "@/components/ui";
-import { can } from "@/lib/domain/roles";
+import { Card, Empty, Kv, StatusPill } from "@/components/ui";
+import { allows } from "@/lib/domain/roles";
 import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
 import { fmtDate, fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
 import { recordInspection, recordReworkDone } from "@/lib/client/actions";
@@ -29,10 +29,6 @@ function PieceView({ id }: { id: string }) {
     <Async state={state} empty={<Empty>That piece does not exist.</Empty>}>
       {(d) => (
         <>
-          <PageHeader
-            title={`Piece ${d.piece.serial}`}
-            subtitle={`${d.piece.project} · ${d.piece.itemName}`}
-          />
 
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <PrintButton />
@@ -62,7 +58,7 @@ function PieceView({ id }: { id: string }) {
             </Card>
 
             <div className="min-w-0 lg:col-span-2" id="measure">
-              {d.piece.state === "WAITING_QC" && can(me.role, "inspection.record") ? (
+              {d.piece.state === "WAITING_QC" && allows(me, "inspection.record") ? (
                 <Card
                   title={`Measure — ${STAGE_LABELS[d.piece.stage]}`}
                   subtitle={
@@ -91,7 +87,7 @@ function PieceView({ id }: { id: string }) {
                     This piece stays at {STAGE_LABELS[d.piece.stage]} until the rework is done. When
                     the department reports back, close it out here and measure it again.
                   </p>
-                  {can(me.role, "rework.record") && (
+                  {allows(me, "rework.record") && (
                     <div className="mt-3">
                       <InlineForm
                         action={recordReworkDone(me)}

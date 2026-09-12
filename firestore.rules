@@ -58,29 +58,61 @@ service cloud.firestore {
       return signedIn() && account().role in roles;
     }
 
-    // These sets mirror `lib/domain/roles.ts`.
+    /** What a role carries, before anything is said about the person holding
+     *  it. These sets mirror `MATRIX` in `lib/domain/roles.ts`. Rules cannot
+     *  import, so widening a role means editing both — which is the point: it
+     *  has to be deliberate twice. */
+    function roleHas(role, permission) {
+      return (role == 'ADMIN'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record', 'config.manage', 'user.manage'])
+          || (role == 'QUALITY_MANAGER'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record', 'config.manage'])
+          || (role == 'SUPERVISOR'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record'])
+          || (role == 'INSPECTOR'
+              && permission in ['inspection.record', 'rework.record']);
+    }
+
+    /** What this account may actually do.
+     *
+     *  A role is the baseline; two lists on the account move it. `granted`
+     *  adds, `denied` takes away, and a denial wins — so taking access away
+     *  from one person is never ambiguous. The same three lines are in
+     *  `allows()` in `lib/domain/roles.ts`, which is what the interface asks
+     *  before it draws a button. This is what decides.
+     */
+    function grants(permission) {
+      return signedIn()
+        && !(permission in account().get('denied', []))
+        && (permission in account().get('granted', [])
+            || roleHas(account().role, permission));
+    }
+
     function canRead() {
       return signedIn();
     }
 
     function canPlan() {
-      return hasRole(['SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+      return grants('planning.manage');
     }
 
     function canRecord() {
-      return hasRole(['INSPECTOR', 'SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+      return grants('inspection.record');
     }
 
     function canBypass() {
-      return hasRole(['SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+      return grants('verdict.bypass');
     }
 
     function canConfig() {
-      return hasRole(['QUALITY_MANAGER', 'ADMIN']);
+      return grants('config.manage');
     }
 
-    function isAdmin() {
-      return hasRole(['ADMIN']);
+    function canManageUsers() {
+      return grants('user.manage');
     }
 
     /** The keys an update actually changes. */
@@ -93,10 +125,11 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if canRead();
 
-      // An administrator may not edit their own account. Another one has to,
-      // which stops the likeliest way to strand a plant outside its own
-      // quality system.
-      allow create, update: if isAdmin() && uid != request.auth.uid;
+      // Whoever may manage accounts may create and change them — except their
+      // own. Nobody edits their own account, which stops the likeliest way to
+      // strand a plant outside its own quality system, and stops somebody
+      // granting themselves a permission they were not given.
+      allow create, update: if canManageUsers() && uid != request.auth.uid;
 
       // An inspector's own signature count goes up when they sign a sheet.
       // Nothing else about their account may move with it.
@@ -111,8 +144,8 @@ service cloud.firestore {
     }
 
     match /userAuditEvents/{eventId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin();
+      allow read: if canManageUsers();
+      allow create: if canManageUsers();
       allow update, delete: if false;
     }
 

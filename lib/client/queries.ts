@@ -362,6 +362,8 @@ export function toUserRow(id: string, data: import("@/lib/model").UserDoc) {
     updatedAt: toDate(data.updatedAt),
     createdBy: data.createdByName ? { displayName: data.createdByName } : null,
     signedInspections: data.signedInspections ?? 0,
+    granted: data.granted ?? [],
+    denied: data.denied ?? [],
   };
 }
 

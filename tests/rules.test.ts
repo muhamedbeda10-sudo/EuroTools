@@ -34,6 +34,10 @@ const ACCOUNTS = {
   retired: { uid: "u-retired", role: "INSPECTOR", active: false },
   /** Authenticated with Firebase but never provisioned here. */
   stranger: { uid: "u-stranger", role: null, active: null },
+  /** An inspector who is also the only one keeping the drawings up to date. */
+  keeper: { uid: "u-keeper", role: "INSPECTOR", active: true, granted: ["config.manage"] },
+  /** A supervisor who must not grant concessions. */
+  restricted: { uid: "u-restricted", role: "SUPERVISOR", active: true, denied: ["verdict.bypass"] },
 } as const;
 
 type AccountName = keyof typeof ACCOUNTS;
@@ -142,6 +146,8 @@ beforeEach(async () => {
         role: account.role,
         active: account.active,
         signedInspections: 0,
+        granted: "granted" in account ? account.granted : [],
+        denied: "denied" in account ? account.denied : [],
       });
     }
     await db.doc("planningLines/l1").set(line());
@@ -436,6 +442,63 @@ describe("account administration", () => {
     await assertFails(mine.update({ active: true, role: "ADMIN" }));
     await assertFails(
       as("inspector").doc(`users/${ACCOUNTS.viewer.uid}`).update({ signedInspections: 99 })
+    );
+  });
+});
+
+describe("a permission given to one person rather than a role", () => {
+  const item = {
+    itemCode: "Core",
+    itemName: "Core insert",
+    dimensions: { ROUGHING: [], FINISH: [] },
+    defects: [],
+    updatedAt: new Date(),
+    updatedByUid: ACCOUNTS.keeper.uid,
+    updatedByName: "keeper",
+  };
+
+  it("lets an inspector who was granted it change the drawings", async () => {
+    // Forcing this person into a role that is wrong for them is how a
+    // permission system ends up with five people sharing one login.
+    await assertSucceeds(as("keeper").doc("itemConfigs/i_core").set(item));
+    await assertFails(as("inspector").doc("itemConfigs/i_core").set(item));
+  });
+
+  it("gives them nothing else along with it", async () => {
+    await assertFails(as("keeper").collection("planningLines").add(line()));
+    await assertFails(
+      as("keeper").doc("users/u-new").set({ email: "x@y.z", displayName: "X", role: "VIEWER", active: true })
+    );
+  });
+
+  it("takes away what somebody was denied, whatever their role says", async () => {
+    // The supervisor who may do everything a supervisor does except let
+    // product through on a concession.
+    await assertFails(
+      as("restricted").collection("inspections").add(
+        sheet({
+          inspectorUid: ACCOUNTS.restricted.uid,
+          suggested: "HOLD",
+          verdict: "ACCEPTED_BYPASS",
+          bypassReason: "signed off verbally",
+        })
+      )
+    );
+    // Everything else about the role still works.
+    await assertSucceeds(as("restricted").collection("planningLines").add(line()));
+    await assertSucceeds(
+      as("restricted").collection("inspections").add(sheet({ inspectorUid: ACCOUNTS.restricted.uid }))
+    );
+  });
+
+  it("is not something an account can give itself", async () => {
+    // Nobody edits their own account, which is what stops a granted
+    // permission from being a way to grant more.
+    await assertFails(
+      as("admin").doc(`users/${ACCOUNTS.admin.uid}`).update({ granted: ["user.manage"] })
+    );
+    await assertFails(
+      as("keeper").doc(`users/${ACCOUNTS.keeper.uid}`).update({ granted: ["user.manage"] })
     );
   });
 });

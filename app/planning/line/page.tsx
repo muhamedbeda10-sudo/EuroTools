@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { Async } from "@/components/Async";
-import { Card, Empty, Kv, PageHeader, StatusPill } from "@/components/ui";
+import { Card, Empty, Kv, StatusPill } from "@/components/ui";
 import { STAGE_LABELS } from "@/lib/domain/workflow";
 import { fmtDate, fmtDuration } from "@/lib/format";
 import { getLine } from "@/lib/client/queries";
@@ -23,10 +23,6 @@ function LineView({ id }: { id: string }) {
     <Async state={state} empty={<Empty>That line does not exist.</Empty>}>
       {(d) => (
         <>
-          <PageHeader
-            title={`${d.line.project} · ${d.line.itemCode}`}
-            subtitle={d.line.itemName}
-          />
 
           <div className="grid gap-4 lg:grid-cols-3">
             <Card title="The line as planning wrote it">

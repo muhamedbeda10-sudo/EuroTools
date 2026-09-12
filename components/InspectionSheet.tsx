@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { ActionForm } from "./ActionForm";
 import { PhotoField } from "./PhotoField";
 import { StatusPill } from "./ui";
-import { can } from "@/lib/domain/roles";
+import { allows } from "@/lib/domain/roles";
 import { result, suggest, type Reading } from "@/lib/domain/measurement";
 import { STAGE_LABELS, VERDICTS, VERDICT_LABELS, type Verdict } from "@/lib/domain/workflow";
 
@@ -83,7 +83,7 @@ export function InspectionSheet({
   }, [rows, ticks]);
 
   const verdict: Verdict = chosen || suggestion.verdict;
-  const mayBypass = can(me.role, "verdict.bypass");
+  const mayBypass = allows(me, "verdict.bypass");
   const isConcession = verdict !== "HOLD" && suggestion.verdict === "HOLD";
   const holdDepartment = department || suggestion.department || "";
 

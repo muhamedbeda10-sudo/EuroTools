@@ -3,7 +3,7 @@
 import Link from "next/link";
 
 import { Async } from "@/components/Async";
-import { Card, Empty, PageHeader, Stat, StatusPill } from "@/components/ui";
+import { Card, Empty, Stat, StatusPill } from "@/components/ui";
 import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
 import { fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
 import { getDashboard } from "@/lib/client/queries";
@@ -26,7 +26,6 @@ export default function DashboardPage() {
     <Async state={state}>
       {(d) => (
         <>
-          <PageHeader title="Quality Dashboard" subtitle="Everything waiting, and what is holding it up" />
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Waiting on quality" value={d.totals.withQc} tone={d.totals.withQc > 0 ? "warn" : "ok"}

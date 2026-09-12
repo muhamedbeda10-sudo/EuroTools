@@ -22,7 +22,7 @@ import {
   type Stage,
 } from "@/lib/domain/workflow";
 import { result, suggest, type Defect, type Reading } from "@/lib/domain/measurement";
-import { can, verdictPermission, type Permission } from "@/lib/domain/roles";
+import { allows, verdictPermission, type Permission } from "@/lib/domain/roles";
 import { optionalNumber, optionalString } from "@/lib/format";
 import {
   CONFIG_DOCS,
@@ -92,7 +92,7 @@ export interface ActionResult {
 const now = () => Timestamp.now();
 
 function allow(actor: SessionUser, permission: Permission): ActionResult | null {
-  if (!can(actor.role, permission))
+  if (!allows(actor, permission))
     return { ok: false, error: "You do not have permission to do that." };
   return null;
 }
@@ -897,65 +897,134 @@ export const importItemConfigs =
 
 // ───────────────────────── accounts ─────────────────────────
 
+/** Add somebody: a sign-in and the access that goes with it.
+ *
+ *  Two writes that have to be thought of as one. The Firebase account is what
+ *  lets them sign in; the document here is what lets them do anything, and
+ *  without it they sign in successfully and read nothing at all. If the second
+ *  fails the first is left behind — a sign-in with no access, which is the
+ *  safe half to be stranded with, and is recoverable by adding the person
+ *  again with the same address.
+ */
 export const grantAccess =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
     const denied = allow(actor, "user.manage");
     if (denied) return denied;
 
-    const uid = String(formData.get("uid") ?? "").trim();
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const displayName = String(formData.get("displayName") ?? "").trim();
+    const password = String(formData.get("password") ?? "");
     const role = String(formData.get("role") ?? "").trim();
+    const employeeNo = optionalString(formData.get("employeeNo"));
+    const granted = formData.getAll("granted").map(String);
+    const denyList = formData.getAll("denied").map(String);
 
-    if (!uid) return { ok: false, error: "A Firebase UID is required. Copy it from the Firebase console." };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return { ok: false, error: "That email address is not valid." };
     if (!displayName)
       return { ok: false, error: "A name is required. It is the name that signs every inspection." };
+    if (password.length < 8)
+      return { ok: false, error: "The starting password must be at least 8 characters." };
 
     const { isRole } = await import("@/lib/domain/roles");
     if (!isRole(role)) return { ok: false, error: "Unknown role." };
-    if (uid === actor.uid)
-      return { ok: false, error: "You cannot edit your own account. Another administrator has to." };
+
+    const { createSignIn } = await import("@/lib/client/provision");
+    const signIn = await createSignIn(email, password, displayName);
+    if (!signIn.ok) return { ok: false, error: signIn.error };
 
     try {
-      const ref = docIn(users(), uid);
-      const existing = await getDoc(ref);
-      await setDoc(
-        ref,
-        {
-          email,
-          displayName,
-          role,
-          employeeNo: optionalString(formData.get("employeeNo")),
-          active: true,
-          createdAt: existing.exists() ? (existing.data() as { createdAt: unknown }).createdAt : now(),
-          updatedAt: now(),
-          createdByUid: actor.uid,
-          createdByName: actor.displayName,
-          signedInspections: existing.exists()
-            ? ((existing.data() as { signedInspections?: number }).signedInspections ?? 0)
-            : 0,
-        },
-        { merge: true }
-      );
+      const at = now();
+      const batch = writeBatch(clientDb());
 
-      await setDoc(docIn(userAuditEvents()), {
-        at: now(),
-        kind: existing.exists() ? "ROLE_CHANGED" : "CREATED",
-        subjectUid: uid,
+      batch.set(docIn(users(), signIn.uid), {
+        email,
+        displayName,
+        role,
+        granted,
+        denied: denyList,
+        employeeNo,
+        active: true,
+        createdAt: at,
+        updatedAt: at,
+        createdByUid: actor.uid,
+        createdByName: actor.displayName,
+        signedInspections: 0,
+      });
+
+      batch.set(docIn(userAuditEvents()), {
+        at,
+        kind: "CREATED",
+        subjectUid: signIn.uid,
         subjectName: displayName,
         actorUid: actor.uid,
         actorName: actor.displayName,
-        fromValue: existing.exists() ? ((existing.data() as { role?: string }).role ?? null) : null,
+        fromValue: null,
         toValue: role,
       });
+
+      await batch.commit();
     } catch (error) {
-      return explain(error, "Could not save the account.");
+      return explain(
+        error,
+        "The sign-in was created but the account was not. Add the person again with the same address."
+      );
     }
 
-    return { ok: true, info: `${displayName} now has the ${role} role.` };
+    return {
+      ok: true,
+      info: `${displayName} can sign in with ${email}. Hand them the password and ask them to change it.`,
+    };
+  };
+
+/** What one person may do, beyond or short of their role. */
+export const setUserPermissions =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "user.manage");
+    if (denied) return denied;
+
+    const uid = optionalString(formData.get("uid"));
+    if (!uid) return { ok: false, error: "That account reference is not valid." };
+    if (uid === actor.uid)
+      return {
+        ok: false,
+        error: "You cannot change your own permissions. Another administrator has to.",
+      };
+
+    const granted = formData.getAll("granted").map(String);
+    const denyList = formData.getAll("denied").map(String);
+
+    try {
+      const snapshot = await getDoc(docIn(users(), uid));
+      if (!snapshot.exists()) return { ok: false, error: "That account no longer exists." };
+      const subject = snapshot.data() as { displayName: string };
+
+      const at = now();
+      const batch = writeBatch(clientDb());
+      batch.update(docIn(users(), uid), { granted, denied: denyList, updatedAt: at });
+      batch.set(docIn(userAuditEvents()), {
+        at,
+        kind: "ROLE_CHANGED",
+        subjectUid: uid,
+        subjectName: subject.displayName,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        fromValue: null,
+        toValue: [
+          granted.length > 0 ? `+${granted.join(", ")}` : "",
+          denyList.length > 0 ? `-${denyList.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ") || "no exceptions",
+      });
+      await batch.commit();
+    } catch (error) {
+      return explain(error, "Could not save the permissions.");
+    }
+
+    return { ok: true, info: "Permissions saved." };
   };
 
 export const setUserRole =

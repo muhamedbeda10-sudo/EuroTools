@@ -5,7 +5,12 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 
-import { isRole, type Role } from "@/lib/domain/roles";
+import {
+  PERMISSIONS,
+  isRole,
+  type Permission,
+  type Role,
+} from "@/lib/domain/roles";
 import { clientAuth, clientDb } from "@/lib/client/firebase";
 import { COLLECTIONS, type UserDoc } from "@/lib/model";
 
@@ -17,6 +22,10 @@ export interface SessionUser {
   displayName: string;
   role: Role;
   employeeNo: string | null;
+  /** How this account differs from its role, kept as stored so that anything
+   *  reading the session asks the same question `firestore.rules` will. */
+  granted: Permission[];
+  denied: Permission[];
 }
 
 interface SessionState {
@@ -108,6 +117,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             displayName: account.displayName,
             role: account.role,
             employeeNo: account.employeeNo ?? null,
+            // Anything stored that is not a permission this build knows about
+            // is dropped rather than carried: an old name left on an account
+            // must not become a grant of something else.
+            granted: keepKnown(account.granted),
+            denied: keepKnown(account.denied),
           },
           loading: false,
           rejection: null,
@@ -132,6 +146,11 @@ export function useSession(): SessionState {
  *  Returns null while the session is still being restored, which every page
  *  renders as its loading state rather than as "signed out".
  */
+const keepKnown = (values: unknown): Permission[] =>
+  Array.isArray(values)
+    ? (values.filter((v) => (PERMISSIONS as readonly unknown[]).includes(v)) as Permission[])
+    : [];
+
 export function useRequireSession(): SessionUser | null {
   const { user, loading } = useSession();
   const router = useRouter();

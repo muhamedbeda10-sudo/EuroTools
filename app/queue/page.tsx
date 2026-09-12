@@ -6,9 +6,9 @@ import { Suspense } from "react";
 
 import { Async } from "@/components/Async";
 import { InlineForm } from "@/components/InlineForm";
-import { Card, Empty, PageHeader, StatusPill } from "@/components/ui";
+import { Card, Empty, StatusPill } from "@/components/ui";
 import { STAGES, STAGE_LABELS, isStage, type Stage } from "@/lib/domain/workflow";
-import { can } from "@/lib/domain/roles";
+import { allows } from "@/lib/domain/roles";
 import { fmtDate, fmtDuration } from "@/lib/format";
 import { recordReworkDone } from "@/lib/client/actions";
 import { getQueue, type QueueRow } from "@/lib/client/queries";
@@ -26,10 +26,6 @@ function QueueView({ stage }: { stage: Stage }) {
 
   return (
     <>
-      <PageHeader
-        title={`${STAGE_LABELS[stage]} queue`}
-        subtitle="Highest priority first, then whatever has waited longest"
-      />
 
       <div className="mb-4 flex flex-wrap gap-2">
         {STAGES.map((s) => (
@@ -127,7 +123,7 @@ function Rows({
                   <Link href={`/piece/?id=${p.id}`} className="btn btn-primary">
                     Measure
                   </Link>
-                ) : can(me.role, "rework.record") ? (
+                ) : allows(me, "rework.record") ? (
                   <InlineForm
                     action={recordReworkDone(me)}
                     onSuccess={refresh}

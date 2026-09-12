@@ -34,14 +34,22 @@ function check(label, ok, detail = "") {
   console.log(`${ok ? "  ok  " : " FAIL "} ${label}${detail ? ` — ${detail}` : ""}`);
 }
 
-/** A planning sheet, written to disk so the page opens a real file. */
+/** A planning sheet, written to disk so the page opens a real file.
+ *
+ *  The project number is fresh every run. Re-importing a row that is already
+ *  there is refused by design — that is what stops a sheet imported twice
+ *  creating the pieces twice — so a fixed number would make this pass once and
+ *  then quietly test nothing.
+ */
+const PROJECT = `MM26${String(Date.now()).slice(-6)}`;
+const CORE = `${PROJECT}-Core-001`;
 const SHEET = join(tmpdir(), `qc-planning-${Date.now()}.csv`);
 writeFileSync(
   SHEET,
   [
     "Project,MPLPR,Item,Name,Qty,Measuring type,Date,Priority,Duration,Description,Complete",
-    "MM260001,MP,Core,Core insert,2,CMM,12/09/2026,A,,,",
-    "MM260001,MP,Cavity,Cavity block,1,Traditional,12/09/2026,B,,,",
+    `${PROJECT},MP,Core,Core insert,2,CMM,12/09/2026,A,,,`,
+    `${PROJECT},MP,Cavity,Cavity block,1,Traditional,12/09/2026,B,,,`,
   ].join("\n"),
   "utf8"
 );
@@ -78,6 +86,16 @@ try {
   await page.waitForURL((url) => !url.pathname.includes("login"), { timeout: 25000 });
   check("signing in lands on the dashboard", !page.url().includes("login"));
 
+  // ── adding somebody, without leaving the application ──
+  await go("/admin/users/", 'input[name="displayName"]');
+  await page.fill('input[name="displayName"]', "Hala Fouad");
+  await page.fill('input[name="email"]', `hala-${Date.now()}@example.invalid`);
+  await page.fill('input[name="password"]', "StrongPass123");
+  await save("Create account");
+  const people = await page.textContent("body");
+  check("an account is created from inside the application", people.includes("Hala Fouad"));
+  check("and the administrator is still signed in as themselves", people.includes("Mona Rashad"));
+
   // ── settings: the departments a hold may name ──
   await go("/settings/", 'textarea[name="departments"]');
   await page.fill('textarea[name="departments"]', "Machining\nGrinding\nHeat treatment");
@@ -113,18 +131,21 @@ try {
 
   await page.click('button:has-text("Bring in")');
   await page.waitForSelector("text=brought in", { timeout: 25000 });
-  await go("/planning/", "text=MM260001");
+  await go("/planning/", `text=${PROJECT}`);
   const planning = await page.textContent("body");
-  check("both lines are in", planning.includes("Core") && planning.includes("Cavity"));
+  check("both lines are in", planning.includes(PROJECT) && planning.includes("Cavity"));
 
   // ── the queue: three pieces from two lines ──
-  await go("/queue/", "text=Roughing queue");
+  await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
   const queue = await page.textContent("body");
-  check("every piece of every line is waiting", /MM260001-Core-001/.test(queue) && /MM260001-Cavity-001/.test(queue));
+  check(
+    "every piece of every line is waiting",
+    queue.includes(CORE) && queue.includes(`${PROJECT}-Cavity-001`)
+  );
 
   // ── measure it, and hold it ──
-  await page.click('a:has-text("MM260001-Core-001")');
+  await page.click(`a:has-text("${CORE}")`);
   await page.waitForSelector("text=Outside diameter", { timeout: 25000 });
   check("the sheet comes ready with the item's dimensions", true);
 
@@ -148,13 +169,13 @@ try {
   page.once("dialog", (d) => d.accept());
   await page.click('button:has-text("Rework done")');
   await page.waitForTimeout(2500);
-  await go("/queue/", "text=Roughing queue");
+  await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
   const backWithQc = await page.textContent("body");
-  check("closing the rework brings it back to quality", backWithQc.includes("MM260001-Core-001"));
+  check("closing the rework brings it back to quality", backWithQc.includes(CORE));
 
   // ── measure it again, and accept it ──
-  await page.click('a:has-text("MM260001-Core-001")');
+  await page.click(`a:has-text("${CORE}")`);
   await page.waitForSelector("text=Outside diameter", { timeout: 25000 });
   const round = await page.textContent("body");
   check("it comes back as a second round at the same stage", round.includes("round 2") || round.includes("Round 2"));
@@ -167,13 +188,16 @@ try {
   check("its measurement count follows it", /Times measured[\s\S]{0,80}2/.test(moved));
 
   // ── the dashboard reads the tallies ──
-  await go("/", "text=Quality Dashboard");
+  await go("/", "text=Waiting on quality");
   await page.waitForTimeout(3000);
   const dash = await page.textContent("body");
   check("the dashboard counts the hold against its department", dash.includes("Machining"));
   check("the dashboard shows what is still waiting", /Waiting on quality/.test(dash));
 
   // ── the rules are still the boundary ──
+  // Sign out lives under the account menu now, not on the bar.
+  await page.click('button:has-text("Mona Rashad")');
+  await page.waitForTimeout(300);
   await page.click('button:has-text("Sign out")');
   await page.waitForURL(/\/login/, { timeout: 25000 });
   check("signing out returns to the login page", page.url().includes("/login"));

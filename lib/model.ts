@@ -316,6 +316,11 @@ export interface UserDoc {
   email: string;
   displayName: string;
   role: string;
+  /** How this person differs from their role. Absent on most accounts, and
+   *  should be: a permission system where everybody is an exception is a
+   *  permission system nobody can audit. A denial wins over a grant. */
+  granted?: string[] | null;
+  denied?: string[] | null;
   employeeNo: string | null;
   active: boolean;
   createdAt: StoredTimestamp;

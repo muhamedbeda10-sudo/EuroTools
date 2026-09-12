@@ -95,9 +95,52 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "user.manage": "Manage accounts",
 };
 
-/** Does this role carry this permission? The only question anything asks. */
+/** Does this role carry this permission, before anything is said about the
+ *  person holding it? */
 export function can(role: Role, permission: Permission): boolean {
   return MATRIX[role].includes(permission);
+}
+
+/** What one account may actually do.
+ *
+ *  A role is the starting point, not the answer. Real plants have an inspector
+ *  who is also the only one who keeps the drawings up to date, and a
+ *  supervisor who must not grant concessions until they have been signed off
+ *  on it. Forcing those people into a role that is wrong for them is how a
+ *  permission system ends up with five accounts sharing one login.
+ *
+ *  So a role sets the baseline and two lists move it: `granted` adds, `denied`
+ *  takes away, and a denial wins. Both are stored on the account, both are
+ *  visible on the admin screen, and both are re-read by `firestore.rules` on
+ *  every operation — the same shape, written out again there, because rules
+ *  cannot import.
+ */
+export interface Grants {
+  role: Role;
+  granted?: readonly Permission[] | null;
+  denied?: readonly Permission[] | null;
+}
+
+export function allows(account: Grants, permission: Permission): boolean {
+  if (account.denied?.includes(permission)) return false;
+  if (account.granted?.includes(permission)) return true;
+  return can(account.role, permission);
+}
+
+/** Everything an account may do, for the admin screen and for the session. */
+export function effectivePermissions(account: Grants): Permission[] {
+  return PERMISSIONS.filter((p) => allows(account, p));
+}
+
+/** How one account differs from its role, said in words. Empty when it does
+ *  not — which is the normal case, and should look like it. */
+export function describeOverrides(account: Grants): string[] {
+  const out: string[] = [];
+  for (const p of account.granted ?? [])
+    if (!can(account.role, p)) out.push(`also ${PERMISSION_LABELS[p].toLowerCase()}`);
+  for (const p of account.denied ?? [])
+    if (can(account.role, p)) out.push(`not ${PERMISSION_LABELS[p].toLowerCase()}`);
+  return out;
 }
 
 /** Narrow a value read from the database or a form to a known role. */

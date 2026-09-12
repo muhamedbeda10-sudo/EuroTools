@@ -23,12 +23,21 @@ function Mark({ size }: { size: "sm" | "lg" }) {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/logo-mark.svg" alt="" aria-hidden className={`${markPx} w-auto`} />
 
-      <span className="flex flex-col justify-center leading-none">
-        <span className={`font-extrabold tracking-tight text-[var(--foreground)] ${euro}`}>
+      {/* EURO is stretched to the exact width of the line beneath it, the way
+          the company sets its own mark: the two lines share an edge on both
+          sides, so the block reads as one thing rather than as a word with a
+          caption. The narrower line defines the column and the wider one
+          fills it, justified letter by letter. */}
+      <span className="inline-grid leading-none">
+        <span
+          className={`block font-extrabold text-[var(--foreground)] ${euro}`}
+          style={{ textAlign: "justify", textAlignLast: "justify" }}
+        >
           EURO
         </span>
         <span
-          className={`mt-[0.2em] font-semibold uppercase tracking-[0.14em] text-[var(--brand)] ${sub}`}
+          className={`mt-[0.22em] block font-semibold uppercase text-[var(--brand)] ${sub}`}
+          style={{ letterSpacing: "0.06em" }}
         >
           Tools &amp; Automation
         </span>

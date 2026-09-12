@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allows,
+  describeOverrides,
+  effectivePermissions,
   PERMISSIONS,
   ROLES,
   can,
@@ -91,5 +94,50 @@ describe("reading a role back out of the database", () => {
   it("accepts the five and nothing else", () => {
     for (const r of ROLES) expect(isRole(r)).toBe(true);
     for (const junk of ["admin", "MANAGER", "", null, 7, {}]) expect(isRole(junk)).toBe(false);
+  });
+});
+
+describe("what one account may actually do", () => {
+  const inspector = { role: "INSPECTOR" as const };
+
+  it("follows the role when nothing has been said about the person", () => {
+    expect(allows(inspector, "inspection.record")).toBe(true);
+    expect(allows(inspector, "config.manage")).toBe(false);
+    expect(effectivePermissions(inspector)).toEqual([...permissionsOf("INSPECTOR")]);
+  });
+
+  it("adds what a person has been granted on top of their role", () => {
+    // The inspector who is also the only one keeping the drawings up to date.
+    const account = { ...inspector, granted: ["config.manage"] as const };
+    expect(allows(account, "config.manage")).toBe(true);
+    expect(allows(account, "user.manage")).toBe(false);
+  });
+
+  it("takes away what a person has been denied, whatever their role says", () => {
+    // The supervisor who must not grant concessions until they are signed off.
+    const account = { role: "SUPERVISOR" as const, denied: ["verdict.bypass"] as const };
+    expect(allows(account, "verdict.bypass")).toBe(false);
+    expect(allows(account, "inspection.record")).toBe(true);
+  });
+
+  it("lets a denial win over a grant, so removing access is never ambiguous", () => {
+    const account = {
+      ...inspector,
+      granted: ["config.manage"] as const,
+      denied: ["config.manage"] as const,
+    };
+    expect(allows(account, "config.manage")).toBe(false);
+  });
+
+  it("says how an account differs from its role, and says nothing when it does not", () => {
+    expect(describeOverrides(inspector)).toEqual([]);
+    // A grant of something the role already had is not a difference.
+    expect(describeOverrides({ ...inspector, granted: ["inspection.record"] })).toEqual([]);
+    expect(describeOverrides({ ...inspector, granted: ["config.manage"] })).toEqual([
+      "also define dimensions, defects and departments",
+    ]);
+    expect(
+      describeOverrides({ role: "SUPERVISOR", denied: ["verdict.bypass"] })
+    ).toEqual(["not accept on a concession"]);
   });
 });

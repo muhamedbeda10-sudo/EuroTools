@@ -6,8 +6,8 @@ import { Suspense, useState } from "react";
 
 import { ActionForm } from "@/components/ActionForm";
 import { Async } from "@/components/Async";
-import { Card, Empty, PageHeader } from "@/components/ui";
-import { can } from "@/lib/domain/roles";
+import { Card, Empty } from "@/components/ui";
+import { allows } from "@/lib/domain/roles";
 import { STAGES, STAGE_LABELS, type Stage } from "@/lib/domain/workflow";
 import { saveItemConfig } from "@/lib/client/actions";
 import { getDepartments, getItemConfig } from "@/lib/client/queries";
@@ -33,7 +33,7 @@ function ItemEditor({ code }: { code: string | null }) {
     [code]
   );
   if (!me) return null;
-  if (!can(me.role, "config.manage"))
+  if (!allows(me, "config.manage"))
     return <Empty>Changing what a piece has to be needs a quality manager.</Empty>;
 
   return (
@@ -96,10 +96,6 @@ function Editor({
 
   return (
     <>
-      <PageHeader
-        title={item ? `Item ${item.itemCode}` : "New item"}
-        subtitle="The dimensions every sheet for this item will ask for"
-      />
 
       <ActionForm action={saveItemConfig(me)} onSuccess={onSaved} submitLabel="Save the item">
         <Card title="Item">
