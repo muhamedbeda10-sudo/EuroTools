@@ -14,34 +14,56 @@ import Link from "next/link";
  *  title nobody finishes.
  */
 function Mark({ size }: { size: "sm" | "lg" }) {
-  const markPx = size === "lg" ? "h-11" : "h-8";
-  const euro = size === "lg" ? "text-[1.75rem]" : "text-[1.2rem]";
-  const sub = size === "lg" ? "text-[0.62rem]" : "text-[0.48rem]";
+  const height = size === "lg" ? "h-11" : "h-8";
+  const wordHeight = size === "lg" ? "h-10" : "h-7";
 
   return (
     <span className="ltr inline-flex items-center gap-2.5">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/logo-mark.svg" alt="" aria-hidden className={`${markPx} w-auto`} />
+      <img src="/logo-mark.svg" alt="" aria-hidden className={`${height} w-auto`} />
 
-      {/* EURO is stretched to the exact width of the line beneath it, the way
-          the company sets its own mark: the two lines share an edge on both
-          sides, so the block reads as one thing rather than as a word with a
-          caption. The narrower line defines the column and the wider one
-          fills it, justified letter by letter. */}
-      <span className="inline-grid leading-none">
-        <span
-          className={`block font-extrabold text-[var(--foreground)] ${euro}`}
-          style={{ textAlign: "justify", textAlignLast: "justify" }}
+      {/* Both lines are forced to the same width, the way the company sets its
+          own mark: EURO and the line beneath it share an edge on each side, so
+          the block reads as one thing rather than as a word with a caption.
+          
+          SVG rather than CSS because CSS cannot do it. `text-align: justify`
+          distributes space between *words*, and EURO is one word with nothing
+          to distribute; `textLength` states the width outright and
+          `lengthAdjust="spacing"` reaches it by opening the letters rather
+          than stretching their shapes. */}
+      <svg
+        viewBox="0 0 144 60"
+        className={`${wordHeight} w-auto`}
+        role="img"
+        aria-label="EURO Tools & Automation"
+      >
+        <text
+          x="0"
+          y="40"
+          textLength="144"
+          lengthAdjust="spacing"
+          fontFamily="inherit"
+          fontSize="46"
+          fontWeight="800"
+          fill="var(--foreground)"
         >
           EURO
-        </span>
-        <span
-          className={`mt-[0.22em] block font-semibold uppercase text-[var(--brand)] ${sub}`}
-          style={{ letterSpacing: "0.06em" }}
+        </text>
+        {/* Mixed case, as the company sets it. All caps here would be half as
+            wide again and force EURO open to meet it. */}
+        <text
+          x="0"
+          y="57"
+          textLength="144"
+          lengthAdjust="spacing"
+          fontFamily="inherit"
+          fontSize="14.5"
+          fontWeight="600"
+          fill="var(--brand)"
         >
           Tools &amp; Automation
-        </span>
-      </span>
+        </text>
+      </svg>
     </span>
   );
 }
