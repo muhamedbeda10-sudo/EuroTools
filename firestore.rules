@@ -1,23 +1,225 @@
 rules_version = '2';
 
-// Every byte of quality data is read and written by the server, through the
-// Firebase Admin SDK, which bypasses these rules by design. Nothing in the
-// browser ever talks to Firestore directly: the pages call Server Actions, and
-// those actions check the caller's role against the User document before they
-// touch anything.
+// The security boundary.
 //
-// So the correct rule here is to deny everything. It is not a formality — it is
-// the second lock. If a Firebase Web API key leaks (and it is public by
-// design, it is in the browser bundle), these rules are what stops somebody
-// reading the whole inspection history straight out of the database, or
-// signing an inspection without going through the permission checks in
-// `lib/server/`.
+// This app is served as static files and talks to Firestore from the browser,
+// so there is no server left to check anything. These rules are not a second
+// lock any more — they are the only lock, and every guarantee the application
+// used to make on the server has to be stated here or it does not exist.
 //
-// If a future feature genuinely needs a client to read Firestore directly,
-// open exactly that path and nothing more — and remember that a client-side
-// rule cannot consult the User table the way `requirePermission` does.
+// What they do enforce:
+//
+//   - Nothing at all without a signed-in, provisioned, active account. A
+//     Firebase account with no user document, or a deactivated one, gets
+//     nothing, which is how an inspector who leaves the company is locked out.
+//   - A signature belongs to the account that made it: an inspection may only
+//     be written with `inspectorUid` equal to the caller's own uid. Signing as
+//     somebody else is impossible rather than merely discouraged.
+//   - Releasing product needs the authority to release it, whether the write
+//     is an inspection carrying RELEASED or a part being moved to it.
+//   - Inspections, part events and account-audit entries are append-only at
+//     the database level: no update, no delete, by anyone, ever. That is
+//     stronger than the server version, which relied on the code not offering
+//     it.
+//   - Uniqueness survives intact. A reservation document may be created but
+//     never overwritten, and Firestore refuses to create a document that
+//     exists, so two writers racing for one part number still produce exactly
+//     one winner.
+//   - Accounts are never deleted, and an administrator cannot edit their own —
+//     the same separation of duties the server enforced.
+//
+// What they cannot enforce, stated plainly because it is the cost of running
+// without a server:
+//
+//   A checklist verdict is *derived* from the answers and the measurements by
+//   `lib/domain/inspection.ts`, and that arithmetic — tolerance bands, GD&T
+//   limits, critical features, hardness windows — cannot be expressed here.
+//   Rules cannot even iterate the measurements array. So the verdict is
+//   computed in the browser and written by the browser, and an account holder
+//   who tampers with the client can file a sheet whose stored verdict does not
+//   match its own evidence.
+//
+//   RELEASED is gated above, so the most consequential case is covered. The
+//   rest is caught rather than prevented: every answer and every measurement
+//   is stored, the rule is pure, so `/reports` re-derives every verdict and
+//   lists any record that disagrees with itself. Detection, not prevention —
+//   which is worth knowing about the system rather than discovering later.
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ───────────────────────── who is asking ─────────────────────────
+
+    function accountPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function account() {
+      return get(accountPath()).data;
+    }
+
+    /** Signed in to Firebase, provisioned here, and not deactivated. */
+    function signedIn() {
+      return request.auth != null
+        && exists(accountPath())
+        && account().active == true;
+    }
+
+    function hasRole(roles) {
+      return signedIn() && account().role in roles;
+    }
+
+    // These sets mirror `lib/domain/roles.ts`. They are duplicated because
+    // rules cannot import, so widening a role means editing both — which is
+    // the point: it has to be deliberate in two places.
+    function canRecord() {
+      return hasRole(['INSPECTOR', 'SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+    }
+
+    function canRaise() {
+      return hasRole(['SUPERVISOR', 'QUALITY_MANAGER', 'ADMIN']);
+    }
+
+    function canRelease() {
+      return hasRole(['QUALITY_MANAGER', 'ADMIN']);
+    }
+
+    function canManageSpecs() {
+      return hasRole(['QUALITY_MANAGER', 'ADMIN']);
+    }
+
+    function isAdmin() {
+      return hasRole(['ADMIN']);
+    }
+
+    /** Everyone with an active account may read. A VIEWER reads and nothing
+     *  else, which is exactly the role's definition. */
+    function canRead() {
+      return signedIn();
+    }
+
+    // ───────────────────────── accounts ─────────────────────────
+
+    match /users/{uid} {
+      allow read: if canRead();
+
+      // An administrator may not edit their own account. Another one has to,
+      // which stops the likeliest way to strand a plant outside its own
+      // quality system.
+      allow create, update: if isAdmin() && uid != request.auth.uid;
+
+      // Retiring an account is deactivation. Deleting one would orphan every
+      // inspection it signed, and a Firestore reference cannot refuse the way
+      // a foreign key did — so the delete is refused here instead.
+      allow delete: if false;
+    }
+
+    match /userAuditEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ───────────────────────── uniqueness ─────────────────────────
+
+    match /uniques/{key} {
+      allow read: if canRead();
+
+      // Create-only is the whole mechanism: the document's id *is* the value,
+      // Firestore refuses to create one that exists, and nothing here may
+      // overwrite it. Two writers racing for a part number still produce one
+      // winner.
+      allow create: if canRecord();
+      allow update: if false;
+
+      // Only a spec owner hands a value back, and only when renaming a record
+      // onto a different one.
+      allow delete: if canManageSpecs();
+    }
+
+    // ───────────────────────── catalog ─────────────────────────
+
+    match /suppliers/{supplierId} {
+      allow read: if canRead();
+      allow create, update: if canRaise();
+      allow delete: if false;
+    }
+
+    match /materials/{materialId} {
+      allow read: if canRead();
+      // The drawing spec decides whether a part passes, so editing it is
+      // quality authority, not shop-floor work.
+      allow create, update: if canManageSpecs();
+      allow delete: if false;
+    }
+
+    // ───────────────────────── lots and analyses ─────────────────────────
+
+    match /lots/{lotId} {
+      allow read: if canRead();
+      allow create, update: if canRecord();
+      allow delete: if false;
+
+      match /analyses/{analysisId} {
+        allow read: if canRead();
+        allow create, update: if canRecord();
+        allow delete: if false;
+      }
+    }
+
+    // ───────────────────────── parts ─────────────────────────
+
+    match /parts/{partId} {
+      allow read: if canRead();
+      allow create: if canRaise();
+
+      // A part reaching RELEASED is the final quality release, whichever write
+      // moves it there.
+      allow update: if canRecord()
+        && (request.resource.data.status != 'RELEASED' || canRelease());
+
+      allow delete: if false;
+
+      match /events/{eventId} {
+        allow read: if canRead();
+        // The traveller's history. Append-only, and each entry names its
+        // author truthfully.
+        allow create: if canRecord() && request.resource.data.actorUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ───────────────────────── inspections ─────────────────────────
+
+    match /inspections/{inspectionId} {
+      allow read: if canRead();
+
+      allow create: if canRecord()
+        // The signature is the caller's own. This is the guarantee that
+        // mattered most on the server and it survives intact here.
+        && request.resource.data.inspectorUid == request.auth.uid
+        // Releasing product needs the authority to release it.
+        && (request.resource.data.status != 'RELEASED' || canRelease());
+
+      // A signed inspection is a record, not a draft. Nobody edits or removes
+      // one — not even an administrator — so the trail cannot be rewritten
+      // after the fact.
+      allow update, delete: if false;
+    }
+
+    // ───────────────────────── report counters ─────────────────────────
+
+    match /stats/{statId} {
+      allow read: if canRead();
+      // Tallies that order a report. They decide nothing, which is why a
+      // looser rule is acceptable here and nowhere else: the underlying
+      // answers are stored on the inspections themselves, so a distorted
+      // counter changes a chart and not a verdict.
+      allow create, update: if canRecord();
+      allow delete: if false;
+    }
+
+    // Anything not named above is denied.
     match /{document=**} {
       allow read, write: if false;
     }
