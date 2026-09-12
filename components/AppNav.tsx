@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { BrandLink } from "./Brand";
 import { ThemeToggle } from "./ThemeToggle";
 import { ROLE_LABELS, can } from "@/lib/domain/roles";
 import { signOut, useSession } from "@/lib/client/session";
@@ -37,15 +38,7 @@ export function AppNav() {
   return (
     <header className="no-print sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--surface)]">
       <div className="flex items-center gap-3 px-4 py-2.5 md:px-6">
-        <Link href="/" className="flex items-center gap-2 font-bold">
-          <span
-            aria-hidden
-            className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--brand)] text-sm text-white"
-          >
-            QC
-          </span>
-          <span className="hidden sm:inline">فحص الجودة</span>
-        </Link>
+        <BrandLink />
 
         <nav className="hidden flex-1 items-center gap-1 md:flex">
           {links.map((l) => (

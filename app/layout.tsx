@@ -11,13 +11,17 @@ const cairo = Cairo({
 });
 
 export const metadata: Metadata = {
-  title: "فحص الجودة — Quality Inspection",
+  title: "EURO Tools — فحص الجودة",
   description:
     "من استلام الخامة حتى الإفراج النهائي: تحليل، فحص بعد الخشونة، المعالجة الحرارية، التجليخ، والفحص النهائي مع CMM.",
 };
 
 // Applied before paint so there is no light/dark flash on load.
-const themeInit = `(function(){try{var t=localStorage.getItem("theme");if(t==="dark"||(!t&&window.matchMedia("(prefers-color-scheme: dark)").matches)){document.documentElement.classList.add("dark")}}catch(e){}})()`;
+//
+// Dark is the default, and light is chosen rather than inherited. A tablet on
+// the shop floor is looked at for a whole shift, and which theme the factory
+// sees should not depend on a setting somebody left on the device.
+const themeInit = `(function(){try{if(localStorage.getItem("theme")!=="light"){document.documentElement.classList.add("dark")}}catch(e){document.documentElement.classList.add("dark")}})()`;
 
 export default function RootLayout({
   children,

@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
+import { Brand } from "@/components/Brand";
 import { LoginForm } from "@/components/LoginForm";
 import { safeNextPath } from "@/lib/format";
 
@@ -14,13 +15,8 @@ function LoginPanel() {
   return (
     <div className="mx-auto grid w-full max-w-sm gap-6 py-10">
       <div className="grid justify-items-center gap-2 text-center">
-        <span
-          aria-hidden
-          className="grid h-12 w-12 place-items-center rounded-xl bg-[var(--brand)] text-lg font-bold text-white"
-        >
-          QC
-        </span>
-        <h1 className="text-xl font-bold">فحص الجودة</h1>
+        <Brand />
+        <h1 className="mt-1 text-lg font-bold">فحص الجودة</h1>
         <p className="text-sm text-[var(--muted)]">
           سجّل دخولك للمتابعة. كل فحص يُوقَّع باسم صاحب الحساب.
         </p>

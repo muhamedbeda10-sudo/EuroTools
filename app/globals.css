@@ -1,22 +1,31 @@
 @import "tailwindcss";
 
-/* Quality Inspection — ATC palette (green #1a8150 · gray #717171),
-   tuned for a shop-floor screen: high contrast, large hit targets. */
+/* EURO Tools & Automation.
+ *
+ * The brand colour is the blue from the company mark. The red in that mark is
+ * deliberately not used anywhere in the interface: on these screens red means
+ * a part was rejected, and a header, a button and a rejection that share a
+ * colour is how somebody signs off the wrong thing at the end of a shift.
+ * Red stays inside the logo, where it decides nothing.
+ *
+ * Moving the brand off green bought the same clarity a second time. Green now
+ * means exactly one thing anywhere in the application: this passed.
+ */
 :root {
-  --background: #f6f7f7;
+  --background: #f5f7f9;
   --surface: #ffffff;
-  --surface-2: #f2f4f3;
-  --foreground: #1a2420;
-  --muted: #64716b;
-  --border: #e4e8e6;
-  --border-strong: #cdd5d1;
-  --brand: #1a8150;
-  --brand-dark: #136041;
-  --brand-light: #e4f2ea;
+  --surface-2: #eef2f6;
+  --foreground: #16202b;
+  --muted: #5f6e7d;
+  --border: #e1e7ed;
+  --border-strong: #c9d3dd;
+  --brand: #1f5c9e;
+  --brand-dark: #164878;
+  --brand-light: #e7effa;
 
-  --shadow-sm: 0 1px 2px rgb(18 26 22 / 0.05);
-  --shadow-md: 0 1px 2px rgb(18 26 22 / 0.05), 0 4px 14px rgb(18 26 22 / 0.06);
-  --shadow-lg: 0 4px 8px rgb(18 26 22 / 0.06), 0 16px 40px rgb(18 26 22 / 0.13);
+  --shadow-sm: 0 1px 2px rgb(16 26 38 / 0.05);
+  --shadow-md: 0 1px 2px rgb(16 26 38 / 0.05), 0 4px 14px rgb(16 26 38 / 0.06);
+  --shadow-lg: 0 4px 8px rgb(16 26 38 / 0.06), 0 16px 40px rgb(16 26 38 / 0.13);
   --radius: 12px;
   --radius-sm: 8px;
 
@@ -29,24 +38,28 @@
   --bad-fg: #9c2006;
   --info-bg: #dfeaf3;
   --info-fg: #1c4e80;
-  --neutral-bg: #eceeed;
-  --neutral-fg: #55605a;
+  --neutral-bg: #eaeef2;
+  --neutral-fg: #525f6c;
 
-  --zebra: #f6f8f7;
+  --zebra: #f6f8fa;
   color-scheme: light;
 }
 
+/* The default. A tablet on the shop floor is looked at for a whole shift, and
+ * the light theme is an opt-in for anybody who prefers it. `--brand-dark` is
+ * lighter than `--brand` here on purpose: it is read as text on the tinted
+ * surface below it, and on a dark ground the readable direction is up. */
 html.dark {
-  --background: #0f1412;
-  --surface: #171e1a;
-  --surface-2: #1d2521;
-  --foreground: #e6ece8;
-  --muted: #9aa8a1;
-  --border: #263029;
-  --border-strong: #35423a;
-  --brand: #2ba36a;
-  --brand-dark: #1f8354;
-  --brand-light: #172c22;
+  --background: #0d1218;
+  --surface: #151c25;
+  --surface-2: #1c2530;
+  --foreground: #e4eaf1;
+  --muted: #93a2b3;
+  --border: #232e3b;
+  --border-strong: #33414f;
+  --brand: #4c9fe0;
+  --brand-dark: #8cc6f2;
+  --brand-light: #11243a;
 
   --ok-bg: #16341f;
   --ok-fg: #7fe0a5;
@@ -56,10 +69,10 @@ html.dark {
   --bad-fg: #ffa793;
   --info-bg: #16283a;
   --info-fg: #93c5ea;
-  --neutral-bg: #222b26;
-  --neutral-fg: #a9b5ae;
+  --neutral-bg: #202a35;
+  --neutral-fg: #a3b1c0;
 
-  --zebra: #1b231e;
+  --zebra: #18202a;
   color-scheme: dark;
 }
 
