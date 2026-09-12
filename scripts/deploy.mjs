@@ -14,10 +14,13 @@
  *       talks to nothing
  *    3. builds the static site
  *    4. checks the built files for a local address before anything is uploaded
- *    5. deploys Hosting and the Firestore rules together
+ *    5. deploys the Firestore rules and indexes, then the site
  *
- *  Rules and site go up in the same command on purpose. Deploying the site
- *  against stale rules is the one ordering that can leave data exposed.
+ *  That order is deliberate. Deploying the site first would put a new page in
+ *  front of old rules, which is the one ordering that can leave data exposed,
+ *  and in front of missing indexes, which is the one that makes the reports
+ *  fail on opening. If the second half fails, what is live is the old site
+ *  under the new rules — narrower than it was, never wider.
  *
  *  Step 4 exists because this has already gone wrong once. Next.js merges
  *  `.env` into every build, so a `.env.production` that merely omits the
@@ -192,19 +195,34 @@ if (leaked.length > 0)
 console.log(`      ✓ لا عناوين محلية في الملفات المبنية`);
 
 // ── 5 · deploy ───────────────────────────────────────────────────────────────
-step(5, "نشر الموقع وقواعد الأمان معًا…");
+step(5, "نشر قواعد الأمان والفهارس، ثم الموقع…");
+
+/** The rules and the indexes first. Both are things the site depends on, and
+ *  neither is safe to be behind the page that uses it. */
 try {
   execFileSync(
     "npx",
-    ["firebase", "deploy", "--only", "hosting,firestore:rules", "--project", projectId],
+    ["firebase", "deploy", "--only", "firestore:rules,firestore:indexes", "--project", projectId],
     { stdio: "inherit" }
   );
 } catch {
   stop(
-    "فشل النشر.",
+    "فشل نشر القواعد أو الفهارس — لم يُرفع الموقع.",
     "أشهر سببين:",
     "  • قاعدة Firestore غير منشأة — من Console → Firestore Database → Create database",
     "  • الحساب لا يملك صلاحية النشر على هذا المشروع"
+  );
+}
+
+try {
+  execFileSync("npx", ["firebase", "deploy", "--only", "hosting", "--project", projectId], {
+    stdio: "inherit",
+  });
+} catch {
+  stop(
+    "القواعد والفهارس رُفعت، لكن الموقع لم يُرفع.",
+    "الموقع القديم ما زال يعمل تحت القواعد الجديدة، وهذا وضع آمن.",
+    "أعد تشغيل: npm run deploy"
   );
 }
 
@@ -212,6 +230,9 @@ console.log(`
   ✓ تم النشر.
 
     الموقع:  https://${projectId}.web.app
+
+    الفهارس تُبنى في الخلفية. على قاعدة فاضية تجهز في ثوانٍ، ويمكن
+    متابعتها من Console → Firestore Database → Indexes.
 
     إن كانت هذه أول مرة، تبقّى شيئان في Console لا يمكن أتمتتهما:
 
