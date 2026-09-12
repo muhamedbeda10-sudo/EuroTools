@@ -33,6 +33,14 @@ export const analysesOf = (lotId: string): CollectionReference =>
 export const eventsOf = (partId: string): CollectionReference =>
   collection(clientDb(), COLLECTIONS.parts, partId, SUBCOLLECTIONS.events);
 
+/** Thumbnails of an inspection's photographs — what a gallery reads. */
+export const photosOf = (inspectionId: string): CollectionReference =>
+  collection(clientDb(), COLLECTIONS.inspections, inspectionId, SUBCOLLECTIONS.photos);
+
+/** The full pictures, read one at a time when somebody opens one. */
+export const photoDataOf = (inspectionId: string): CollectionReference =>
+  collection(clientDb(), COLLECTIONS.inspections, inspectionId, SUBCOLLECTIONS.photoData);
+
 /** A fresh Firestore id, for entries embedded in a document.
  *
  *  Embedded checklist answers, certificates and features still need something

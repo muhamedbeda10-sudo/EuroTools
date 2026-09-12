@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { ActionForm } from "./ActionForm";
+import { PhotoField } from "./PhotoField";
 import { StatusPill } from "./ui";
 import {
   hardnessVerdict,
@@ -438,6 +439,8 @@ export function ChecklistForm({
           <label className="label">ملاحظات عامة</label>
           <textarea className="textarea" name="notes" rows={2} />
         </div>
+
+        <PhotoField />
       </div>
     </ActionForm>
   );

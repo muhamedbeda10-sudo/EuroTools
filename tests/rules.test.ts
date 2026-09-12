@@ -451,3 +451,86 @@ describe("what the rules cannot check", () => {
     expect(filed?.measurements[0].result).toBe("FAIL");
   });
 });
+
+describe("defect photographs, which are evidence for a signed verdict", () => {
+  /** A thumbnail small enough to list, and a picture under the cap. */
+  const photo = (overrides: Record<string, unknown> = {}) => ({
+    thumb: `data:image/jpeg;base64,${"A".repeat(4000)}`,
+    caption: null,
+    width: 1600,
+    height: 1200,
+    bytes: 210_000,
+    capturedAt: new Date(),
+    capturedByUid: ACCOUNTS.inspector.uid,
+    capturedByName: "م. هالة فؤاد",
+    ...overrides,
+  });
+
+  const picture = (bytes: number) => ({ data: `data:image/jpeg;base64,${"A".repeat(bytes)}` });
+
+  it("lets an inspector file a photograph under their own name", async () => {
+    await assertSucceeds(as("inspector").doc("inspections/i1/photos/ph1").set(photo()));
+    await assertSucceeds(as("inspector").doc("inspections/i1/photoData/ph1").set(picture(200_000)));
+  });
+
+  it("refuses a photograph filed under somebody else's name", async () => {
+    // The same signature binding the inspection itself gets: a photograph that
+    // could be attributed to another inspector is a photograph of nothing.
+    await assertFails(
+      as("inspector")
+        .doc("inspections/i2/photos/ph1")
+        .set(photo({ capturedByUid: ACCOUNTS.supervisor.uid }))
+    );
+  });
+
+  it("refuses a viewer, who reads and nothing else", async () => {
+    await assertFails(as("viewer").doc("inspections/i3/photos/ph1").set(photo()));
+    await assertFails(as("viewer").doc("inspections/i3/photoData/ph1").set(picture(1000)));
+  });
+
+  it("refuses an account that was deactivated", async () => {
+    await assertFails(as("retired").doc("inspections/i4/photos/ph1").set(photo()));
+  });
+
+  it("never lets a filed photograph be replaced or removed", async () => {
+    await assertSucceeds(as("inspector").doc("inspections/i5/photos/ph1").set(photo()));
+    await assertSucceeds(as("inspector").doc("inspections/i5/photoData/ph1").set(picture(1000)));
+
+    // Not by the inspector who took it, not by a manager, not by an admin.
+    // Evidence that can be swapped afterwards is not evidence.
+    for (const who of ["inspector", "manager", "admin"] as const) {
+      await assertFails(as(who).doc("inspections/i5/photos/ph1").update({ caption: "rewritten" }));
+      await assertFails(as(who).doc("inspections/i5/photoData/ph1").set(picture(2000)));
+      await assertFails(as(who).doc("inspections/i5/photos/ph1").delete());
+      await assertFails(as(who).doc("inspections/i5/photoData/ph1").delete());
+    }
+  });
+
+  it("refuses a picture that would not fit in a Firestore document", async () => {
+    // A document over a megabyte is rejected on arrival, and the rejection
+    // would take the inspection written in the same transaction with it. The
+    // rule refuses it here instead, where the message is about the picture.
+    await assertFails(as("inspector").doc("inspections/i6/photoData/ph1").set(picture(1_000_000)));
+  });
+
+  it("refuses a thumbnail big enough to make listing them expensive", async () => {
+    // The thumbnails exist so a traveller costs kilobytes to open. One holding
+    // a full photograph would quietly undo that.
+    await assertFails(
+      as("inspector")
+        .doc("inspections/i7/photos/ph1")
+        .set(photo({ thumb: `data:image/jpeg;base64,${"A".repeat(200_000)}` }))
+    );
+  });
+
+  it("lets anyone with an account look at what was filed", async () => {
+    await assertSucceeds(as("inspector").doc("inspections/i8/photos/ph1").set(photo()));
+    for (const who of ["viewer", "supervisor", "manager", "admin"] as const)
+      await assertSucceeds(as(who).doc("inspections/i8/photos/ph1").get());
+  });
+
+  it("refuses a signed-out reader", async () => {
+    await assertFails(anonymous().doc("inspections/i8/photos/ph1").get());
+    await assertFails(anonymous().doc("inspections/i8/photoData/ph1").get());
+  });
+});

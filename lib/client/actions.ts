@@ -36,6 +36,9 @@ import {
   type MeasurementEntry,
   type PartDoc,
   type UniqueScope,
+  PHOTO_MAX_PER_INSPECTION,
+  type InspectionPhotoDoc,
+  type InspectionPhotoDataDoc,
 } from "@/lib/model";
 import { clientDb } from "@/lib/client/firebase";
 import {
@@ -52,7 +55,10 @@ import {
   uniques,
   userAuditEvents,
   users,
+  photosOf,
+  photoDataOf,
 } from "@/lib/client/db";
+import { prepare } from "@/lib/client/photos";
 import type { SessionUser } from "@/lib/client/session";
 
 export interface ActionResult {
@@ -657,6 +663,26 @@ export const submitLotInspection =
     return { ok: true, info: `تم تسجيل الفحص — الحالة: ${status}.` };
   };
 
+
+/** The defect photographs posted with an inspection, resized and encoded.
+ *
+ *  Done before the transaction opens, not inside it. A transaction callback is
+ *  re-run whenever Firestore sees contention, and re-compressing four
+ *  photographs on a tablet each time it retries is how a sheet takes half a
+ *  minute to save. It also means a picture that cannot be read fails the sheet
+ *  with a plain sentence rather than half-writing it.
+ */
+async function readPhotos(formData: FormData) {
+  const files = formData
+    .getAll("photos")
+    .filter((f): f is File => f instanceof File && f.size > 0);
+
+  if (files.length > PHOTO_MAX_PER_INSPECTION)
+    throw new Error(`الحد ${PHOTO_MAX_PER_INSPECTION} صور للفحص الواحد.`);
+
+  return Promise.all(files.map((file) => prepare(file)));
+}
+
 export const submitPartInspection =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
@@ -747,9 +773,19 @@ export const submitPartInspection =
         ? { stage: part.currentStage as Stage, status: part.status as "IN_PROCESS" }
         : nextPartState(stage, status);
 
+    let photos;
+    try {
+      photos = await readPhotos(formData);
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message ?? "تعذّرت معالجة الصور.") };
+    }
+
     try {
       await runTransaction(clientDb(), async (tx) => {
-        tx.set(docIn(inspections()), {
+        // Named, because the photographs hang off it.
+        const inspectionRef = docIn(inspections());
+
+        tx.set(inspectionRef, {
           stage,
           partId,
           lotId: part.lotId,
@@ -772,6 +808,28 @@ export const submitPartInspection =
           partNumber: material.partNumber,
           hasFailedMeasurement: measurements.some((m) => m.result === "FAIL"),
         } satisfies InspectionDoc);
+
+        // Evidence and verdict commit together or not at all. A photograph of
+        // a defect that outlived the sheet it was taken for would be a
+        // photograph of nothing in particular.
+        for (const photo of photos) {
+          const photoId = docIn(photosOf(inspectionRef.id)).id;
+
+          tx.set(docIn(photosOf(inspectionRef.id), photoId), {
+            thumb: photo.thumb,
+            caption: null,
+            width: photo.width,
+            height: photo.height,
+            bytes: photo.bytes,
+            capturedAt: now(),
+            capturedByUid: actor.uid,
+            capturedByName: actor.displayName,
+          } satisfies InspectionPhotoDoc);
+
+          tx.set(docIn(photoDataOf(inspectionRef.id), photoId), {
+            data: photo.data,
+          } satisfies InspectionPhotoDataDoc);
+        }
 
         tx.update(docIn(parts(), partId), {
           currentStage: transition.stage,

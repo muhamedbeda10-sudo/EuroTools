@@ -48,6 +48,11 @@ const REQUIRED = [
 const FILTERED_FIELDS = ["currentStage", "hasFailedMeasurement", "lotId", "partId", "stage", "status"];
 const SORTED_FIELDS = [
   "at",
+  // A defect photograph's gallery sorts by this and filters by nothing, so
+  // the single-field index Firestore keeps for free already serves it. Listed
+  // here because the tripwire below is a list of what has been looked at, not
+  // a list of what needed an index.
+  "capturedAt",
   "displayName",
   "inspectedAt",
   "name",

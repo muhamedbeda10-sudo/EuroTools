@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { PhotoGallery } from "@/components/PhotoGallery";
 import { ActionForm } from "@/components/ActionForm";
 import { ChecklistForm, type FeatureRow } from "@/components/ChecklistForm";
 import { PrintButton } from "@/components/PrintButton";
@@ -362,6 +363,8 @@ function PartView({
                       </div>
                     )}
                   </div>
+
+                  <PhotoGallery inspectionId={insp.id} />
 
                   {insp.notes && (
                     <p className="mt-2 text-sm text-[var(--muted)]">ملاحظات: {insp.notes}</p>

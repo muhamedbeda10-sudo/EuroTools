@@ -26,6 +26,8 @@ import {
   toDate,
   toDateRequired,
   type AnalysisDoc,
+  type InspectionPhotoDoc,
+  type InspectionPhotoDataDoc,
   type InspectionDoc,
   type LotDoc,
   type MaterialDoc,
@@ -47,6 +49,8 @@ import {
   suppliers,
   userAuditEvents,
   users,
+  photosOf,
+  photoDataOf,
 } from "@/lib/client/db";
 
 /** Reading the quality data, from the browser.
@@ -662,6 +666,31 @@ export async function recomputeAnalysisStatus(lotId: string, analysisId: string)
   if (!snapshot.exists()) return null;
   const analysis = snapshot.data() as AnalysisDoc;
   return analysisStatus(analysis.results ?? []);
+}
+
+
+// ───────────────────────── defect photographs ─────────────────────────
+
+/** The thumbnails of one inspection's photographs.
+ *
+ *  Thumbnails only — the full pictures are separate documents, fetched by
+ *  `getPhotoData` when somebody opens one. A traveller carrying several
+ *  inspections would otherwise pull every full photograph on it just to draw
+ *  a row of squares.
+ */
+export async function getInspectionPhotos(inspectionId: string) {
+  const snapshot = await getDocs(query(photosOf(inspectionId), orderBy("capturedAt", "asc")));
+  return snapshot.docs.map((d) => {
+    const data = asDoc<InspectionPhotoDoc>(d);
+    return { ...data, id: d.id, capturedAt: toDateRequired(data.capturedAt) };
+  });
+}
+
+/** One full picture, read when it is actually looked at. */
+export async function getPhotoData(inspectionId: string, photoId: string): Promise<string | null> {
+  const snapshot = await getDoc(docIn(photoDataOf(inspectionId), photoId));
+  if (!snapshot.exists()) return null;
+  return (snapshot.data() as InspectionPhotoDataDoc).data;
 }
 
 // ───────────────────────── administration ─────────────────────────

@@ -58,6 +58,10 @@ export const COLLECTIONS = {
 export const SUBCOLLECTIONS = {
   analyses: "analyses",
   events: "events",
+  /** Defect photographs: what the inspector saw, kept beside what they wrote.
+   *  Split in two on purpose — see `InspectionPhotoDoc` below. */
+  photos: "photos",
+  photoData: "photoData",
 } as const;
 
 // ───────────────────────── stored shapes ─────────────────────────
@@ -306,6 +310,65 @@ export function toDate(value: StoredTimestamp | Date | null | undefined): Date |
 export function toDateRequired(value: StoredTimestamp | Date): Date {
   return value instanceof Date ? value : value.toDate();
 }
+
+/** A defect photograph, stored in two pieces.
+ *
+ *  There is no object store on this plan, so the picture lives in Firestore
+ *  like everything else. That makes what it costs to *look at a list* the
+ *  design problem: a traveller with five photographs on it would pull about a
+ *  megabyte and a quarter every time somebody opened it, and a plan with ten
+ *  gigabytes of monthly traffic does not survive that habit.
+ *
+ *  So the thumbnail and the full picture are separate documents sharing an id.
+ *  A gallery reads only the thumbnails — about twenty kilobytes each — and the
+ *  full picture is fetched when somebody actually opens one. Reading a list
+ *  therefore costs roughly a twelfth of what it otherwise would.
+ *
+ *  Both are written in the same transaction as the inspection they belong to,
+ *  and both are refused any update or delete by the rules. A photograph is
+ *  part of a signed record: it is evidence for a verdict somebody put their
+ *  name to, and evidence that can be swapped afterwards is not evidence.
+ */
+export interface InspectionPhotoDoc {
+  /** A JPEG data URL, long edge 320px. Small enough to list many at once. */
+  thumb: string;
+  caption: string | null;
+  /** Of the full picture, so a gallery can reserve the right shape before the
+   *  full picture arrives and the page does not jump under a gloved hand. */
+  width: number;
+  height: number;
+  bytes: number;
+  capturedAt: StoredTimestamp;
+  capturedByUid: string;
+  capturedByName: string;
+}
+
+/** The full picture, addressed by the same id as its thumbnail. */
+export interface InspectionPhotoDataDoc {
+  /** A JPEG data URL, long edge at most 1600px. */
+  data: string;
+}
+
+/** The ceiling the security rules enforce on a stored picture.
+ *
+ *  A Firestore document may not exceed a megabyte, and a document that is
+ *  refused on arrival loses the inspection written with it. Holding the
+ *  picture well under the limit leaves room for the field names and the
+ *  metadata beside it, and keeps a single photograph from eating a thousandth
+ *  of the plan's entire storage.
+ */
+export const PHOTO_MAX_BYTES = 900_000;
+
+/** How many photographs may ride with one inspection.
+ *
+ *  Not an arbitrary tidiness rule. The photographs are written in the same
+ *  transaction as the inspection so that neither can exist without the other,
+ *  and a Firestore transaction has a size of its own to stay under. Four also
+ *  happens to be more than anybody photographing one defect has ever needed.
+ */
+export const PHOTO_MAX_PER_INSPECTION = 4;
+export const PHOTO_MAX_EDGE = 1600;
+export const THUMB_MAX_EDGE = 320;
 
 /** A stored document plus its id, which the pages use for links. */
 export type WithId<T> = T & { id: string };

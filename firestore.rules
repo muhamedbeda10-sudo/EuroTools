@@ -205,6 +205,33 @@ service cloud.firestore {
       // one — not even an administrator — so the trail cannot be rewritten
       // after the fact.
       allow update, delete: if false;
+
+      // ── defect photographs ──────────────────────────────────────────
+      // Evidence for a verdict somebody put their name to. The same rules
+      // the inspection itself gets: yours to add, nobody's to change.
+      //
+      // The thumbnail a gallery lists, and the full picture behind it, are
+      // separate documents so that reading a list does not pull every
+      // picture on it. Both are held well under Firestore's one-megabyte
+      // document limit, because a document refused on arrival would take
+      // the inspection written alongside it down too.
+
+      match /photos/{photoId} {
+        allow read: if canRead();
+        allow create: if canRecord()
+          && request.resource.data.capturedByUid == request.auth.uid
+          && request.resource.data.thumb is string
+          && request.resource.data.thumb.size() < 60000;
+        allow update, delete: if false;
+      }
+
+      match /photoData/{photoId} {
+        allow read: if canRead();
+        allow create: if canRecord()
+          && request.resource.data.data is string
+          && request.resource.data.data.size() < 900000;
+        allow update, delete: if false;
+      }
     }
 
     // ───────────────────────── report counters ─────────────────────────
