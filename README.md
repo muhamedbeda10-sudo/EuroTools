@@ -218,6 +218,43 @@ Firestore Database → Indexes.
 
 إن نقص شيء، السكربت يقف ويقول أي خطوة في Console تحلّه.
 
+### النشر من GitHub
+
+النشر من الجهاز يحتاج `npx firebase login`، وهي شاشة متصفّح لا تُؤتمت. البديل
+أن ينشر GitHub بدلًا منك: كل دفعة إلى `main` تمر على الفحوص كاملة، وتُنشر إن
+نجحت، ويبقى سجل يقول أي نسخة نُشرت ومتى وبأي التزام. لنظام يوقّع سجلات جودة،
+هذا السجل ليس رفاهية.
+
+الملف موجود في `.github/workflows/deploy.yml`، ولا ينقصه إلا اعتماد واحد
+يُحفظ في **Settings → Secrets and variables → Actions → New repository secret**.
+واحد من اثنين:
+
+**`FIREBASE_TOKEN`** — الأسرع إن كان عندك المستودع على جهازك:
+
+```bash
+npx firebase login:ci
+```
+
+يفتح المتصفّح مرة واحدة ويطبع رمزًا. الصقه في السرّ بهذا الاسم. الرمز يكافئ
+حسابك كاملًا على كل مشاريعك، فلا يوضع في أي مكان غير أسرار المستودع، ويُلغى من
+Google Account → Security → Third-party access إن تسرّب.
+
+**`FIREBASE_SERVICE_ACCOUNT`** — بلا طرفية إطلاقًا، وصلاحياته أضيق:
+
+1. Firebase Console → ⚙ Project settings → **Service accounts** → **Generate
+   new private key**. ينزّل ملف JSON.
+2. Google Cloud Console → **IAM** → اعثر على الحساب المنتهي بـ
+   `@<project-id>.iam.gserviceaccount.com` → ✏ → **Add another role** →
+   **Firebase Admin** → Save. المفتاح الافتراضي يكتب في قاعدة البيانات ولا
+   ينشر Hosting، وهذا الدور ما يمنحه ذلك.
+3. افتح ملف الـ JSON، انسخ **محتواه كاملًا** بالأقواس، والصقه في السرّ بهذا
+   الاسم.
+
+ثم **Actions → Deploy → Run workflow**. ما يفشل يقول سببه في السجل.
+
+احذف المفتاح من جهازك بعد لصقه. وأي تسريب يُعالَج من Cloud Console → IAM →
+Service accounts → Keys → احذف المفتاح، لا بتغيير كلمات المرور.
+
 ### ما يبقى في Console
 
 ثلاثة أشياء لا تملك أوامر في الـ CLI:

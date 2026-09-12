@@ -2,9 +2,15 @@
  *
  *      npm run deploy
  *
- *  Everything here is automatic except signing in to Google, which is a
- *  personal authorisation nobody can do on your behalf. If you are not signed
- *  in, this stops and says so rather than half-deploying.
+ *  Everything here is automatic except proving who you are to Google. Two
+ *  ways to do that:
+ *
+ *    • at a keyboard — `npx firebase login`, once, in a browser
+ *    • unattended — a service account key in GOOGLE_APPLICATION_CREDENTIALS,
+ *      or a CI token in FIREBASE_TOKEN, which is how the GitHub workflow in
+ *      `.github/workflows/deploy.yml` runs this without anybody present
+ *
+ *  With neither, this stops and says so rather than half-deploying.
  *
  *  What it does:
  *    1. confirms the Firebase CLI is signed in and which project is selected
@@ -53,50 +59,64 @@ function step(n, message) {
 // ── 1 · who are we, and which project ────────────────────────────────────────
 step(1, "التحقق من تسجيل الدخول والمشروع…");
 
-let accounts = "";
-try {
-  accounts = run("npx firebase login:list 2>&1");
-} catch {
-  stop("تعذّر تشغيل Firebase CLI.", "جرّب: npm install");
-}
+/** A key or a token identifies us without a browser, which is what lets this
+ *  run in CI. The CLI reads both from the environment on its own; all this
+ *  does is skip a check that would fail for the wrong reason. */
+const machineCredential = process.env.GOOGLE_APPLICATION_CREDENTIALS
+  ? "مفتاح خدمة (GOOGLE_APPLICATION_CREDENTIALS)"
+  : process.env.FIREBASE_TOKEN
+    ? "رمز CI (FIREBASE_TOKEN)"
+    : null;
 
-if (accounts.includes("No authorized accounts")) {
-  stop(
-    "لم تسجّل الدخول إلى Firebase.",
-    "شغّل هذا الأمر مرة واحدة، وسيفتح المتصفّح لتسجّل دخولك بحساب Google:",
-    "",
-    "    npx firebase login",
-    "",
-    "ثم أعد تشغيل: npm run deploy"
-  );
+if (machineCredential) {
+  console.log(`      ${machineCredential}`);
+} else {
+  let accounts = "";
+  try {
+    accounts = run("npx firebase login:list 2>&1");
+  } catch {
+    stop("تعذّر تشغيل Firebase CLI.", "جرّب: npm install");
+  }
+
+  if (accounts.includes("No authorized accounts")) {
+    stop(
+      "لم تسجّل الدخول إلى Firebase.",
+      "شغّل هذا الأمر مرة واحدة، وسيفتح المتصفّح لتسجّل دخولك بحساب Google:",
+      "",
+      "    npx firebase login",
+      "",
+      "ثم أعد تشغيل: npm run deploy",
+      "",
+      "أو انشر من GitHub بدل جهازك — الخطوات في README تحت «النشر من GitHub»."
+    );
+  }
+  console.log("      " + accounts.trim().split("\n").filter(Boolean).slice(-1)[0]);
 }
-console.log("      " + accounts.trim().split("\n").filter(Boolean).slice(-1)[0]);
 
 const projectArg = process.argv.find((a) => a.startsWith("--project="));
 const project = projectArg?.split("=")[1];
 
 let projectId = project;
+if (!projectId && existsSync(".firebaserc")) {
+  projectId = JSON.parse(readFileSync(".firebaserc", "utf8")).projects?.default;
+}
 if (!projectId) {
+  // Only worth asking for the list when there is a person to read it.
+  let ids = [];
   try {
-    const active = JSON.parse(run("npx firebase projects:list --json 2>/dev/null"));
-    const ids = (active.result ?? []).map((p) => p.projectId);
-    if (existsSync(".firebaserc")) {
-      const rc = JSON.parse(readFileSync(".firebaserc", "utf8"));
-      projectId = rc.projects?.default;
-    }
-    if (!projectId)
-      stop(
-        "لم يُحدَّد مشروع.",
-        "اختر مشروعك مرة واحدة:",
-        "",
-        `    npx firebase use <project-id>`,
-        "",
-        "المشاريع المتاحة على حسابك:",
-        ...ids.map((id) => `      ${id}`)
-      );
+    ids = (JSON.parse(run("npx firebase projects:list --json 2>/dev/null")).result ?? []).map(
+      (p) => p.projectId
+    );
   } catch {
-    stop("تعذّر قراءة قائمة المشاريع.", "تأكد من تسجيل الدخول: npx firebase login");
+    /* not signed in, or no permission to list — the message below still helps */
   }
+  stop(
+    "لم يُحدَّد مشروع.",
+    "اختر مشروعك مرة واحدة:",
+    "",
+    "    npx firebase use <project-id>",
+    ...(ids.length > 0 ? ["", "المشاريع المتاحة على حسابك:", ...ids.map((id) => `      ${id}`)] : [])
+  );
 }
 console.log(`      المشروع: ${projectId}`);
 
@@ -113,11 +133,17 @@ try {
 
 if (!config?.apiKey)
   stop(
-    "لا يوجد تطبيق ويب في هذا المشروع بعد.",
-    "من Firebase Console → Project Overview → Add app → اختر الويب (</>)،",
-    "سمّه أي اسم، وتخطَّ خطوة Hosting (سننشرها من هنا).",
+    "تعذّرت قراءة إعدادات تطبيق الويب. سببان لا ثالث لهما عمليًا:",
     "",
-    "ثم أعد تشغيل: npm run deploy"
+    "  • لا يوجد تطبيق ويب في المشروع بعد. من Firebase Console →",
+    "    Project Overview → Add app → اختر الويب (</>)، سمّه أي اسم،",
+    "    وتخطَّ خطوة Hosting (سننشرها من هنا).",
+    "",
+    "  • الاعتماد المستخدم لا يملك قراءة إعدادات المشروع. إن كان مفتاح",
+    "    خدمة، امنحه دور Firebase Admin — الخطوات في README تحت",
+    "    «النشر من GitHub».",
+    "",
+    "ثم أعد المحاولة."
   );
 
 // These values reach the browser by design: they name the project, they grant

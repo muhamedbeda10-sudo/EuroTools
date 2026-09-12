@@ -1,0 +1,93 @@
+# Build, check and deploy the inspection app to Firebase.
+#
+# This exists so a deployment is a thing that happened on a server, with a log
+# anybody can read afterwards, rather than a thing somebody did on their laptop
+# one afternoon. For a system that signs quality records, "which build is live
+# and who put it there" is a question that has to have an answer.
+#
+# Nothing here can run until the repository holds a credential for the Firebase
+# project. One of these two, as a repository secret:
+#
+#   FIREBASE_SERVICE_ACCOUNT   the whole contents of a service account JSON key
+#   FIREBASE_TOKEN             output of `npx firebase login:ci`
+#
+# Add it under Settings → Secrets and variables → Actions → New repository
+# secret. The README says where each comes from, under «النشر من GitHub».
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/wizardly-meitner-0j2a4l]
+    paths-ignore:
+      - "**/*.md"
+
+# One deployment at a time. Two runs racing would leave whichever finished
+# second live, which is not necessarily the newer commit.
+concurrency:
+  group: deploy-firebase
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # The route types are generated, not committed, and the typecheck reads
+      # them. A fresh clone has to make them before it can check anything.
+      - name: Generate route types
+        run: npx next typegen
+
+      # Everything below gates the deploy. A red check never reaches Hosting.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and rule tests
+        run: npm run test:run
+
+      # Both credentials are handled in one step so the check and the setup
+      # cannot disagree about which one is in play.
+      - name: Take the credential
+        env:
+          KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -n "$KEY" ]; then
+            # Written outside the workspace so no later step can sweep it into
+            # the build output. The runner is destroyed when the job ends.
+            printf '%s' "$KEY" > "$RUNNER_TEMP/firebase-key.json"
+            if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).client_email' "$RUNNER_TEMP/firebase-key.json"; then
+              echo "::error::FIREBASE_SERVICE_ACCOUNT is not a complete service account JSON key. Paste the whole file, braces included."
+              exit 1
+            fi
+            echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-key.json" >> "$GITHUB_ENV"
+            echo "credential: service account key"
+          elif [ -n "$TOKEN" ]; then
+            echo "credential: CI token"
+          else
+            echo "::error::No Firebase credential. Add FIREBASE_SERVICE_ACCOUNT or FIREBASE_TOKEN under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      # Reads the web app's config from the project, builds, refuses to upload
+      # a bundle containing a local address, then deploys rules and indexes
+      # before the site.
+      - name: Deploy
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: npm run deploy
