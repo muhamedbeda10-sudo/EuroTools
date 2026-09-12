@@ -19,10 +19,11 @@ import {
 } from "@/lib/domain/stages";
 import { ROLE_LABELS, can, verdictPermission, type Role } from "@/lib/domain/roles";
 import { fmtNum, fmtTolerance } from "@/lib/format";
-import type { ActionResult } from "@/lib/server/actions";
+import type { ActionResult } from "@/lib/client/actions";
 
-/** The account that will sign this sheet. Resolved on the server and passed
- *  down, never typed. */
+/** The account that will sign this sheet. Read from the session and passed
+ *  down, never typed — and `firestore.rules` checks the uid it writes against
+ *  the authenticated caller, so it cannot be somebody else's. */
 export interface Signatory {
   displayName: string;
   role: Role;
@@ -52,7 +53,7 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 /** The stage checklist: tri-state answers, the stage's measurements, and a
- *  live verdict computed by the same pure rules the server re-applies on
+ *  live verdict computed by the same pure rules the action re-applies on
  *  submit — the inspector sees the outcome before signing. */
 export function ChecklistForm({
   stage,
@@ -63,6 +64,7 @@ export function ChecklistForm({
   hardnessRange,
   requiredRa,
   submitLabel = "تسجيل الفحص",
+  onSuccess,
 }: {
   stage: Stage;
   action: (formData: FormData) => Promise<ActionResult>;
@@ -72,6 +74,8 @@ export function ChecklistForm({
   hardnessRange?: { min: number | null; max: number | null; unit: string };
   requiredRa?: number | null;
   submitLabel?: string;
+  /** Re-read the page once the sheet is filed. */
+  onSuccess?: () => void;
 }) {
   const def = stageDef(stage);
 
@@ -114,9 +118,9 @@ export function ChecklistForm({
     [stage, checks, specs, hardness, hardnessRange]
   );
 
-  // Which verdicts this account may actually file, decided by the same pure
-  // rules the action re-applies on submit. Showing a choice that would be
-  // refused on the server wastes a filled-in sheet.
+  // Which verdicts this account may actually file, by the same pure rules the
+  // action re-applies on submit. Showing a choice that would be refused wastes
+  // a filled-in sheet.
   const selectable = useMemo(
     () =>
       def.outcomes.filter((o) =>
@@ -155,7 +159,7 @@ export function ChecklistForm({
   }
 
   return (
-    <ActionForm action={action} submitLabel={submitLabel}>
+    <ActionForm action={action} submitLabel={submitLabel} onSuccess={onSuccess}>
       {Object.entries(hiddenFields).map(([k, v]) => (
         <input key={k} type="hidden" name={k} value={v} />
       ))}

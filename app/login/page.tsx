@@ -1,22 +1,15 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 import { LoginForm } from "@/components/LoginForm";
 import { safeNextPath } from "@/lib/format";
-import { currentUser } from "@/lib/server/auth";
 
-export const dynamic = "force-dynamic";
-
-export const metadata = { title: "تسجيل الدخول — فحص الجودة" };
-
-export default async function LoginPage(props: PageProps<"/login">) {
-  // Someone arriving here with a live session has no business seeing a login
-  // form; send them back to work.
-  if (await currentUser()) redirect("/");
-
+function LoginPanel() {
   // `next` comes off the query string, so it is narrowed to somewhere inside
-  // this application before it is handed to the form.
-  const { next } = await props.searchParams;
-  const destination = safeNextPath(Array.isArray(next) ? next[0] : next);
+  // this application before anything navigates to it.
+  const destination = safeNextPath(useSearchParams().get("next"));
 
   return (
     <div className="mx-auto grid w-full max-w-sm gap-6 py-10">
@@ -37,5 +30,15 @@ export default async function LoginPage(props: PageProps<"/login">) {
         <LoginForm destination={destination} />
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  // A static export has no server to read the query string, so the component
+  // that reads it has to be allowed to render on the client first.
+  return (
+    <Suspense fallback={null}>
+      <LoginPanel />
+    </Suspense>
   );
 }

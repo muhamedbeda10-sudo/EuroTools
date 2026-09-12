@@ -1,14 +1,21 @@
-import { requireUser } from "@/lib/server/auth";
-import { getAllInspectionsForExport } from "@/lib/server/queries";
-import { db } from "@/lib/server/firestore";
-import { lots, suppliers, type LotDoc, type SupplierDoc } from "@/lib/server/model";
+"use client";
+
+import { getDocs, query, where, documentId } from "firebase/firestore";
+
 import { measurementResult } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
+import { getAllInspectionsForExport } from "@/lib/client/queries";
+import { lots, suppliers } from "@/lib/client/db";
+import type { LotDoc, SupplierDoc } from "@/lib/model";
 
-export const dynamic = "force-dynamic";
+/** The whole quality history as one CSV, built in the browser.
+ *
+ *  This used to be a route handler. A static site has no routes to handle, so
+ *  the same rows are assembled here and handed to the browser as a download.
+ *  Reading every inspection is the point of the export, which is why the
+ *  reports page goes to such lengths to avoid it and this does not.
+ */
 
-/** Quote a field for CSV and neutralise anything Excel would read as a
- *  formula — inspector names and notes are free text. */
 function cell(value: unknown): string {
   if (value == null) return "";
   let s = String(value);
@@ -16,35 +23,37 @@ function cell(value: unknown): string {
   return `"${s.replace(/"/g, '""')}"`;
 }
 
-/** One row per checklist answer and per measurement, so the export can be
- *  pivoted in Excel without going back to the app. */
-export async function GET() {
-  // The whole quality history leaves the building in one file here, so this
-  // route carries its own guard as well as the one inside the query.
-  await requireUser();
 
+export async function buildInspectionCsv(): Promise<string> {
   const inspections = await getAllInspectionsForExport();
 
   // The subject and part number are already on each inspection; only the
-  // supplier still needs looking up, and it is fetched once per distinct lot
-  // rather than once per row.
-  const lotIds = [...new Set(inspections.map((i) => i.lotId).filter((id): id is string => Boolean(id)))];
-  const lotDocs = lotIds.length
-    ? await db().getAll(...lotIds.map((id) => lots().doc(id)))
-    : [];
+  // supplier still needs looking up, and once per distinct lot rather than
+  // once per row.
+  const lotIds = [
+    ...new Set(inspections.map((i) => i.lotId).filter((id): id is string => Boolean(id))),
+  ];
+
   const supplierIdByLot = new Map<string, string>();
-  for (const snap of lotDocs) {
-    const supplierId = snap.exists ? (snap.data() as LotDoc).supplierId : null;
-    if (supplierId) supplierIdByLot.set(snap.id, supplierId);
+  for (let i = 0; i < lotIds.length; i += 30) {
+    const snapshot = await getDocs(
+      query(lots(), where(documentId(), "in", lotIds.slice(i, i + 30)))
+    );
+    for (const d of snapshot.docs) {
+      const supplierId = (d.data() as LotDoc).supplierId;
+      if (supplierId) supplierIdByLot.set(d.id, supplierId);
+    }
   }
 
   const supplierIds = [...new Set(supplierIdByLot.values())];
-  const supplierDocs = supplierIds.length
-    ? await db().getAll(...supplierIds.map((id) => suppliers().doc(id)))
-    : [];
   const supplierNameById = new Map<string, string>();
-  for (const snap of supplierDocs)
-    if (snap.exists) supplierNameById.set(snap.id, (snap.data() as SupplierDoc).name);
+  for (let i = 0; i < supplierIds.length; i += 30) {
+    const snapshot = await getDocs(
+      query(suppliers(), where(documentId(), "in", supplierIds.slice(i, i + 30)))
+    );
+    for (const d of snapshot.docs)
+      supplierNameById.set(d.id, (d.data() as SupplierDoc).name);
+  }
 
   const supplierNameForLot = (lotId: string | null): string => {
     if (!lotId) return "";
@@ -154,12 +163,20 @@ export async function GET() {
     }
   }
 
-  const stamp = new Date().toISOString().slice(0, 10);
   // BOM so Excel opens the Arabic columns in UTF-8 without a manual import.
-  return new Response("﻿" + rows.join("\r\n"), {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="quality-inspection-${stamp}.csv"`,
-    },
-  });
+  return "\ufeff" + rows.join("\r\n");
+}
+
+/** Hand the file to the browser. A static site cannot set a download header,
+ *  so the anchor does it. */
+export async function downloadInspectionCsv(): Promise<void> {
+  const csv = await buildInspectionCsv();
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `quality-inspection-${stamp}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }

@@ -1,15 +1,45 @@
+"use client";
+
 import Link from "next/link";
 
 import { ActionForm } from "@/components/ActionForm";
 import { Card, Empty, Field, PageHeader } from "@/components/ui";
-import { receiveLot } from "@/lib/server/actions";
+import { receiveLot } from "@/lib/client/actions";
 import { todayInputValue } from "@/lib/format";
-import { getMaterials, getSuppliers } from "@/lib/server/queries";
+import { getMaterials, getSuppliers } from "@/lib/client/queries";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
 
-export const dynamic = "force-dynamic";
+export default function NewLotPage() {
+  const user = useRequireSession();
+  const state = useAsync(
+    async () => ({
+      materials: await getMaterials(),
+      suppliers: await getSuppliers(),
+    }),
+    []
+  );
 
-export default async function NewLotPage() {
-  const [materials, suppliers] = await Promise.all([getMaterials(), getSuppliers()]);
+  if (!user) return null;
+  return (
+    <Async state={state}>
+      {({ materials, suppliers }) => (
+        <NewLotView materials={materials} suppliers={suppliers} user={user} />
+      )}
+    </Async>
+  );
+}
+
+function NewLotView({
+  materials,
+  suppliers,
+  user,
+}: {
+  materials: Awaited<ReturnType<typeof getMaterials>>;
+  suppliers: Awaited<ReturnType<typeof getSuppliers>>;
+  user: SessionUser;
+}) {
   const today = todayInputValue();
 
   return (
@@ -31,7 +61,7 @@ export default async function NewLotPage() {
         </Card>
       ) : (
         <Card className="max-w-3xl">
-          <ActionForm action={receiveLot} submitLabel="حفظ والانتقال لكشف الفحص">
+          <ActionForm action={receiveLot(user)} submitLabel="حفظ والانتقال لكشف الفحص">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="رقم التشغيلة / Lot No.">
                 <input className="input ltr" name="lotNumber" required placeholder="LOT-2026-001" />

@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { ActionForm } from "./ActionForm";
 import { Card, Empty, Field, StatusPill } from "./ui";
-import { createAnalysis, saveAnalysisResults } from "@/lib/server/actions";
+import { createAnalysis, saveAnalysisResults } from "@/lib/client/actions";
+import type { SessionUser } from "@/lib/client/session";
 import { analysisResultPass } from "@/lib/domain/inspection";
 import { fmtDateTime, fmtNum } from "@/lib/format";
 import { stageDef } from "@/lib/domain/stages";
@@ -45,9 +46,13 @@ const DEFAULT_PROPERTIES = [
 
 export function AnalysisPanel({
   lotId,
+  user,
+  onSaved,
   analyses,
 }: {
   lotId: string;
+  user: SessionUser;
+  onSaved?: () => void;
   analyses: AnalysisRow[];
 }) {
   const def = stageDef("RAW_ANALYSIS");
@@ -64,7 +69,7 @@ export function AnalysisPanel({
       ) : (
         <div className="grid gap-4">
           {analyses.map((a) => (
-            <AnalysisCard key={a.id} analysis={a} lotId={lotId} />
+            <AnalysisCard key={a.id} analysis={a} lotId={lotId} user={user} onSaved={onSaved} />
           ))}
         </div>
       )}
@@ -75,7 +80,7 @@ export function AnalysisPanel({
         </summary>
 
         <div className="mt-3">
-          <ActionForm action={createAnalysis} submitLabel="فتح التحليل">
+          <ActionForm action={createAnalysis(user)} onSuccess={onSaved} submitLabel="فتح التحليل">
             <input type="hidden" name="lotId" value={lotId} />
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="مرجع العينة">
@@ -191,7 +196,17 @@ export function AnalysisPanel({
   );
 }
 
-function AnalysisCard({ analysis, lotId }: { analysis: AnalysisRow; lotId: string }) {
+function AnalysisCard({
+  analysis,
+  lotId,
+  user,
+  onSaved,
+}: {
+  analysis: AnalysisRow;
+  lotId: string;
+  user: SessionUser;
+  onSaved?: () => void;
+}) {
   return (
     <div className="rounded-[var(--radius-sm)] border border-[var(--border-strong)] p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -204,7 +219,11 @@ function AnalysisCard({ analysis, lotId }: { analysis: AnalysisRow; lotId: strin
         <StatusPill status={analysis.status} />
       </div>
 
-      <ActionForm action={saveAnalysisResults} submitLabel="حفظ النتائج">
+      <ActionForm
+        action={saveAnalysisResults(user)}
+        onSuccess={onSaved}
+        submitLabel="حفظ النتائج"
+      >
         <input type="hidden" name="lotId" value={lotId} />
         <input type="hidden" name="analysisId" value={analysis.id} />
 

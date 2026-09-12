@@ -183,12 +183,18 @@ describe("the audit trail, which used to be held by a foreign key", () => {
    *  an account — so a future "tidy up old users" feature has to break this
    *  test before it can break the trail. */
   it("exposes no action that deletes an account", async () => {
-    const actions = await import("@/lib/server/user-actions");
+    const actions = await import("@/lib/client/actions");
     const names = Object.keys(actions);
 
-    expect(names).toContain("createUser");
+    expect(names).toContain("grantAccess");
     expect(names).toContain("setUserActive");
-    expect(names.some((n) => /delete|remove|purge|destroy/i.test(n))).toBe(false);
+
+    // Deleting a *user* is what must not exist. `deleteFeature` removes a
+    // measured dimension from a spec, which nothing has signed.
+    const accountDeleters = names.filter((n) =>
+      /^(delete|remove|purge|destroy)(User|Account|Inspector)/i.test(n)
+    );
+    expect(accountDeleters).toEqual([]);
   });
 
   it("denies every client read and write in the security rules", async () => {

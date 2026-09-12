@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { ThemeToggle } from "./ThemeToggle";
-import { ROLE_LABELS, can, type Role } from "@/lib/domain/roles";
-import { endSession } from "@/lib/server/session-actions";
+import { ROLE_LABELS, can } from "@/lib/domain/roles";
+import { signOut, useSession } from "@/lib/client/session";
 
 const LINKS = [
   { href: "/", label: "لوحة المتابعة" },
@@ -16,20 +16,20 @@ const LINKS = [
   { href: "/reports", label: "التقارير" },
 ];
 
-export interface NavUser {
-  displayName: string;
-  role: Role;
-}
-
-export function AppNav({ user }: { user: NavUser }) {
+export function AppNav() {
+  const { user } = useSession();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
   // Hiding a link the account cannot use is a courtesy, not a control: the
-  // page behind it checks the same permission again on the server.
-  const links = can(user.role, "user.manage")
+  // security rules refuse the reads behind it either way.
+  const links = user && can(user.role, "user.manage")
     ? [...LINKS, { href: "/admin/users", label: "المستخدمون" }]
     : LINKS;
+
+  // Signed out — on the login page, or still restoring a session. There is
+  // nowhere useful to navigate to yet.
+  if (!user) return null;
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -69,11 +69,14 @@ export function AppNav({ user }: { user: NavUser }) {
             <div className="text-xs text-[var(--muted)]">{ROLE_LABELS[user.role].ar}</div>
           </div>
 
-          <form action={endSession}>
-            <button type="submit" className="btn" title="تسجيل الخروج">
-              خروج
-            </button>
-          </form>
+          <button
+            type="button"
+            className="btn"
+            title="تسجيل الخروج"
+            onClick={() => void signOut()}
+          >
+            خروج
+          </button>
 
           <ThemeToggle />
           <button

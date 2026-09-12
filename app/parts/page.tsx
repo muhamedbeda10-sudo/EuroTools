@@ -1,11 +1,16 @@
+"use client";
+
 import Link from "next/link";
 
 import { Card, Empty, PageHeader, StatusPill } from "@/components/ui";
-import { getParts } from "@/lib/server/queries";
+import { getParts } from "@/lib/client/queries";
 import { isStage, stageDef, STAGE_DEFS } from "@/lib/domain/stages";
 import { fmtDate, pct } from "@/lib/format";
-
-export const dynamic = "force-dynamic";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession } from "@/lib/client/session";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 const STATUS_FILTERS = [
   { value: "", label: "الكل" },
@@ -16,17 +21,48 @@ const STATUS_FILTERS = [
   { value: "REJECTED", label: "مرفوض" },
 ];
 
-export default async function PartsPage({ searchParams }: PageProps<"/parts">) {
-  const sp = await searchParams;
-  const statusRaw = typeof sp.status === "string" ? sp.status : "";
-  const stageRaw = typeof sp.stage === "string" ? sp.stage : "";
+export default function PartsPage() {
+  return (
+    <Suspense fallback={null}>
+      <PartsLoader />
+    </Suspense>
+  );
+}
 
+function PartsLoader() {
+  const user = useRequireSession();
+  const sp = useSearchParams();
+
+  const statusRaw = sp.get("status") ?? "";
+  const stageRaw = sp.get("stage") ?? "";
+  // Both filters come off the query string, so both are narrowed to a value
+  // this page actually knows before they reach a Firestore query.
   const status = STATUS_FILTERS.some((f) => f.value === statusRaw && f.value !== "")
     ? statusRaw
     : undefined;
   const stage = isStage(stageRaw) ? stageRaw : undefined;
 
-  const parts = await getParts({ stage, status });
+  const state = useAsync(() => getParts({ stage, status }), [stage, status]);
+
+  if (!user) return null;
+  return (
+    <Async state={state}>
+      {(parts) => (
+        <PartsView parts={parts} statusRaw={statusRaw} stageRaw={stageRaw} />
+      )}
+    </Async>
+  );
+}
+
+function PartsView({
+  parts,
+  statusRaw,
+  stageRaw,
+}: {
+  parts: Awaited<ReturnType<typeof getParts>>;
+  statusRaw: string;
+  stageRaw: string;
+}) {
 
   const q = (next: Record<string, string>) => {
     const params = new URLSearchParams();
@@ -67,7 +103,7 @@ export default async function PartsPage({ searchParams }: PageProps<"/parts">) {
               <Link
                 href={q({ status: statusRaw, stage: "" })}
                 className={`rounded-[var(--radius-sm)] px-2.5 py-1 text-xs font-semibold ${
-                  !stage ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"
+                  !stageRaw ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"
                 }`}
               >
                 الكل
@@ -77,7 +113,7 @@ export default async function PartsPage({ searchParams }: PageProps<"/parts">) {
                   key={d.stage}
                   href={q({ status: statusRaw, stage: d.stage })}
                   className={`rounded-[var(--radius-sm)] px-2.5 py-1 text-xs font-semibold ${
-                    stage === d.stage
+                    stageRaw === d.stage
                       ? "bg-[var(--brand)] text-white"
                       : "bg-[var(--surface-2)] text-[var(--muted)]"
                   }`}
@@ -114,7 +150,7 @@ export default async function PartsPage({ searchParams }: PageProps<"/parts">) {
                     <tr key={p.id}>
                       <td>
                         <Link
-                          href={`/parts/${p.id}`}
+                          href={`/parts/view?id=${p.id}`}
                           className="ltr font-bold text-[var(--brand)]"
                         >
                           {p.serialNumber}

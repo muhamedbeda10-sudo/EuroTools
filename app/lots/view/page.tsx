@@ -1,5 +1,6 @@
+"use client";
+
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { ActionForm } from "@/components/ActionForm";
 import { ChecklistForm } from "@/components/ChecklistForm";
@@ -11,21 +12,47 @@ import {
   raiseParts,
   setCertificate,
   submitLotInspection,
-} from "@/lib/server/actions";
-import { getLot } from "@/lib/server/queries";
-import { requireUser } from "@/lib/server/auth";
+} from "@/lib/client/actions";
+import { getLot } from "@/lib/client/queries";
 import { canRaiseParts } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
 import { fmtDate, fmtDateTime, fmtNum } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export const dynamic = "force-dynamic";
+export default function LotPage() {
+  return (
+    <Suspense fallback={null}>
+      <LotLoader />
+    </Suspense>
+  );
+}
 
-export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
-  const user = await requireUser();
-  const { id } = await params;
-  const lot = await getLot(id);
-  if (!lot) notFound();
+function LotLoader() {
+  const user = useRequireSession();
+  const id = useSearchParams().get("id") ?? "";
+  const state = useAsync(() => getLot(id), [id]);
 
+  if (!user) return null;
+  return (
+    <Async state={state} empty={<Empty>التشغيلة غير موجودة.</Empty>}>
+      {(lot) => <LotView lot={lot} user={user} refresh={state.refresh} />}
+    </Async>
+  );
+}
+
+function LotView({
+  lot,
+  user,
+  refresh,
+}: {
+  lot: NonNullable<Awaited<ReturnType<typeof getLot>>>;
+  user: SessionUser;
+  refresh: () => void;
+}) {
   const receivingDef = stageDef("RAW_RECEIVING");
   const gate = canRaiseParts(lot);
   const lastReceiving = lot.inspections.find((i) => i.stage === "RAW_RECEIVING");
@@ -72,7 +99,8 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
             <ul className="grid gap-2">
               {lot.certificates.map((c) => (
                 <li key={c.id} className="rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5">
-                  <InlineForm action={setCertificate} submitLabel="حفظ">
+                  <InlineForm action={setCertificate(user)}
+              onSuccess={refresh} submitLabel="حفظ">
                     <input type="hidden" name="id" value={c.id} />
                     <div className="min-w-[10rem] flex-1">
                       <div className="text-sm font-bold">{c.type}</div>
@@ -108,7 +136,8 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
               إضافة شهادة غير مدرجة
             </summary>
             <div className="mt-2 max-w-md">
-              <ActionForm action={addCertificate} submitLabel="إضافة" submitClassName="">
+              <ActionForm action={addCertificate(user)}
+              onSuccess={refresh} submitLabel="إضافة" submitClassName="">
                 <input type="hidden" name="lotId" value={lot.id} />
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Field label="نوع الشهادة">
@@ -139,14 +168,15 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
       >
         <ChecklistForm
           stage="RAW_RECEIVING"
-          action={submitLotInspection}
+          action={submitLotInspection(user)}
           hiddenFields={{ lotId: lot.id }}
           signatory={{ displayName: user.displayName, role: user.role }}
+                onSuccess={refresh}
         />
       </Card>
 
       {/* ── 2 · analysis ── */}
-      <AnalysisPanel lotId={lot.id} analyses={lot.analyses} />
+      <AnalysisPanel lotId={lot.id} analyses={lot.analyses} user={user} onSaved={refresh} />
 
       {/* ── issuing parts ── */}
       <Card
@@ -160,7 +190,8 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
           </p>
         ) : (
           <div className="max-w-xl">
-            <ActionForm action={raiseParts} submitLabel="إصدار الأجزاء">
+            <ActionForm action={raiseParts(user)}
+              onSuccess={refresh} submitLabel="إصدار الأجزاء">
               <input type="hidden" name="lotId" value={lot.id} />
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="بادئة الرقم المسلسل" hint="سيُضاف رقم تسلسلي من 4 خانات">
@@ -196,7 +227,7 @@ export default async function LotPage({ params }: PageProps<"/lots/[id]">) {
               {lot.parts.map((p) => (
                 <Link
                   key={p.id}
-                  href={`/parts/${p.id}`}
+                  href={`/parts/view?id=${p.id}`}
                   className="ltr rounded-[var(--radius-sm)] border border-[var(--border)] px-2 py-1 text-xs font-semibold transition hover:border-[var(--brand)]"
                 >
                   {p.serialNumber}

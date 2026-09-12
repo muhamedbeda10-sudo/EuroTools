@@ -1,22 +1,52 @@
+"use client";
+
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { ActionForm } from "@/components/ActionForm";
 import { InlineForm } from "@/components/InlineForm";
 import { Card, Empty, Field, Kv, PageHeader } from "@/components/ui";
-import { addFeature, deleteFeature, saveMaterial } from "@/lib/server/actions";
-import { getMaterial } from "@/lib/server/queries";
+import { addFeature, deleteFeature, saveMaterial } from "@/lib/client/actions";
+import { getMaterial } from "@/lib/client/queries";
 import { STAGE_DEFS, stageDef } from "@/lib/domain/stages";
 import { fmtNum, fmtTolerance } from "@/lib/format";
-
-export const dynamic = "force-dynamic";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 const MEASURED_STAGES = STAGE_DEFS.filter((d) => d.subject === "PART");
 
-export default async function MaterialPage({ params }: PageProps<"/materials/[id]">) {
-  const { id } = await params;
-  const material = await getMaterial(id);
-  if (!material) notFound();
+export default function MaterialPage() {
+  return (
+    <Suspense fallback={null}>
+      <MaterialLoader />
+    </Suspense>
+  );
+}
+
+function MaterialLoader() {
+  const user = useRequireSession();
+  const id = useSearchParams().get("id") ?? "";
+  const state = useAsync(() => getMaterial(id), [id]);
+
+  if (!user) return null;
+  return (
+    <Async state={state} empty={<Empty>المواصفة غير موجودة.</Empty>}>
+      {(material) => <MaterialView material={material} user={user} refresh={state.refresh} />}
+    </Async>
+  );
+}
+
+function MaterialView({
+  material,
+  user,
+  refresh,
+}: {
+  material: NonNullable<Awaited<ReturnType<typeof getMaterial>>>;
+  user: SessionUser;
+  refresh: () => void;
+}) {
 
   return (
     <>
@@ -73,7 +103,8 @@ export default async function MaterialPage({ params }: PageProps<"/materials/[id
         </Card>
 
         <Card title="تعديل المواصفة" className="lg:col-span-2">
-          <ActionForm action={saveMaterial} submitLabel="حفظ التعديلات">
+          <ActionForm action={saveMaterial(user)}
+              onSuccess={refresh} submitLabel="حفظ التعديلات">
             <input type="hidden" name="id" value={material.id} />
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="رقم الجزء">
@@ -200,7 +231,8 @@ export default async function MaterialPage({ params }: PageProps<"/materials/[id
                           </td>
                           <td>
                             <InlineForm
-                              action={deleteFeature}
+                              action={deleteFeature(user)}
+              onSuccess={refresh}
                               submitLabel="حذف"
                               submitClassName="btn-danger"
                               confirm={`حذف الخاصية "${f.name}"؟`}
@@ -223,7 +255,8 @@ export default async function MaterialPage({ params }: PageProps<"/materials/[id
             إضافة خاصية مقاسة
           </summary>
           <div className="mt-3">
-            <ActionForm action={addFeature} submitLabel="إضافة الخاصية">
+            <ActionForm action={addFeature(user)}
+              onSuccess={refresh} submitLabel="إضافة الخاصية">
               <input type="hidden" name="materialId" value={material.id} />
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="المرحلة">

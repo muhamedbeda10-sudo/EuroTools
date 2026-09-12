@@ -1,15 +1,31 @@
+"use client";
+
 import Link from "next/link";
 
 import { Card, Empty, PageHeader, Stat, StatusPill } from "@/components/ui";
-import { getDashboard } from "@/lib/server/queries";
+import { getDashboard } from "@/lib/client/queries";
 import { stageDef } from "@/lib/domain/stages";
 import { fmtDateTime, pct } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession } from "@/lib/client/session";
 
-export const dynamic = "force-dynamic";
+export default function DashboardPage() {
+  const user = useRequireSession();
+  const state = useAsync(() => getDashboard(), []);
 
-export default async function DashboardPage() {
-  const { lotCounts, partCounts, queues, blocked, inspections, firstPassYield } =
-    await getDashboard();
+  if (!user) return null;
+  return <Async state={state}>{(data) => <DashboardView {...data} />}</Async>;
+}
+
+function DashboardView({
+  lotCounts,
+  partCounts,
+  queues,
+  blocked,
+  inspections,
+  firstPassYield,
+}: Awaited<ReturnType<typeof getDashboard>>) {
 
   return (
     <>
@@ -92,7 +108,7 @@ export default async function DashboardPage() {
               {blocked.slice(0, 8).map((b) => (
                 <li key={b.lot.id}>
                   <Link
-                    href={`/lots/${b.lot.id}`}
+                    href={`/lots/view?id=${b.lot.id}`}
                     className="block rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5 transition hover:border-[var(--brand)]"
                   >
                     <div className="flex items-center justify-between gap-2">

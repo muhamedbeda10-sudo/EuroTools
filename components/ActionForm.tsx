@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import type { ReactNode } from "react";
-import type { ActionResult } from "@/lib/server/actions";
+import type { ActionResult } from "@/lib/client/actions";
 
 type Action = (formData: FormData) => Promise<ActionResult>;
 
@@ -17,6 +17,7 @@ export function ActionForm({
   submitClassName = "btn-primary",
   confirm,
   id,
+  onSuccess,
 }: {
   action: Action;
   submitLabel: string;
@@ -25,9 +26,16 @@ export function ActionForm({
   submitClassName?: string;
   confirm?: string;
   id?: string;
+  /** Re-read the page's data. Replaces `revalidatePath`, which needed a
+   *  server. */
+  onSuccess?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(
-    async (_prev: ActionResult | null, formData: FormData) => action(formData),
+    async (_prev: ActionResult | null, formData: FormData) => {
+      const result = await action(formData);
+      if (result.ok) onSuccess?.();
+      return result;
+    },
     null
   );
 

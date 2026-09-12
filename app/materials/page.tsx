@@ -1,15 +1,52 @@
+"use client";
+
 import Link from "next/link";
 
 import { ActionForm } from "@/components/ActionForm";
 import { Card, Empty, Field, PageHeader } from "@/components/ui";
-import { saveMaterial, saveSupplier } from "@/lib/server/actions";
-import { getMaterials, getSuppliers } from "@/lib/server/queries";
+import { saveMaterial, saveSupplier } from "@/lib/client/actions";
+import { getMaterials, getSuppliers } from "@/lib/client/queries";
 import { fmtNum } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
 
-export const dynamic = "force-dynamic";
+export default function MaterialsPage() {
+  const user = useRequireSession();
+  const state = useAsync(
+    async () => ({
+      materials: await getMaterials(),
+      suppliers: await getSuppliers(),
+    }),
+    []
+  );
 
-export default async function MaterialsPage() {
-  const [materials, suppliers] = await Promise.all([getMaterials(), getSuppliers()]);
+  if (!user) return null;
+  return (
+    <Async state={state}>
+      {({ materials, suppliers }) => (
+        <MaterialsView
+          materials={materials}
+          suppliers={suppliers}
+          user={user}
+          refresh={state.refresh}
+        />
+      )}
+    </Async>
+  );
+}
+
+function MaterialsView({
+  materials,
+  suppliers,
+  user,
+  refresh,
+}: {
+  materials: Awaited<ReturnType<typeof getMaterials>>;
+  suppliers: Awaited<ReturnType<typeof getSuppliers>>;
+  user: SessionUser;
+  refresh: () => void;
+}) {
 
   return (
     <>
@@ -44,7 +81,7 @@ export default async function MaterialsPage() {
                   <tr key={m.id}>
                     <td>
                       <Link
-                        href={`/materials/${m.id}`}
+                        href={`/materials/view?id=${m.id}`}
                         className="ltr font-bold text-[var(--brand)]"
                       >
                         {m.partNumber}
@@ -81,7 +118,8 @@ export default async function MaterialsPage() {
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card title="إضافة مواصفة جديدة" className="lg:col-span-2">
-          <ActionForm action={saveMaterial} submitLabel="حفظ المواصفة">
+          <ActionForm action={saveMaterial(user)}
+              onSuccess={refresh} submitLabel="حفظ المواصفة">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="رقم الجزء / Part No.">
                 <input className="input ltr" name="partNumber" required placeholder="PN-1042-A" />
@@ -145,7 +183,8 @@ export default async function MaterialsPage() {
               ))}
             </ul>
           )}
-          <ActionForm action={saveSupplier} submitLabel="إضافة مورد" submitClassName="">
+          <ActionForm action={saveSupplier(user)}
+              onSuccess={refresh} submitLabel="إضافة مورد" submitClassName="">
             <div className="grid gap-2">
               <Field label="اسم المورد">
                 <input className="input" name="name" required />

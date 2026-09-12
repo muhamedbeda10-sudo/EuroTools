@@ -1,13 +1,23 @@
+"use client";
+
 import Link from "next/link";
 
 import { Card, Empty, PageHeader, StatusPill } from "@/components/ui";
-import { getQueues } from "@/lib/server/queries";
+import { getQueues } from "@/lib/client/queries";
 import { fmtDate } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession } from "@/lib/client/session";
 
-export const dynamic = "force-dynamic";
+export default function QueuePage() {
+  const user = useRequireSession();
+  const state = useAsync(() => getQueues(), []);
 
-export default async function QueuePage() {
-  const queues = await getQueues();
+  if (!user) return null;
+  return <Async state={state}>{(queues) => <QueueView queues={queues} />}</Async>;
+}
+
+function QueueView({ queues }: { queues: Awaited<ReturnType<typeof getQueues>> }) {
 
   return (
     <>
@@ -54,7 +64,7 @@ export default async function QueuePage() {
                       <tr key={p.id}>
                         <td>
                           <Link
-                            href={`/parts/${p.id}`}
+                            href={`/parts/view?id=${p.id}`}
                             className="ltr font-bold text-[var(--brand)]"
                           >
                             {p.serialNumber}
@@ -67,7 +77,7 @@ export default async function QueuePage() {
                         </td>
                         <td className="num text-xs">{fmtDate(p.createdAt)}</td>
                         <td>
-                          <Link href={`/parts/${p.id}#inspect`} className="btn">
+                          <Link href={`/parts/view?id=${p.id}#inspect`} className="btn">
                             فحص
                           </Link>
                         </td>

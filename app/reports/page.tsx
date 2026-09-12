@@ -1,17 +1,34 @@
+"use client";
+
 import Link from "next/link";
 
 import { PrintButton } from "@/components/PrintButton";
 import { Card, Empty, PageHeader, Stat, StatusPill } from "@/components/ui";
-import { getQualityReport } from "@/lib/server/queries";
+import { getQualityReport } from "@/lib/client/queries";
 import { deviation } from "@/lib/domain/inspection";
 import { stageDef } from "@/lib/domain/stages";
 import { fmtDate, fmtNum, fmtTolerance, pct } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession } from "@/lib/client/session";
+import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { VerdictReconciliation } from "@/components/VerdictReconciliation";
 
-export const dynamic = "force-dynamic";
+export default function ReportsPage() {
+  const user = useRequireSession();
+  const state = useAsync(() => getQualityReport(), []);
 
-export default async function ReportsPage() {
-  const { byStage, topFailures, outOfTolerance, released, total } =
-    await getQualityReport();
+  if (!user) return null;
+  return <Async state={state}>{(data) => <ReportsView {...data} />}</Async>;
+}
+
+function ReportsView({
+  byStage,
+  topFailures,
+  outOfTolerance,
+  released,
+  total,
+}: Awaited<ReturnType<typeof getQualityReport>>) {
 
   const totals = byStage.reduce(
     (acc, s) => ({
@@ -30,9 +47,7 @@ export default async function ReportsPage() {
         subtitle={`${total} عملية فحص مسجلة`}
         action={
           <div className="flex gap-2">
-            <Link href="/reports/export" className="btn no-print" prefetch={false}>
-              تصدير CSV
-            </Link>
+            <ExportCsvButton />
             <PrintButton />
           </div>
         }
@@ -193,7 +208,7 @@ export default async function ReportsPage() {
                 {released.map((p) => (
                   <tr key={p.id}>
                     <td>
-                      <Link href={`/parts/${p.id}`} className="ltr font-bold text-[var(--brand)]">
+                      <Link href={`/parts/view?id=${p.id}`} className="ltr font-bold text-[var(--brand)]">
                         {p.serialNumber}
                       </Link>
                     </td>
@@ -210,6 +225,8 @@ export default async function ReportsPage() {
           </div>
         )}
       </Card>
+
+      <VerdictReconciliation />
     </>
   );
 }

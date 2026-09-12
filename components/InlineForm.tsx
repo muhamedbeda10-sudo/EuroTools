@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import type { ReactNode } from "react";
-import type { ActionResult } from "@/lib/server/actions";
+import type { ActionResult } from "@/lib/client/actions";
 
 /** A compact inline form for table/list rows: the submit sits among the
  *  fields rather than below them, and any error appears under the row. */
@@ -13,6 +13,7 @@ export function InlineForm({
   className = "flex flex-wrap items-end gap-2",
   submitClassName = "",
   confirm,
+  onSuccess,
 }: {
   action: (formData: FormData) => Promise<ActionResult>;
   submitLabel: string;
@@ -20,9 +21,16 @@ export function InlineForm({
   className?: string;
   submitClassName?: string;
   confirm?: string;
+  /** Re-read the page's data. Replaces `revalidatePath`, which needed a
+   *  server. */
+  onSuccess?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(
-    async (_prev: ActionResult | null, formData: FormData) => action(formData),
+    async (_prev: ActionResult | null, formData: FormData) => {
+      const result = await action(formData);
+      if (result.ok) onSuccess?.();
+      return result;
+    },
     null
   );
 

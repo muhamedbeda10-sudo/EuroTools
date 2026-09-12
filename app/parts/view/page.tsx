@@ -1,25 +1,52 @@
+"use client";
+
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { ActionForm } from "@/components/ActionForm";
 import { ChecklistForm, type FeatureRow } from "@/components/ChecklistForm";
 import { PrintButton } from "@/components/PrintButton";
 import { Card, Empty, Kv, PageHeader, StatusPill } from "@/components/ui";
-import { returnPartToQueue, submitPartInspection } from "@/lib/server/actions";
-import { getPart } from "@/lib/server/queries";
-import { requireUser } from "@/lib/server/auth";
+import { returnPartToQueue, submitPartInspection } from "@/lib/client/actions";
+import { getPart } from "@/lib/client/queries";
 import { canInspect, measurementResult } from "@/lib/domain/inspection";
 import { GROUP_LABELS, PART_STAGES, stageDef, type Stage } from "@/lib/domain/stages";
 import { fmtDate, fmtDateTime, fmtNum, fmtTolerance, pct } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export const dynamic = "force-dynamic";
+export default function PartPage() {
+  return (
+    <Suspense fallback={null}>
+      <PartLoader />
+    </Suspense>
+  );
+}
 
-export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
-  const user = await requireUser();
-  const { id } = await params;
-  const part = await getPart(id);
-  if (!part) notFound();
+function PartLoader() {
+  const user = useRequireSession();
+  const id = useSearchParams().get("id") ?? "";
+  const state = useAsync(() => getPart(id), [id]);
 
+  if (!user) return null;
+  return (
+    <Async state={state} empty={<Empty>الجزء غير موجود.</Empty>}>
+      {(part) => <PartView part={part} user={user} refresh={state.refresh} />}
+    </Async>
+  );
+}
+
+function PartView({
+  part,
+  user,
+  refresh,
+}: {
+  part: NonNullable<Awaited<ReturnType<typeof getPart>>>;
+  user: SessionUser;
+  refresh: () => void;
+}) {
   const stage = part.currentStage as Stage | "DONE";
   const gate =
     stage === "DONE"
@@ -119,7 +146,7 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
             k="التشغيلة"
             v={
               part.lot ? (
-                <Link href={`/lots/${part.lot.id}`} className="ltr text-[var(--brand)]">
+                <Link href={`/lots/view?id=${part.lot.id}`} className="ltr text-[var(--brand)]">
                   {part.lot.lotNumber}
                 </Link>
               ) : (
@@ -160,9 +187,10 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
             >
               <ChecklistForm
                 stage={stage}
-                action={submitPartInspection}
+                action={submitPartInspection(user)}
                 hiddenFields={{ partId: part.id, stage }}
                 signatory={{ displayName: user.displayName, role: user.role }}
+                onSuccess={refresh}
                 features={features}
                 hardnessRange={
                   stage === "HEAT_TREATMENT"
@@ -203,7 +231,8 @@ export default async function PartPage({ params }: PageProps<"/parts/[id]">) {
                     نفس المرحلة.
                   </p>
                   <ActionForm
-                    action={returnPartToQueue}
+                    action={returnPartToQueue(user)}
+              onSuccess={refresh}
                     submitLabel="إعادة إلى طابور الفحص"
                     submitClassName="btn-primary"
                   >

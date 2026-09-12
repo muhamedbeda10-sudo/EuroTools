@@ -1,26 +1,41 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
 
-import { clientAuth } from "@/lib/firebase/client";
-import { createSession } from "@/lib/server/session-actions";
+import { clientAuth } from "@/lib/client/firebase";
+import { useSession } from "@/lib/client/session";
 
-/** Sign-in is a two-step exchange, and both steps have to succeed.
+/** Signing in is two checks, and both have to pass.
  *
- *  Firebase checks the password in the browser and returns an ID token. The
- *  server then checks that the account is provisioned and active here before
- *  it issues the session cookie. A password that Firebase accepts still gets
- *  no session if this plant has not granted the account a role.
+ *  Firebase checks the password. The session provider then reads the user
+ *  document and refuses an account this plant has not provisioned or has
+ *  deactivated — and so, independently, do the security rules on every
+ *  subsequent read. A password Firebase accepts still gets nowhere without a
+ *  role granted here.
  *
  *  Failures are reported the same way whatever went wrong, so the form never
  *  tells a stranger whether an address exists.
  */
 export function LoginForm({ destination }: { destination: string }) {
   const router = useRouter();
+  const { user, rejection } = useSession();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  // "Wrong password" and "not provisioned here" are different problems with
+  // different fixes, so they are shown as they are rather than collapsed. The
+  // session's verdict is read straight through instead of copied into state,
+  // which would mean re-rendering the page to say what it already knew.
+  const message = error ?? rejection;
+  const busy = pending && !rejection;
+
+  // The session provider is what actually decides; when it accepts somebody,
+  // this page has no reason to still be on screen.
+  useEffect(() => {
+    if (user) router.replace(destination);
+  }, [user, destination, router]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,19 +53,8 @@ export function LoginForm({ destination }: { destination: string }) {
     }
 
     try {
-      const credential = await signInWithEmailAndPassword(clientAuth(), email, password);
-      const idToken = await credential.user.getIdToken();
-
-      const result = await createSession(idToken);
-      if (!result.ok) {
-        setError(result.error ?? "تعذّر تسجيل الدخول.");
-        setPending(false);
-        return;
-      }
-
-      // The session cookie is set; re-render the tree so the server sees it.
-      router.replace(destination);
-      router.refresh();
+      await signInWithEmailAndPassword(clientAuth(), email, password);
+      // The session provider takes it from here; the effect above navigates.
     } catch {
       setError("البريد الإلكتروني أو كلمة المرور غير صحيحة.");
       setPending(false);
@@ -84,17 +88,17 @@ export function LoginForm({ destination }: { destination: string }) {
         />
       </label>
 
-      {error && (
+      {message && (
         <p
           role="alert"
           className="rounded-lg bg-[var(--bad-bg)] px-3 py-2 text-sm font-semibold text-[var(--bad-fg)]"
         >
-          {error}
+          {message}
         </p>
       )}
 
-      <button type="submit" className="btn btn-primary w-full justify-center" disabled={pending}>
-        {pending ? "جارٍ الدخول…" : "تسجيل الدخول"}
+      <button type="submit" className="btn btn-primary w-full justify-center" disabled={busy}>
+        {busy ? "جارٍ الدخول…" : "تسجيل الدخول"}
       </button>
 
       <p className="text-center text-xs text-[var(--muted)]">

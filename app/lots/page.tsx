@@ -1,13 +1,23 @@
+"use client";
+
 import Link from "next/link";
 
 import { Card, Empty, PageHeader, StatusPill } from "@/components/ui";
-import { getLots } from "@/lib/server/queries";
+import { getLots } from "@/lib/client/queries";
 import { fmtDate, fmtNum } from "@/lib/format";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession } from "@/lib/client/session";
 
-export const dynamic = "force-dynamic";
+export default function LotsPage() {
+  const user = useRequireSession();
+  const state = useAsync(() => getLots(), []);
 
-export default async function LotsPage() {
-  const lots = await getLots();
+  if (!user) return null;
+  return <Async state={state}>{(lots) => <LotsView lots={lots} />}</Async>;
+}
+
+function LotsView({ lots }: { lots: Awaited<ReturnType<typeof getLots>> }) {
 
   return (
     <>
@@ -60,7 +70,7 @@ export default async function LotsPage() {
                     <tr key={l.id}>
                       <td>
                         <Link
-                          href={`/lots/${l.id}`}
+                          href={`/lots/view?id=${l.id}`}
                           className="ltr font-bold text-[var(--brand)]"
                         >
                           {l.lotNumber}

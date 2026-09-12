@@ -16,7 +16,9 @@
     "rules:deploy": "firebase deploy --only firestore:rules",
     "dev:session": "tsx --conditions=react-server scripts/dev-session-cookie.ts",
     "test:integration": "vitest run tests/integrity.test.ts",
-    "test:rules": "vitest run tests/rules.test.ts"
+    "test:rules": "vitest run tests/rules.test.ts",
+    "test:e2e": "node tests/e2e.mjs",
+    "serve": "firebase emulators:start --only hosting"
   },
   "dependencies": {
     "firebase": "^12.19.0",
@@ -37,6 +39,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "firebase-tools": "^15.30.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
     "typescript": "^5",

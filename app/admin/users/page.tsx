@@ -1,15 +1,15 @@
+"use client";
+
 import { ActionForm } from "@/components/ActionForm";
 import { InlineForm } from "@/components/InlineForm";
 import { Card, Empty, PageHeader } from "@/components/ui";
 import { ROLES, ROLE_LABELS, permissionsOf } from "@/lib/domain/roles";
 import { fmtDateTime } from "@/lib/format";
-import { requirePermissionPage } from "@/lib/server/auth";
-import { getUsers } from "@/lib/server/queries";
-import { createUser, setUserActive, setUserRole } from "@/lib/server/user-actions";
-
-export const dynamic = "force-dynamic";
-
-export const metadata = { title: "المستخدمون — فحص الجودة" };
+import { getUsers } from "@/lib/client/queries";
+import { grantAccess, setUserActive, setUserRole } from "@/lib/client/actions";
+import { Async } from "@/components/Async";
+import { useAsync } from "@/lib/client/use-async";
+import { useRequireSession, type SessionUser } from "@/lib/client/session";
 
 const EVENT_LABELS: Record<string, string> = {
   CREATED: "إنشاء حساب",
@@ -18,9 +18,33 @@ const EVENT_LABELS: Record<string, string> = {
   DEACTIVATED: "إيقاف",
 };
 
-export default async function UsersPage() {
-  const me = await requirePermissionPage("user.manage");
-  const { users, events } = await getUsers();
+export default function UsersPage() {
+  const me = useRequireSession();
+  const state = useAsync(() => getUsers(), []);
+
+  if (!me) return null;
+  // Reading the staff list at all needs the permission; the rules refuse it
+  // otherwise, and `Async` renders that refusal.
+  return (
+    <Async state={state}>
+      {({ users, events }) => (
+        <UsersView users={users} events={events} me={me} refresh={state.refresh} />
+      )}
+    </Async>
+  );
+}
+
+function UsersView({
+  users,
+  events,
+  me,
+  refresh,
+}: {
+  users: Awaited<ReturnType<typeof getUsers>>["users"];
+  events: Awaited<ReturnType<typeof getUsers>>["events"];
+  me: SessionUser;
+  refresh: () => void;
+}) {
 
   return (
     <>
@@ -69,7 +93,8 @@ export default async function UsersPage() {
           الاسم المكتوب هنا هو الاسم الذي سيُوقَّع به على كل فحص، فاكتبه كما يجب أن يظهر في
           التقارير. سلّم كلمة المرور للموظف واطلب منه تغييرها.
         </p>
-        <ActionForm action={createUser} submitLabel="إنشاء الحساب">
+        <ActionForm action={grantAccess(me)}
+              onSuccess={refresh} submitLabel="إنشاء الحساب">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">الاسم</label>
@@ -149,7 +174,8 @@ export default async function UsersPage() {
                     </p>
                   ) : (
                     <div className="mt-2 flex flex-wrap items-end gap-4">
-                      <InlineForm action={setUserRole} submitLabel="تغيير الصلاحية">
+                      <InlineForm action={setUserRole(me)}
+              onSuccess={refresh} submitLabel="تغيير الصلاحية">
                         <input type="hidden" name="id" value={user.id} />
                         <select className="select" name="role" defaultValue={user.role}>
                           {ROLES.map((role) => (
@@ -161,7 +187,8 @@ export default async function UsersPage() {
                       </InlineForm>
 
                       <InlineForm
-                        action={setUserActive}
+                        action={setUserActive(me)}
+              onSuccess={refresh}
                         submitLabel={user.active ? "إيقاف الحساب" : "إعادة التفعيل"}
                         confirm={
                           user.active
