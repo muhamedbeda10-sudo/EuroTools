@@ -25,6 +25,10 @@ import { chromium } from "playwright";
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:5000";
 const EMAIL = process.env.E2E_EMAIL ?? "qa.manager@example.com";
 const PASSWORD = process.env.E2E_PASSWORD ?? "StrongPass123";
+/** The signed-in account's own name. Read rather than assumed: the suite
+ *  checks that creating somebody else did not sign the administrator out, and
+ *  that check is worthless if it is looking for a name nobody set. */
+const NAME = process.env.E2E_NAME ?? "Mona Rashad";
 const EXECUTABLE =
   process.env.E2E_CHROMIUM ?? "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
 
@@ -118,7 +122,7 @@ try {
   await save("Create account");
   const people = await page.textContent("body");
   check("an account is created from inside the application", people.includes("Hala Fouad"));
-  check("and the administrator is still signed in as themselves", people.includes("Mona Rashad"));
+  check("and the administrator is still signed in as themselves", people.includes(NAME));
 
   // ── settings: the departments a hold may name ──
   await go("/settings/", 'textarea[name="departments"]');
@@ -498,9 +502,54 @@ try {
   check("the dashboard counts the hold against its department", dash.includes("Machining"));
   check("the dashboard shows what is still waiting", /Waiting on quality/.test(dash));
 
+  // ── what the printer gets ──
+  // At the paper's own width, not the browser's. Checking this at a desktop
+  // width is how a report that overflowed A4 and lost its right-hand column
+  // looked correct in every screenshot taken of it.
+  //
+  // What this cannot check is that the browser actually turns the paper for
+  // the two wide reports: the orientation comes from `@page`, which only real
+  // printing exercises, and the viewport is set here rather than derived. So
+  // this proves each report fits the sheet it is designed for, not which sheet
+  // the printer reaches for.
+  const A4 = (mm) => Math.round(mm * (96 / 25.4));
+  const PORTRAIT = A4(210) - 2 * A4(12);
+  const LANDSCAPE = A4(297) - 2 * A4(10);
+
+  for (const [label, path, sel, width] of [
+    ["the piece sheet", `/piece/?id=${contested.split("id=")[1]}`, "text=Serial", PORTRAIT],
+    ["the dashboard", "/", "text=First-pass rate", PORTRAIT],
+    ["the planning report", "/planning/", 'h2:text-is("Lines")', LANDSCAPE],
+    ["the queue report", "/queue/", 'h2:text-is("Waiting on quality")', LANDSCAPE],
+  ]) {
+    await page.emulateMedia({ media: "screen" });
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(sel, { timeout: 25000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    await page.emulateMedia({ media: "print" });
+    await page.waitForTimeout(400);
+
+    const over = await page.evaluate((w) => document.documentElement.scrollWidth - w, width);
+    check(`${label} fits the paper it prints on`, over <= 0, `${over}px past the edge`);
+
+    const printed = await page.evaluate(() => {
+      const head = document.querySelector(".print-head");
+      return {
+        mark: !!head?.querySelector("svg"),
+        dark: getComputedStyle(document.querySelector("section.card") ?? document.body)
+          .backgroundColor,
+      };
+    });
+    check(`${label} carries the mark and prints on white`, printed.mark && printed.dark === "rgb(255, 255, 255)",
+      `${printed.mark ? "" : "no mark; "}${printed.dark}`);
+  }
+  await page.emulateMedia({ media: "screen" });
+  await page.setViewportSize({ width: 1280, height: 1000 });
+
   // ── the rules are still the boundary ──
   // Sign out lives under the account menu now, not on the bar.
-  await page.click('button:has-text("Mona Rashad")');
+  await page.click(`button:has-text("${NAME}")`);
   await page.waitForTimeout(300);
   await page.click('button:has-text("Sign out")');
   await page.waitForURL(/\/login/, { timeout: 25000 });

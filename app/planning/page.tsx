@@ -86,7 +86,7 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
   const shownIsFiltered = shown.length !== lines.length;
 
   return (
-    <>
+    <div className="print-wide">
       <PrintHeader
         title="Planning lines"
         subtitle={
@@ -240,7 +240,7 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
         </div>
       )}
       </Card>
-    </>
+    </div>
   );
 }
 

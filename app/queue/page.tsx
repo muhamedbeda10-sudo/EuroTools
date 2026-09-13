@@ -97,7 +97,7 @@ function Lists({
   const showing = count(toMeasure) + count(inRework);
 
   return (
-    <>
+    <div className="print-wide">
       <PrintHeader
         title={`${STAGE_LABELS[stage]} — what quality is holding`}
         subtitle={`${count(toMeasure)} waiting to be measured · ${count(inRework)} in rework`}
@@ -160,7 +160,7 @@ function Lists({
           <Groups groups={inRework} action="rework" me={me} refresh={refresh} />
         )}
       </Card>
-    </>
+    </div>
   );
 }
 

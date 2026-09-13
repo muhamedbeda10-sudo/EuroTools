@@ -444,8 +444,20 @@ html {
   }
 
   @page {
+    size: A4 portrait;
     margin: 14mm 12mm;
   }
+
+  /* A report that is a wide table gets the paper turned. Thirteen columns of
+     real values do not fit across A4 portrait at any font size worth reading,
+     and squeezing them only breaks the headings mid-word. Where a browser does
+     not honour a named page it falls back to portrait, which still fits —
+     just tighter. */
+  @page wide {
+    size: A4 landscape;
+    margin: 12mm 10mm;
+  }
+  .print-wide { page: wide; }
 
   .no-print { display: none !important; }
   .print-only { display: block !important; }
@@ -487,14 +499,52 @@ html {
   }
   .page-break { break-before: page; }
 
-  /* A table that runs over a page break repeats its heading, and no row is
-     cut in half across one. */
+  /* The page is the paper, not the screen.
+   *
+   *  `@page` already provides the margin, so the container's own is width the
+   *  report cannot use — and it had `max-width` from a 1400px desktop, which
+   *  means nothing here. */
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* A table that runs over a page break repeats its heading, and no row is cut
+   *  in half across one.
+   *
+   *  Nothing may hold a width the paper does not have. On screen a wide table
+   *  scrolls sideways inside its card; on paper there is nowhere to scroll, so
+   *  a column that refused to wrap simply pushed the table past the edge and
+   *  the right of it was cut off — which is what a fourteen-column planning
+   *  sheet did. Every cell wraps here and the table is laid out to the width
+   *  available, however little that is. */
   .scroll-x { overflow: visible !important; }
-  .tbl { font-size: 0.72rem; }
+  .tbl { font-size: 0.68rem; width: 100%; table-layout: auto; }
   .tbl thead { display: table-header-group; }
   .tbl tfoot { display: table-footer-group; }
   .tbl tr { break-inside: avoid; }
   .tbl tbody tr:hover { background: none; }
+  .tbl th,
+  .tbl td {
+    white-space: normal;
+    padding: 0.3rem 0.4rem;
+  }
+
+  /* Wrapping happens between words, never inside one. A project number split
+     across two lines is a different project number as far as the eye reading
+     it is concerned, and `MPLPR` broken after `MPL` is not a heading. */
+  .tbl .num,
+  .tbl .ltr,
+  .tbl th {
+    white-space: nowrap;
+  }
+
+  /* Field widths are for a thumb on a tablet. On paper they are just width. */
+  .input,
+  .select {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
 
   .pill { border: 1px solid currentColor; }
 
