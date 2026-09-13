@@ -227,7 +227,7 @@ function Editor({
         <Card
           className="mt-4"
           title="Visual defects for this item"
-          subtitle="On top of the shared list. Leave empty to use the shared list alone."
+          subtitle="On top of the shared list — leave empty to use it alone"
           action={
             <button
               type="button"

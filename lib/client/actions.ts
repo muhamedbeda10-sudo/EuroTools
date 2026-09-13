@@ -24,6 +24,7 @@ import {
 import { result, suggest, type Defect, type Reading } from "@/lib/domain/measurement";
 import { allows, verdictPermission, type Permission } from "@/lib/domain/roles";
 import { optionalNumber, optionalString } from "@/lib/format";
+import { measuringType as parseMeasuringType, num, text } from "@/lib/import/parse";
 import {
   CONFIG_DOCS,
   PHOTO_MAX_PER_INSPECTION,
@@ -343,6 +344,146 @@ export const cancelPlanningLine =
     }
 
     return { ok: true, info: "Line cancelled." };
+  };
+
+/** Correct a line that is already in.
+ *
+ *  What may be corrected here and what may not is not a matter of taste.
+ *
+ *  The line's document id is derived from its project, its item and its
+ *  planned day — that is what makes importing the same sheet twice harmless
+ *  instead of creating every piece a second time. Editing one of those three
+ *  would leave the line sitting under an id that no longer describes it, and
+ *  the next import of the same sheet would not recognise it and would bring it
+ *  in again. So those three are not editable: changing them means cancelling
+ *  the line and adding it again, which is what they actually are — a different
+ *  line.
+ *
+ *  The quantity is editable only while nothing has been measured, for the same
+ *  reason a line can only be cancelled then.
+ *
+ *  What the line says about the part is copied onto every piece when the
+ *  pieces are made, so correcting it here corrects it there too, in one batch
+ *  with the line. A name fixed on the line and stale on its pieces is how a
+ *  report ends up disagreeing with the screen it was run from.
+ */
+export const updatePlanningLine =
+  (actor: SessionUser) =>
+  async (formData: FormData): Promise<ActionResult> => {
+    const denied = allow(actor, "planning.manage");
+    if (denied) return denied;
+
+    const lineId = optionalString(formData.get("lineId"));
+    if (!lineId) return { ok: false, error: "That line reference is not valid." };
+
+    try {
+      const [lineSnap, pieceSnap] = await Promise.all([
+        getDoc(docIn(planningLines(), lineId)),
+        getDocs(query(pieces(), where("lineId", "==", lineId))),
+      ]);
+      if (!lineSnap.exists()) return { ok: false, error: "That line no longer exists." };
+      const line = lineSnap.data() as PlanningLineDoc;
+
+      const itemName = text(formData.get("itemName")) ?? line.itemCode;
+      const mplpr = text(formData.get("mplpr"));
+      const priority = text(formData.get("priority"));
+
+      const measuring = parseMeasuringType(formData.get("measuringType"));
+      if (measuring == null)
+        return { ok: false, error: "Measuring type has to be CMM or Traditional." };
+
+      const qty = num(formData.get("qty"));
+      if (qty == null || !Number.isInteger(qty) || qty < 1 || qty > MAX_QTY)
+        return { ok: false, error: `Quantity must be a whole number between 1 and ${MAX_QTY}.` };
+
+      const measured = line.counts.measurements > 0;
+      if (qty !== line.qty && measured)
+        return {
+          ok: false,
+          error:
+            "This line has been measured, so its quantity is fixed. Add a new line for extra pieces.",
+        };
+
+      const batch = writeBatch(clientDb());
+      const at = now();
+
+      batch.update(lineSnap.ref, {
+        mplpr,
+        itemName,
+        qty,
+        measuringType: measuring,
+        priority,
+        "counts.total": qty,
+        updatedAt: at,
+      });
+
+      // What the pieces were told about the part, brought back into step.
+      const describes =
+        itemName !== line.itemName ||
+        measuring !== line.measuringType ||
+        priority !== line.priority;
+      if (describes) {
+        for (const piece of pieceSnap.docs) {
+          batch.update(piece.ref, {
+            itemName,
+            measuringType: measuring,
+            priority,
+            updatedAt: at,
+          });
+        }
+      }
+
+      // Pieces follow the quantity. Removing one is only ever removing one
+      // nobody has touched, which the measured check above already guarantees;
+      // the highest numbers go first so the serials left behind stay a run
+      // from 001 with no gaps in it.
+      if (qty > line.qty) {
+        const plannedAt = line.plannedAt;
+        const start = initialPosition();
+        for (let n = line.qty + 1; n <= qty; n += 1) {
+          batch.set(docIn(pieces()), {
+            lineId,
+            project: line.project,
+            itemCode: line.itemCode,
+            itemName,
+            measuringType: measuring,
+            priority,
+            plannedAt,
+            pieceNo: n,
+            serial: `${line.project}-${line.itemCode}-${String(n).padStart(3, "0")}`,
+            stage: start.stage,
+            state: start.state,
+            holdDepartment: null,
+            round: 0,
+            measuredTimes: 0,
+            lastVerdict: null,
+            lastInspectedAt: null,
+            qcSince: at,
+            qcSettledMs: 0,
+            createdAt: at,
+            updatedAt: at,
+          } satisfies PieceDoc);
+        }
+      } else if (qty < line.qty) {
+        for (const piece of pieceSnap.docs) {
+          if ((piece.data() as PieceDoc).pieceNo > qty) batch.delete(piece.ref);
+        }
+      }
+
+      // The counters the dashboard reads are kept beside the line rather than
+      // counted, so a quantity change has to move them too.
+      const added = Math.max(0, qty - line.qty);
+      const removed = Math.max(0, line.qty - qty);
+      if (added || removed) {
+        batch.update(lineSnap.ref, { "counts.withQc": line.counts.withQc + added - removed });
+      }
+
+      await batch.commit();
+    } catch (error) {
+      return explain(error, "Could not save the line.");
+    }
+
+    return { ok: true, info: "Line saved." };
   };
 
 // ───────────────────────── inspecting a piece ─────────────────────────

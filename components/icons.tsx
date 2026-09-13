@@ -98,3 +98,29 @@ export const ChevronIcon = ({ className }: Props) => (
     <path d="m6 9 6 6 6-6" />
   </svg>
 );
+
+export const SearchIcon = ({ className }: Props) => (
+  <svg {...base(className)}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.6-3.6" />
+  </svg>
+);
+
+export const PencilIcon = ({ className }: Props) => (
+  <svg {...base(className)}>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+);
+
+export const CheckIcon = ({ className }: Props) => (
+  <svg {...base(className)}>
+    <path d="m20 6-11 11-5-5" />
+  </svg>
+);
+
+export const CloseIcon = ({ className }: Props) => (
+  <svg {...base(className)}>
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);

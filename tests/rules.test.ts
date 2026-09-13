@@ -298,6 +298,75 @@ describe("moving a piece", () => {
   });
 });
 
+describe("correcting what a line said about its pieces", () => {
+  // The name, the measuring type and the priority are copied from the line
+  // onto every piece when the pieces are made. Editing the line has to correct
+  // them on the pieces too, or a report disagrees with the screen it was run
+  // from — so planning is allowed exactly those three fields here.
+
+  it("lets planning fix the description it wrote", async () => {
+    for (const who of ["supervisor", "manager", "admin"] as const) {
+      await assertSucceeds(
+        as(who).doc("pieces/p1").update({
+          itemName: "Core insert, revised",
+          measuringType: "Traditional",
+          priority: "B",
+          updatedAt: new Date(),
+        })
+      );
+    }
+  });
+
+  it("lets planning correct a piece that has already been measured", async () => {
+    // A misspelled name is worth fixing whatever state the piece is in. It is
+    // the identity fields that are frozen by measurement, not the description.
+    await assertSucceeds(
+      as("supervisor").doc("pieces/measured").update({ itemName: "Corrected", updatedAt: new Date() })
+    );
+  });
+
+  it("refuses to let a line edit move the piece", async () => {
+    // The danger in widening this rule: a line edit that also reset a round or
+    // pulled a piece out of a hold would undo quality's work from the planning
+    // screen. Each of these is refused even mixed in with a legitimate field.
+    //
+    // Every value below has to differ from the fixture. Writing a field the
+    // value it already holds is not a change, `changed()` does not report it,
+    // and the case would pass while testing nothing.
+    for (const forbidden of [
+      { itemName: "Fine", state: "CLOSED" },
+      { itemName: "Fine", stage: "FINISH" },
+      { itemName: "Fine", round: 3 },
+      { itemName: "Fine", measuredTimes: 7 },
+      { itemName: "Fine", holdDepartment: "Machining" },
+      { itemName: "Fine", lastVerdict: "ACCEPTED" },
+      { itemName: "Fine", qcSettledMs: 99 },
+    ])
+      await assertFails(as("supervisor").doc("pieces/p1").update(forbidden));
+  });
+
+  it("refuses to let planning change which piece it is", async () => {
+    for (const forbidden of [
+      { itemName: "Fine", serial: "somebody-elses" },
+      { itemName: "Fine", project: "MM260099" },
+      { itemName: "Fine", itemCode: "Cavity" },
+      { itemName: "Fine", lineId: "l2" },
+      { itemName: "Fine", pieceNo: 9 },
+    ])
+      await assertFails(as("supervisor").doc("pieces/p1").update(forbidden));
+  });
+
+  it("refuses an inspector, who may move a piece but not relabel it", async () => {
+    await assertFails(
+      as("inspector").doc("pieces/p1").update({ itemName: "Renamed", updatedAt: new Date() })
+    );
+  });
+
+  it("refuses a viewer", async () => {
+    await assertFails(as("viewer").doc("pieces/p1").update({ itemName: "Renamed" }));
+  });
+});
+
 describe("cancelling a planning line", () => {
   it("lets a supervisor remove a piece nobody has measured", async () => {
     await assertSucceeds(as("supervisor").doc("pieces/p1").delete());

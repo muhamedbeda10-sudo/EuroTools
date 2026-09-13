@@ -42,6 +42,12 @@
   --neutral-fg: #525f6c;
 
   --zebra: #f6f8fa;
+  /* The tab track, and the tab lifted out of it. The header sits on
+     `--surface` in both themes, so "recessed" is darker in one and lighter in
+     the other; naming the pair is what keeps the segmented control reading the
+     same way on both. */
+  --track: #e8edf3;
+  --track-on: #ffffff;
   color-scheme: light;
 }
 
@@ -73,6 +79,8 @@ html.dark {
   --neutral-fg: #a3b1c0;
 
   --zebra: #18202a;
+  --track: #0b1118;
+  --track-on: #27333f;
   color-scheme: dark;
 }
 
@@ -213,28 +221,44 @@ html {
     font-weight: 600;
     white-space: nowrap;
     color: var(--muted);
-    position: relative;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
   }
   .nav-tab:hover { color: var(--foreground); background: var(--surface-2); }
 
+  /* In the drawer the tabs are a vertical list, where a tint is the natural
+     way to mark the current one. */
   .nav-tab-on { color: var(--brand-dark); background: var(--brand-light); }
 
-  /* The underline grows from the middle rather than appearing, so moving
-     between tabs reads as one thing moving and not two things blinking. */
-  .nav-tab::after {
-    content: "";
-    position: absolute;
-    left: 0.75rem;
-    right: 0.75rem;
-    bottom: -0.5rem;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--brand);
-    transform: scaleX(0);
-    transition: transform 0.2s ease;
+  /* In the header they are a segmented control: one recessed track with the
+     current page lifted out of it.
+     
+     What this replaced said "you are here" three times at once — a brand
+     colour, a tinted background and an underline — which reads as decoration
+     rather than as state, and left the other two tabs looking like two
+     different kinds of thing. One raised tab says it once. */
+  .nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    padding: 0.25rem;
+    border-radius: 999px;
+    background: var(--track);
+    border: 1px solid var(--border);
   }
-  .nav-tab-on::after { transform: scaleX(1); }
+  .nav-tabs .nav-tab {
+    border-radius: 999px;
+    padding: 0.45rem 1.15rem;
+  }
+  .nav-tabs .nav-tab:hover {
+    background: transparent;
+    color: var(--foreground);
+  }
+  .nav-tabs .nav-tab-on,
+  .nav-tabs .nav-tab-on:hover {
+    color: var(--foreground);
+    background: var(--track-on);
+    box-shadow: var(--shadow-sm);
+  }
 
   /* A square button holding one icon. */
   .btn-icon {
@@ -276,7 +300,7 @@ html {
   /* Somebody who asked not to be moved is not moved. */
   @media (prefers-reduced-motion: reduce) {
     .menu-pop, .drawer, .fade-in, .rise { animation: none; }
-    .nav-tab, .nav-tab::after, .btn, .card { transition: none; }
+    .nav-tab, .btn, .card { transition: none; }
   }
 
   /* ── status pills ───────────────────────────────────────────── */

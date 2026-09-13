@@ -43,15 +43,21 @@ function check(label, ok, detail = "") {
  */
 const PROJECT = `MM26${String(Date.now()).slice(-6)}`;
 const CORE = `${PROJECT}-Core-001`;
-const CAVITY_1 = `${PROJECT}-Cavity-001`;
-const CAVITY_2 = `${PROJECT}-Cavity-002`;
+/** The carry-forward walk needs an item nobody has measured before, and the
+ *  carry-forward is by item and stage across every project — so a fixed code
+ *  would inherit the previous run's sheet and the test would stop testing
+ *  anything. The item name stays the same; only the code is made unique. */
+const CAVITY = `Cavity${PROJECT.slice(-5)}`;
+const CAVITY_1 = `${PROJECT}-${CAVITY}-001`;
+const CAVITY_2 = `${PROJECT}-${CAVITY}-002`;
 const SHEET = join(tmpdir(), `qc-planning-${Date.now()}.csv`);
 writeFileSync(
   SHEET,
   [
     "Project,MPLPR,Item,Name,Qty,Measuring type,Date,Priority,Duration,Description,Complete",
     `${PROJECT},MP,Core,Core insert,2,CMM,12/09/2026,A,,,`,
-    `${PROJECT},MP,Cavity,Cavity block,2,Traditional,12/09/2026,B,,,`,
+    `${PROJECT},MP,${CAVITY},Cavity block,2,Traditional,12/09/2026,B,,,`,
+    `${PROJECT},MP,Guide,Guide bar,1,Traditional,12/09/2026,C,,,`,
   ].join("\n"),
   "utf8"
 );
@@ -74,6 +80,19 @@ const go = async (path, selector) => {
 const save = async (label) => {
   await page.click(`button:has-text("${label}")`);
   await page.waitForTimeout(1800);
+};
+
+/** The queue stands the pieces of a line under a heading that starts closed,
+ *  so a serial is two clicks away: open its line, then the piece.
+ *
+ *  Scoped to one card, because the same line appears under both "Waiting on
+ *  quality" and "In rework" and an unscoped click opens whichever comes first
+ *  — which is how this silently opened the wrong one. */
+const openLine = async (itemCode, card = "Waiting on quality") => {
+  await page.click(
+    `section.card:has(h2:text-is("${card}")) button:has-text("${PROJECT}"):has-text("${itemCode}")`
+  );
+  await page.waitForTimeout(600);
 };
 
 try {
@@ -129,24 +148,101 @@ try {
   await page.setInputFiles('input[type="file"]', SHEET);
   await page.waitForSelector("text=row(s) ready", { timeout: 15000 });
   const preview = await page.textContent("body");
-  check("the sheet is read before anything is written", preview.includes("2 row(s) ready"));
+  check("the sheet is read before anything is written", preview.includes("3 row(s) ready"));
 
   await page.click('button:has-text("Bring in")');
   await page.waitForSelector("text=brought in", { timeout: 25000 });
   await go("/planning/", `text=${PROJECT}`);
   const planning = await page.textContent("body");
-  check("both lines are in", planning.includes(PROJECT) && planning.includes("Cavity"));
+  check(
+    "all three lines are in",
+    planning.includes(PROJECT) && planning.includes("Cavity") && planning.includes("Guide bar")
+  );
 
-  // ── the queue: three pieces from two lines ──
+  // ── the filter narrows the lines ──
+  await page.fill('input[type="search"]', "guide");
+  await page.waitForTimeout(600);
+  const narrowed = await page.textContent("body");
+  check(
+    "searching a line leaves only that one",
+    narrowed.includes("Guide bar") && !narrowed.includes("Cavity block")
+  );
+  await page.click('button:has-text("Clear")');
+  await page.waitForTimeout(600);
+
+  // ── correcting a line that nobody has measured ──
+  await page.click(`button[title="Edit ${PROJECT} Guide"]`);
+  await page.waitForSelector('input[name="itemName"]', { timeout: 10000 });
+  check(
+    "the fields the line is identified by are not offered for editing",
+    (await page.locator('input[name="project"]').count()) === 0 &&
+      (await page.locator('input[name="itemCode"]').count()) === 0
+  );
+
+  await page.fill('input[name="itemName"]', "Guide bar, revised");
+  await page.fill('input[name="mplpr"]', "MP9");
+  await page.fill('input[name="qty"]', "3");
+  // Scoped to the row being edited: the grid above has a "Save line(s)" button
+  // of its own, disabled while the grid is empty.
+  await page.click('tr:has(input[name="itemName"]) button[type="submit"]');
+  await page.waitForTimeout(2800);
+  const edited = await page.textContent("body");
+  check("a line can be corrected in place", edited.includes("Guide bar, revised") && edited.includes("MP9"));
+
+  await go("/queue/", "text=Waiting on quality");
+  await page.waitForTimeout(2500);
+  const resized = await page.textContent("body");
+  check(
+    "raising the quantity puts the extra pieces in the queue",
+    /3\s*pieces/.test(resized)
+  );
+
+  // ── and deleting one ──
+  await go("/planning/", `text=${PROJECT}`);
+  page.once("dialog", (d) => d.accept());
+  await page.click('tr:has-text("Guide bar, revised") button:has-text("Delete")');
+  await page.waitForTimeout(3000);
+  // Scoped to this run's project. The emulator keeps what earlier runs left
+  // behind, so a search of the whole page for the item name finds their rows
+  // and reports a working delete as a failure.
+  const leftOver = await page.locator(`tr:has-text("${PROJECT}"):has-text("Guide")`).count();
+  check(
+    "a line nobody has measured can be deleted",
+    leftOver === 0,
+    leftOver === 0 ? "" : `${leftOver} row(s) still listed`
+  );
+
+  // ── the queue: two lines, standing closed ──
   await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
   const queue = await page.textContent("body");
   check(
-    "every piece of every line is waiting",
-    queue.includes(CORE) && queue.includes(CAVITY_1)
+    "both lines are waiting, under their own headings",
+    queue.includes(PROJECT) && queue.includes("Core insert") && queue.includes("Cavity block")
+  );
+  check("a closed line says how many pieces are under it", /2\s*pieces/.test(queue));
+  check(
+    "and keeps the serials out of the way until it is opened",
+    !queue.includes(CORE)
+  );
+
+  // ── the filter narrows the queue ──
+  await page.fill('input[type="search"]', "Cavity");
+  await page.waitForTimeout(600);
+  const filtered = await page.textContent("body");
+  check(
+    "searching an item leaves only that line",
+    filtered.includes("Cavity block") && !filtered.includes("Core insert")
+  );
+  await page.click('button:has-text("Clear")');
+  await page.waitForTimeout(600);
+  check(
+    "clearing the filter brings the rest back",
+    (await page.textContent("body")).includes("Core insert")
   );
 
   // ── measure it, and hold it ──
+  await openLine("Core");
   await page.click(`a:has-text("${CORE}")`);
   await page.waitForSelector("text=Outside diameter", { timeout: 25000 });
   check("the sheet comes ready with the item's dimensions", true);
@@ -168,11 +264,13 @@ try {
   // ── the department reports back ──
   await go("/queue/", "text=In rework");
   await page.waitForTimeout(2500);
+  await openLine("Core", "In rework");
   page.once("dialog", (d) => d.accept());
   await page.click('button:has-text("Rework done")');
   await page.waitForTimeout(2500);
   await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
+  await openLine("Core");
   const backWithQc = await page.textContent("body");
   check("closing the rework brings it back to quality", backWithQc.includes(CORE));
 
@@ -194,8 +292,13 @@ try {
   // piece knows, it can only have learned from the sheet signed for the first.
   await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
+  await openLine(CAVITY);
   await page.click(`a:has-text("${CAVITY_1}")`);
   await page.waitForSelector("text=not set up yet", { timeout: 25000 });
+  check(
+    "an item nobody has measured opens with an empty sheet",
+    (await page.locator('input[name="readingKey"]').count()) === 0
+  );
 
   await page.click('button:has-text("Add a dimension")');
   await page.waitForSelector('input[name="readingName"]:not([type="hidden"])', { timeout: 10000 });
@@ -209,6 +312,7 @@ try {
 
   await go("/queue/", "text=Waiting on quality");
   await page.waitForTimeout(2500);
+  await openLine(CAVITY);
   await page.click(`a:has-text("${CAVITY_2}")`);
   await page.waitForSelector("text=Bore depth", { timeout: 25000 });
 

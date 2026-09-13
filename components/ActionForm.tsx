@@ -17,6 +17,7 @@ export function ActionForm({
   submitClassName = "btn-primary",
   confirm,
   id,
+  secondary,
   onSuccess,
 }: {
   action: Action;
@@ -26,6 +27,9 @@ export function ActionForm({
   submitClassName?: string;
   confirm?: string;
   id?: string;
+  /** A way out, beside the way forward. Rendered next to the submit rather
+   *  than left among the fields, where it reads as one of them. */
+  secondary?: ReactNode;
   /** Re-read the page's data. Replaces `revalidatePath`, which needed a
    *  server. */
   onSuccess?: () => void;
@@ -61,10 +65,11 @@ export function ActionForm({
         </p>
       )}
 
-      <div className="mt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button type="submit" className={`btn ${submitClassName}`} disabled={pending}>
           {pending ? "Saving…" : submitLabel}
         </button>
+        {secondary}
       </div>
     </form>
   );

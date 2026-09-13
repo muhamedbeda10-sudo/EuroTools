@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 
 import { Async } from "@/components/Async";
+import { FilterBar } from "@/components/FilterBar";
 import { Card, Empty, Stat, StatusPill } from "@/components/ui";
 import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
+import { matchesText } from "@/lib/filter";
 import { fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
 import { getDashboard } from "@/lib/client/queries";
 import { useAsync } from "@/lib/client/use-async";
@@ -94,81 +97,150 @@ export default function DashboardPage() {
             </Card>
           </div>
 
-          <Card className="mt-4" title="Waiting longest" subtitle="Oldest first — these are the ones somebody is asking about">
-            {d.oldestWaiting.length === 0 ? (
-              <Empty>Nothing is waiting on quality.</Empty>
-            ) : (
-              <div className="scroll-x">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Piece</th>
-                      <th>Project</th>
-                      <th>Item</th>
-                      <th>Stage</th>
-                      <th>Priority</th>
-                      <th>With quality</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {d.oldestWaiting.map((p) => (
-                      <tr key={p.id}>
-                        <td className="ltr font-bold">{p.serial}</td>
-                        <td className="ltr">{p.project}</td>
-                        <td>{p.itemName}</td>
-                        <td><StatusPill status={p.stage} /></td>
-                        <td className="ltr">{p.priority ?? "—"}</td>
-                        <td className="num">{fmtDuration(p.qcMs)}</td>
-                        <td>
-                          <Link href={`/piece/?id=${p.id}`} className="font-bold text-[var(--brand)]">
-                            Measure
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
-
-          <Card className="mt-4" title="Latest decisions">
-            {d.recentInspections.length === 0 ? (
-              <Empty>No inspection has been recorded yet.</Empty>
-            ) : (
-              <div className="scroll-x">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Piece</th>
-                      <th>Stage</th>
-                      <th>Round</th>
-                      <th>Inspector</th>
-                      <th>Verdict</th>
-                      <th>Held against</th>
-                      <th>When</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {d.recentInspections.map((i) => (
-                      <tr key={i.id}>
-                        <td className="ltr font-bold">{i.serial}</td>
-                        <td>{STAGE_LABELS[i.stage]}</td>
-                        <td className="num">{i.round}</td>
-                        <td>{i.inspector}</td>
-                        <td><StatusPill status={i.verdict} /></td>
-                        <td>{i.holdDepartment ?? "—"}</td>
-                        <td className="num">{fmtDateTime(i.inspectedAt)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
+          <Waiting rows={d.oldestWaiting} />
+          <Decisions rows={d.recentInspections} />
         </>
       )}
     </Async>
+  );
+}
+
+type Dashboard = Awaited<ReturnType<typeof getDashboard>>;
+
+/** The two tables carry a search of their own rather than sharing one with the
+ *  page.
+ *
+ *  The tallies above them are counters kept beside the records that moved
+ *  them, not sums over these rows — so a filter cannot honestly change them. A
+ *  search that sat at the top of the page would look like it had, which is
+ *  worse than not having one.
+ */
+function Waiting({ rows }: { rows: Dashboard["oldestWaiting"] }) {
+  const [query, setQuery] = useState("");
+  const shown = useMemo(
+    () =>
+      rows.filter((p) => matchesText([p.serial, p.project, p.itemName, p.priority], query)),
+    [rows, query]
+  );
+
+  return (
+    <Card
+      className="mt-4"
+      title="Waiting longest"
+      subtitle="The ones somebody is asking about"
+    >
+      {rows.length === 0 ? (
+        <Empty>Nothing is waiting on quality.</Empty>
+      ) : (
+        <>
+          <FilterBar
+            query={query}
+            onQuery={setQuery}
+            placeholder="Search this list…"
+            noun="piece"
+            showing={shown.length}
+            total={rows.length}
+          />
+          {shown.length === 0 ? (
+            <Empty>Nothing here matches the filter.</Empty>
+          ) : (
+            <div className="scroll-x">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Piece</th>
+                    <th>Project</th>
+                    <th>Item</th>
+                    <th>Stage</th>
+                    <th>Priority</th>
+                    <th>With quality</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((p) => (
+                    <tr key={p.id}>
+                      <td className="ltr font-bold">{p.serial}</td>
+                      <td className="ltr">{p.project}</td>
+                      <td>{p.itemName}</td>
+                      <td><StatusPill status={p.stage} /></td>
+                      <td className="ltr">{p.priority ?? "—"}</td>
+                      <td className="num">{fmtDuration(p.qcMs)}</td>
+                      <td>
+                        <Link href={`/piece/?id=${p.id}`} className="font-bold text-[var(--brand)]">
+                          Measure
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Decisions({ rows }: { rows: Dashboard["recentInspections"] }) {
+  const [query, setQuery] = useState("");
+  const shown = useMemo(
+    () =>
+      rows.filter((i) =>
+        matchesText([i.serial, i.inspector, i.verdict, i.holdDepartment], query)
+      ),
+    [rows, query]
+  );
+
+  return (
+    <Card className="mt-4" title="Latest decisions">
+      {rows.length === 0 ? (
+        <Empty>No inspection has been recorded yet.</Empty>
+      ) : (
+        <>
+          <FilterBar
+            query={query}
+            onQuery={setQuery}
+            placeholder="Search this list…"
+            noun="decision"
+            showing={shown.length}
+            total={rows.length}
+          />
+          {shown.length === 0 ? (
+            <Empty>Nothing here matches the filter.</Empty>
+          ) : (
+            <div className="scroll-x">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Piece</th>
+                    <th>Stage</th>
+                    <th>Round</th>
+                    <th>Inspector</th>
+                    <th>Verdict</th>
+                    <th>Held against</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((i) => (
+                    <tr key={i.id}>
+                      <td className="ltr font-bold">{i.serial}</td>
+                      <td>{STAGE_LABELS[i.stage]}</td>
+                      <td className="num">{i.round}</td>
+                      <td>{i.inspector}</td>
+                      <td><StatusPill status={i.verdict} /></td>
+                      <td>{i.holdDepartment ?? "—"}</td>
+                      <td className="num">{fmtDateTime(i.inspectedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

@@ -66,7 +66,7 @@ export default function RootLayout({
             navigation, rather than each of them asking Firebase separately. */}
         <SessionProvider>
           <AppNav />
-          <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 md:px-6 md:py-6">
+          <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 md:px-6 md:py-6 2xl:max-w-[1720px]">
             {children}
           </main>
           <InstallPrompt />

@@ -73,7 +73,7 @@ export function AppNav() {
           <BrandLink />
         </div>
 
-        <nav className="hidden items-center justify-center gap-0.5 lg:flex xl:gap-1">
+        <nav className="nav-tabs hidden lg:flex">
           {LINKS.map((l) => (
             <Link
               key={l.href}

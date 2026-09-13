@@ -153,7 +153,7 @@ export function InspectionSheet({
                     <input type="hidden" name="readingUnit" value={row.unit ?? ""} />
                     {row.adHoc ? (
                       <input
-                        className="input ltr"
+                        className="input ltr w-full"
                         name="readingName"
                         value={row.name}
                         placeholder="What you measured"
@@ -171,7 +171,7 @@ export function InspectionSheet({
                   {(["nominal", "tolMinus", "tolPlus"] as const).map((field) => (
                     <td key={field}>
                       <input
-                        className="input num w-24"
+                        className="input num w-full min-w-[4.5rem]"
                         type="number"
                         step="any"
                         name={`reading${field[0].toUpperCase()}${field.slice(1)}`}
@@ -184,7 +184,7 @@ export function InspectionSheet({
                   ))}
                   <td>
                     <input
-                      className="input num w-28"
+                      className="input num w-full min-w-[5.5rem]"
                       type="number"
                       step="any"
                       name="readingActual"

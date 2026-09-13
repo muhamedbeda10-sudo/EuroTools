@@ -20,7 +20,9 @@ import { PlusIcon, TrashIcon } from "./icons";
 export interface GridColumn {
   key: string;
   label: string;
-  /** Width hint in characters; the column is still allowed to shrink. */
+  /** Width hint in characters. It sets the floor a column may shrink to and,
+   *  because every cell fills its column, the share of any spare width it
+   *  takes. It is a hint in both directions, never a fixed size. */
   width?: number;
   placeholder?: string;
   options?: readonly string[];
@@ -141,7 +143,7 @@ export function PasteGrid({
                   <td key={column.key}>
                     {column.options ? (
                       <select
-                        className="select"
+                        className="select w-full"
                         data-cell={`${r}:${c}`}
                         value={row[column.key] ?? ""}
                         onChange={(e) => set(r, column.key, e.target.value)}
@@ -155,8 +157,8 @@ export function PasteGrid({
                       </select>
                     ) : (
                       <input
-                        className={`input ${column.numeric ? "num" : ""}`}
-                        style={{ minWidth: `${(column.width ?? 10) * 0.6}rem` }}
+                        className={`input w-full ${column.numeric ? "num" : ""}`}
+                        style={{ minWidth: `${(column.width ?? 10) * 0.42}rem` }}
                         data-cell={`${r}:${c}`}
                         value={row[column.key] ?? ""}
                         placeholder={column.placeholder}

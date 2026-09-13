@@ -170,11 +170,26 @@ service cloud.firestore {
       // A piece moves when it is measured or when a rework is closed out. The
       // fields that say where it is may change; the ones that say what it is
       // may not.
-      allow update: if canRecord()
-        && changed().hasOnly([
-          'stage', 'state', 'holdDepartment', 'round', 'measuredTimes',
-          'lastVerdict', 'lastInspectedAt', 'qcSince', 'qcSettledMs', 'updatedAt'
-        ]);
+      //
+      // Planning may correct the description it wrote — a misspelled item
+      // name, a priority that changed, the wrong measuring type — because
+      // those are copied onto the piece from the line and have to stay in step
+      // with it. What planning may not touch is where the piece stands: a line
+      // edit must never move a piece out of a hold or reset a round.
+      //
+      // Neither may touch what the piece *is*. `project`, `itemCode`, `serial`,
+      // `pieceNo` and `lineId` appear in no list here, so no caller can change
+      // them: every signed sheet carries a copy of them, and a piece whose
+      // serial moved is a piece its own inspection records no longer describe.
+      allow update: if (canRecord()
+          && changed().hasOnly([
+            'stage', 'state', 'holdDepartment', 'round', 'measuredTimes',
+            'lastVerdict', 'lastInspectedAt', 'qcSince', 'qcSettledMs', 'updatedAt'
+          ]))
+        || (canPlan()
+          && changed().hasOnly([
+            'itemName', 'measuringType', 'priority', 'updatedAt'
+          ]));
 
       // The same rule the cancel path checks in the application, enforced
       // where it cannot be edited out: a piece that has been measured stays.

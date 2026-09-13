@@ -39,7 +39,7 @@ function PieceView({ id }: { id: string }) {
             )}
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
             <Card title="Piece">
               <Kv k="Serial" v={<span className="ltr">{d.piece.serial}</span>} />
               <Kv k="Project" v={<span className="ltr">{d.piece.project}</span>} />
@@ -57,7 +57,7 @@ function PieceView({ id }: { id: string }) {
               />
             </Card>
 
-            <div className="min-w-0 lg:col-span-2" id="measure">
+            <div className="min-w-0" id="measure">
               {d.piece.state === "WAITING_QC" && allows(me, "inspection.record") ? (
                 <Card
                   title={`Measure — ${STAGE_LABELS[d.piece.stage]}`}

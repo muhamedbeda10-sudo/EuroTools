@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 
 import { Async } from "@/components/Async";
 import { InlineForm } from "@/components/InlineForm";
 import { Card, Empty, StatusPill } from "@/components/ui";
+import { FilterBar } from "@/components/FilterBar";
 import { ChevronIcon } from "@/components/icons";
 import { STAGES, STAGE_LABELS, isStage, type Stage } from "@/lib/domain/workflow";
 import { allows } from "@/lib/domain/roles";
+import { facetValues, matchesFacet, matchesText } from "@/lib/filter";
 import { fmtDate, fmtDuration } from "@/lib/format";
 import { recordReworkDone } from "@/lib/client/actions";
 import { getQueue, type QueueGroup } from "@/lib/client/queries";
@@ -28,47 +30,125 @@ function QueueView({ stage }: { stage: Stage }) {
   return (
     <>
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {STAGES.map((s) => (
-          <Link
-            key={s}
-            href={`/queue/?stage=${s}`}
-            className={`btn ${s === stage ? "btn-primary" : ""}`}
-          >
-            {STAGE_LABELS[s]}
-          </Link>
-        ))}
+      <div className="mb-4 flex">
+        <nav className="nav-tabs">
+          {STAGES.map((s) => (
+            <Link
+              key={s}
+              href={`/queue/?stage=${s}`}
+              className={`nav-tab ${s === stage ? "nav-tab-on" : ""}`}
+            >
+              {STAGE_LABELS[s]}
+            </Link>
+          ))}
+        </nav>
       </div>
 
       <Async state={state}>
-        {(q) => (
-          <>
-            <Card
-              title="Waiting on quality"
-              action={<span className="pill pill-info">{q.toMeasure.length}</span>}
-            >
-              {q.toMeasure.length === 0 ? (
-                <Empty>Nothing to measure at this stage.</Empty>
-              ) : (
-                <Groups groups={q.byLine.toMeasure} action="measure" me={me} refresh={state.refresh} />
-              )}
-            </Card>
-
-            <Card
-              className="mt-4"
-              title="In rework"
-              subtitle="Held by quality, with a department. Close it out when they report back."
-              action={<span className="pill pill-warn">{q.inRework.length}</span>}
-            >
-              {q.inRework.length === 0 ? (
-                <Empty>Nothing is with a department.</Empty>
-              ) : (
-                <Groups groups={q.byLine.inRework} action="rework" me={me} refresh={state.refresh} />
-              )}
-            </Card>
-          </>
-        )}
+        {(q) => <Lists q={q} me={me} refresh={state.refresh} />}
       </Async>
+    </>
+  );
+}
+
+/** Both lists, and the one bar that narrows them.
+ *
+ *  A component of its own rather than the body of the render prop, because it
+ *  holds the filter state and hooks may not live inside a callback that only
+ *  runs once the data has arrived.
+ */
+function Lists({
+  q,
+  me,
+  refresh,
+}: {
+  q: Awaited<ReturnType<typeof getQueue>>;
+  me: SessionUser;
+  refresh: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [priority, setPriority] = useState("");
+  const [measuring, setMeasuring] = useState("");
+
+  const all = useMemo(
+    () => [...q.byLine.toMeasure, ...q.byLine.inRework],
+    [q.byLine.toMeasure, q.byLine.inRework]
+  );
+
+  /** A group survives if the line matches, or if any piece under it does — so
+   *  a serial typed in full finds the line holding it rather than nothing. */
+  const keep = useMemo(() => {
+    return (group: QueueGroup) =>
+      matchesFacet(group.priority, priority) &&
+      matchesFacet(group.measuringType, measuring) &&
+      (matchesText([group.project, group.itemCode, group.itemName], query) ||
+        group.pieces.some((p) => matchesText([p.serial], query)));
+  }, [query, priority, measuring]);
+
+  const toMeasure = q.byLine.toMeasure.filter(keep);
+  const inRework = q.byLine.inRework.filter(keep);
+
+  const count = (groups: QueueGroup[]) => groups.reduce((n, g) => n + g.pieces.length, 0);
+  const showing = count(toMeasure) + count(inRework);
+
+  return (
+    <>
+      <FilterBar
+        query={query}
+        onQuery={setQuery}
+        placeholder="Search a project, an item or a serial…"
+        noun="piece"
+        showing={showing}
+        total={q.toMeasure.length + q.inRework.length}
+        facets={[
+          {
+            key: "priority",
+            label: "Priority",
+            options: facetValues(all, (g) => g.priority),
+            value: priority,
+            onChange: setPriority,
+          },
+          {
+            key: "measuring",
+            label: "Measuring",
+            options: facetValues(all, (g) => g.measuringType),
+            value: measuring,
+            onChange: setMeasuring,
+          },
+        ]}
+      />
+
+      <Card
+        title="Waiting on quality"
+        action={<span className="pill pill-info">{count(toMeasure)}</span>}
+      >
+        {toMeasure.length === 0 ? (
+          <Empty>
+            {q.toMeasure.length === 0
+              ? "Nothing to measure at this stage."
+              : "Nothing here matches the filter."}
+          </Empty>
+        ) : (
+          <Groups groups={toMeasure} action="measure" me={me} refresh={refresh} />
+        )}
+      </Card>
+
+      <Card
+        className="mt-4"
+        title="In rework"
+        subtitle="With a department. Close it out when they report back."
+        action={<span className="pill pill-warn">{count(inRework)}</span>}
+      >
+        {inRework.length === 0 ? (
+          <Empty>
+            {q.inRework.length === 0
+              ? "Nothing is with a department."
+              : "Nothing here matches the filter."}
+          </Empty>
+        ) : (
+          <Groups groups={inRework} action="rework" me={me} refresh={refresh} />
+        )}
+      </Card>
     </>
   );
 }
@@ -111,10 +191,11 @@ function Group({
   me: SessionUser;
   refresh: () => void;
 }) {
-  // Open by default: somebody working the queue measures these one after the
-  // other, and a list that has to be opened first is a click before every
-  // piece. Collapsing is for scanning, which is the rarer job.
-  const [open, setOpen] = useState(true);
+  // Closed by default. The first thing anybody wants from this screen is how
+  // much work is standing and against which lines; the serials matter only
+  // once a line has been picked. Open lists of five push the next line off the
+  // screen and turn that first question into scrolling.
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-sm)] border border-[var(--border)]">
@@ -138,8 +219,12 @@ function Group({
           <span className="pill pill-neutral">
             {group.measuringType === "CMM" ? "CMM" : "Traditional"}
           </span>
-          <span className={`pill ${action === "rework" ? "pill-warn" : "pill-info"}`}>
-            {group.pieces.length} {group.pieces.length === 1 ? "piece" : "pieces"}
+          <span
+            className={`pill ${action === "rework" ? "pill-warn" : "pill-info"}`}
+            title={action === "rework" ? "Pieces in rework" : "Pieces waiting to be measured"}
+          >
+            <span className="num text-sm font-bold">{group.pieces.length}</span>
+            <span className="ms-1">{group.pieces.length === 1 ? "piece" : "pieces"}</span>
           </span>
           <span className="num text-xs text-[var(--muted)]">
             longest {fmtDuration(group.longestWaitMs)}
