@@ -9,6 +9,7 @@ import { InlineForm } from "@/components/InlineForm";
 import { InspectionSheet } from "@/components/InspectionSheet";
 import { PhotoGallery } from "@/components/PhotoGallery";
 import { PrintButton } from "@/components/PrintButton";
+import { PrintHeader } from "@/components/PrintHeader";
 import { Card, Empty, Kv, StatusPill } from "@/components/ui";
 import { allows } from "@/lib/domain/roles";
 import { STAGE_LABELS } from "@/lib/domain/workflow";
@@ -29,6 +30,12 @@ function PieceView({ id }: { id: string }) {
     <Async state={state} empty={<Empty>That piece does not exist.</Empty>}>
       {(d) => (
         <>
+
+          <PrintHeader
+            title={`Inspection record — ${d.piece.serial}`}
+            subtitle={`${d.piece.project} · ${d.piece.itemCode} · ${d.piece.itemName} · ${STAGE_LABELS[d.piece.stage]}`}
+            by={me.displayName}
+          />
 
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <PrintButton />

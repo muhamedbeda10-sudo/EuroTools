@@ -77,7 +77,7 @@ export function PhotoField() {
         onChange={(e) => add(e.target.files)}
       />
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="no-print flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="btn"

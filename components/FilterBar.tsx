@@ -45,7 +45,7 @@ export function FilterBar({
   }
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
+    <div className="no-print mb-3 flex flex-wrap items-center gap-2">
       <label className="relative min-w-0 flex-1 basis-56">
         <span className="sr-only">{placeholder}</span>
         <SearchIcon className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />

@@ -87,7 +87,19 @@ export function nextStage(stage: Stage): Stage | null {
 export type TransitionError =
   | "not-with-qc"
   | "hold-needs-department"
-  | "department-on-acceptance";
+  | "department-on-acceptance"
+  | "sheet-is-stale";
+
+/** Where a sheet was opened. A verdict is admitted against the position the
+ *  inspector was actually looking at, never against whatever the piece happens
+ *  to be doing when the form arrives. */
+export interface SheetOrigin {
+  stage: Stage;
+  /** The piece's round when the sheet was rendered. It increments with every
+   *  inspection, so it is the piece's version and this is the check that makes
+   *  signing safe when two inspectors have the same piece open. */
+  round: number;
+}
 
 /** What a verdict does to a piece.
  *
@@ -98,10 +110,23 @@ export type TransitionError =
  *  rework.
  */
 export function applyVerdict(
-  position: PiecePosition,
+  position: PiecePosition & { round: number },
   verdict: Verdict,
-  department: string | null
+  department: string | null,
+  sheet: SheetOrigin
 ): { ok: true; next: PiecePosition } | { ok: false; reason: TransitionError } {
+  // Checked before anything else, because a stale sheet is not a verdict about
+  // this piece at all.
+  //
+  // `not-with-qc` alone does not cover it. Accepting a piece at Roughing sends
+  // it to Finish, where it is *also* WAITING_QC — so a second inspector
+  // holding the Roughing sheet passed that check and had their roughing
+  // readings written down as the Finish inspection, against a drawing they
+  // never measured to. Comparing the round the sheet was opened at closes it:
+  // the first verdict moves the round on and the second sheet no longer fits.
+  if (sheet.stage !== position.stage || sheet.round !== position.round)
+    return { ok: false, reason: "sheet-is-stale" };
+
   if (position.state !== "WAITING_QC") return { ok: false, reason: "not-with-qc" };
 
   if (verdict === "HOLD") {

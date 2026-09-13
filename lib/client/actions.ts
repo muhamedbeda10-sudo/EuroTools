@@ -17,6 +17,7 @@ import {
   applyReworkDone,
   applyVerdict,
   initialPosition,
+  isStage,
   isVerdict,
   type PiecePosition,
   type Stage,
@@ -569,8 +570,15 @@ export const recordInspection =
     const department = optionalString(formData.get("holdDepartment"));
     const bypassReason = optionalString(formData.get("bypassReason"));
 
+    // Where the sheet was opened. Posted with it so the verdict can only land
+    // on the piece the inspector was actually looking at.
+    const sheetStage = String(formData.get("sheetStage") ?? "");
+    const sheetRound = optionalNumber(formData.get("sheetRound"));
+
     if (!pieceId) return { ok: false, error: "That piece reference is not valid." };
     if (!isVerdict(verdict)) return { ok: false, error: "Choose a verdict." };
+    if (!isStage(sheetStage) || sheetRound == null)
+      return { ok: false, error: "This sheet is incomplete. Reload the page and measure again." };
 
     const readings = readReadings(formData);
     const defects = readDefects(formData);
@@ -603,9 +611,15 @@ export const recordInspection =
         const piece = snapshot.data() as PieceDoc;
 
         const move = applyVerdict(
-          { stage: piece.stage, state: piece.state, holdDepartment: piece.holdDepartment },
+          {
+            stage: piece.stage,
+            state: piece.state,
+            holdDepartment: piece.holdDepartment,
+            round: piece.round ?? 0,
+          },
           verdict,
-          verdict === "HOLD" ? department : null
+          verdict === "HOLD" ? department : null,
+          { stage: sheetStage, round: sheetRound }
         );
         if (!move.ok) throw new Error(transitionMessage(move.reason));
 
@@ -722,6 +736,8 @@ export const recordInspection =
   };
 
 function transitionMessage(reason: string): string {
+  if (reason === "sheet-is-stale")
+    return "This piece has been measured since you opened it, so this sheet no longer describes it. Reload the page and measure it again.";
   if (reason === "not-with-qc")
     return "This piece is not waiting on quality — somebody else has already moved it. Reload the page.";
   if (reason === "hold-needs-department")

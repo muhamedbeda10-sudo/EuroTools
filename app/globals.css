@@ -385,10 +385,128 @@ html {
   html.dark .theme-icon-dark { display: inline; }
 }
 
-/* ── print (the signed-off sheet) ───────────────────────────── */
+/* Two classes that swap between the screen and the paper. Declared *before*
+   the print block on purpose: they are the same specificity as the overrides
+   below, and at equal specificity the later rule wins — written after it, they
+   silently cancelled it. */
+
+/* Hidden on screen, shown on paper. */
+.print-only { display: none; }
+
+/* Collapsed in the interface, opened on paper: a printed queue has to show the
+   pieces under each line, and a closed group would print as a heading with
+   nothing under it. Its own class rather than the `hidden` attribute, which
+   the reset claims with an `!important` of its own. */
+.closed-on-screen { display: none; }
+
+/* ── print ──────────────────────────────────────────────────────
+ *
+ *  A printed sheet is a quality record. It leaves the building, it is filed,
+ *  and somebody reads it a year later without the screen it came from — so it
+ *  carries the company's mark, says what it is, and is legible in one colour.
+ *
+ *  The theme is forced light here. The shop floor runs the dark theme, and
+ *  printing it put a near-black card behind near-white text: a page of solid
+ *  ink that is unreadable and empties a cartridge. The variables are
+ *  redeclared rather than the rules rewritten, so every component follows
+ *  without knowing anything about printing.
+ */
 @media print {
+  :root,
+  html.dark {
+    --background: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f2f5f8;
+    --foreground: #14181d;
+    --muted: #4a545f;
+    --border: #c2cad2;
+    --border-strong: #94a0ab;
+    --brand: #1f5c9e;
+    --brand-dark: #164878;
+    --brand-light: #eef4fb;
+    --zebra: #f7f9fb;
+    --track: #f2f5f8;
+    --track-on: #ffffff;
+
+    /* A verdict has to survive a black-and-white printer, so the colours go
+       pale and the text stays dark; the word itself carries the meaning and
+       the border keeps the pill visible. */
+    --ok-bg: #ffffff;
+    --ok-fg: #14532d;
+    --warn-bg: #ffffff;
+    --warn-fg: #6b4a00;
+    --bad-bg: #ffffff;
+    --bad-fg: #8a1b06;
+    --info-bg: #ffffff;
+    --info-fg: #1c4e80;
+    --neutral-bg: #ffffff;
+    --neutral-fg: #3f4852;
+  }
+
+  @page {
+    margin: 14mm 12mm;
+  }
+
   .no-print { display: none !important; }
+  .print-only { display: block !important; }
+
   body { background: #fff; }
-  .card { box-shadow: none; border-color: #999; break-inside: avoid; }
+
+  /* The mark is the one thing worth the ink. */
+  .print-mark {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* The letterhead, repeated on nothing: one per document, at the top. */
+  .print-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.9rem;
+    border-bottom: 2px solid var(--brand);
+  }
+  .print-head h1 {
+    font-size: 1.15rem;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+  .print-head .meta {
+    text-align: end;
+    font-size: 0.7rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .card {
+    box-shadow: none;
+    border-color: var(--border-strong);
+    break-inside: avoid;
+  }
   .page-break { break-before: page; }
+
+  /* A table that runs over a page break repeats its heading, and no row is
+     cut in half across one. */
+  .scroll-x { overflow: visible !important; }
+  .tbl { font-size: 0.72rem; }
+  .tbl thead { display: table-header-group; }
+  .tbl tfoot { display: table-footer-group; }
+  .tbl tr { break-inside: avoid; }
+  .tbl tbody tr:hover { background: none; }
+
+  .pill { border: 1px solid currentColor; }
+
+  /* A button is an action, and there are none on paper. The queue's line
+     headings are not buttons in this sense — they carry the project and the
+     item — so they are left alone and only the `.btn` primitive goes. */
+  .btn { display: none !important; }
+
+  /* A closed group is closed on screen only. Printed, a queue has to show the
+     pieces under each line; a page of headings is not a report. */
+  .closed-on-screen { display: block; }
+
+  /* Links print as the text they carry; the address is no use on paper. */
+  a { color: var(--foreground) !important; text-decoration: none; }
 }

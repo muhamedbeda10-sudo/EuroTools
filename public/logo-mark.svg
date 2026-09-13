@@ -17,7 +17,9 @@
   <path fill="url(#euroBlue)" opacity="0.85"
         d="M50 2 L50 30 L14 58 L14 30 L50 2 Z"/>
 
-  <!-- The red mark beneath it, pointing back up into the roof. -->
+  <!-- The red mark beneath the left arm. It leans the same way the right arm
+       of the roof does, not the left: mirrored, it read as a second left arm
+       and the mark lost the turn the company's own artwork has in it. -->
   <path fill="url(#euroRed)"
-        d="M46 44 L46 74 L16 92 L16 62 L46 44 Z"/>
+        d="M16 44 L16 74 L46 92 L46 62 L16 44 Z"/>
 </svg>

@@ -79,7 +79,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "itemCode",
+          "fieldPath": "lineId",
           "order": "ASCENDING"
         },
         {

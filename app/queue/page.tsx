@@ -8,6 +8,8 @@ import { Async } from "@/components/Async";
 import { InlineForm } from "@/components/InlineForm";
 import { Card, Empty, StatusPill } from "@/components/ui";
 import { FilterBar } from "@/components/FilterBar";
+import { PrintButton } from "@/components/PrintButton";
+import { PrintHeader } from "@/components/PrintHeader";
 import { ChevronIcon } from "@/components/icons";
 import { STAGES, STAGE_LABELS, isStage, type Stage } from "@/lib/domain/workflow";
 import { allows } from "@/lib/domain/roles";
@@ -30,7 +32,7 @@ function QueueView({ stage }: { stage: Stage }) {
   return (
     <>
 
-      <div className="mb-4 flex">
+      <div className="no-print mb-4 flex flex-wrap items-center gap-2">
         <nav className="nav-tabs">
           {STAGES.map((s) => (
             <Link
@@ -42,10 +44,11 @@ function QueueView({ stage }: { stage: Stage }) {
             </Link>
           ))}
         </nav>
+        <PrintButton label="Print" />
       </div>
 
       <Async state={state}>
-        {(q) => <Lists q={q} me={me} refresh={state.refresh} />}
+        {(q) => <Lists q={q} stage={stage} me={me} refresh={state.refresh} />}
       </Async>
     </>
   );
@@ -59,10 +62,12 @@ function QueueView({ stage }: { stage: Stage }) {
  */
 function Lists({
   q,
+  stage,
   me,
   refresh,
 }: {
   q: Awaited<ReturnType<typeof getQueue>>;
+  stage: Stage;
   me: SessionUser;
   refresh: () => void;
 }) {
@@ -93,6 +98,12 @@ function Lists({
 
   return (
     <>
+      <PrintHeader
+        title={`${STAGE_LABELS[stage]} — what quality is holding`}
+        subtitle={`${count(toMeasure)} waiting to be measured · ${count(inRework)} in rework`}
+        by={me.displayName}
+      />
+
       <FilterBar
         query={query}
         onQuery={setQuery}
@@ -206,7 +217,7 @@ function Group({
         onClick={() => setOpen((v) => !v)}
       >
         <ChevronIcon
-          className={`h-4 w-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+          className={`no-print h-4 w-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
         />
 
         <span className="ltr font-bold">{group.project}</span>
@@ -232,7 +243,7 @@ function Group({
         </span>
       </button>
 
-      {open && (
+      <div className={open ? undefined : "closed-on-screen"}>
         <div className="scroll-x">
           <table className="tbl">
             <tbody>
@@ -290,7 +301,7 @@ function Group({
             </tbody>
           </table>
         </div>
-      )}
+      </div>
     </div>
   );
 }

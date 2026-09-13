@@ -46,7 +46,7 @@ const REQUIRED = [
   ["a piece's rework history", "reworks(pieceId asc, heldAt desc)"],
   [
     "the dimensions the last sheet for this item and stage used",
-    "inspections(itemCode asc, stage asc, inspectedAt desc)",
+    "inspections(lineId asc, stage asc, inspectedAt desc)",
   ],
 ] as const;
 
@@ -59,7 +59,6 @@ const FILTERED_FIELDS = [
   // which Firestore answers by merging single-field indexes.
   "active",
   "completedAt",
-  "itemCode",
   "lineId",
   "pieceId",
   "role",

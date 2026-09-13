@@ -114,6 +114,12 @@ export function InspectionSheet({
   return (
     <ActionForm action={action} submitLabel={`Sign the ${STAGE_LABELS[stage]} sheet`} onSuccess={onSuccess}>
       <input type="hidden" name="pieceId" value={pieceId} />
+      {/* Where this sheet was opened. The action refuses a verdict whose piece
+          has moved on since — two inspectors with the same piece open would
+          otherwise both sign, and the second one's roughing readings would be
+          filed as the finish inspection. */}
+      <input type="hidden" name="sheetStage" value={stage} />
+      <input type="hidden" name="sheetRound" value={round} />
 
       {!itemConfigured && (
         <p className="mb-3 rounded-[var(--radius-sm)] bg-[var(--warn-bg)] p-2 text-sm text-[var(--warn-fg)]">
@@ -127,7 +133,7 @@ export function InspectionSheet({
           Dimensions
           <span className="ms-2 font-normal text-[var(--muted)]">round {round + 1}</span>
         </h3>
-        <button type="button" className="btn" onClick={addRow}>
+        <button type="button" className="btn no-print" onClick={addRow}>
           + Add a dimension
         </button>
       </div>
@@ -204,7 +210,7 @@ export function InspectionSheet({
                   <td>
                     <button
                       type="button"
-                      className="btn"
+                      className="btn no-print"
                       onClick={() => setRows((rs) => rs.filter((_, at) => at !== i))}
                       title="Remove this line from this sheet"
                     >
@@ -230,7 +236,7 @@ export function InspectionSheet({
         <h3 className="text-sm font-bold">Visual defects</h3>
         {defects.length > 0 && (
           <select
-            className="select w-auto min-w-52"
+            className="select w-auto min-w-52 no-print"
             aria-label="Add a defect"
             value=""
             onChange={(e) => addDefect(e.target.value)}
@@ -273,7 +279,7 @@ export function InspectionSheet({
 
               <button
                 type="button"
-                className="btn btn-icon"
+                className="btn btn-icon no-print"
                 aria-label={`Remove ${d.name}`}
                 onClick={() => setSeen((ds) => ds.filter((_, at) => at !== i))}
               >

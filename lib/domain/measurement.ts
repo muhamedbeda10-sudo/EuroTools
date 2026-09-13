@@ -12,11 +12,63 @@ export interface Spec {
   actual?: number | null;
 }
 
+/** Everything here compares whole numbers on a decimal grid rather than the
+ *  doubles the values arrive as.
+ *
+ *  This is not fussiness. `100.7 - 0.1` is `100.60000000000001` in binary
+ *  floating point, so a part measured at exactly 100.6 — sitting precisely on
+ *  its lower limit, which the shop floor passes — came out as FAIL. Swept
+ *  across ordinary drawing values, about one on-limit reading in eight was
+ *  rejected this way. It never accepted anything out of tolerance, so the
+ *  error only ever cost good parts: held, sent back for rework they did not
+ *  need, and counted against the first-pass rate.
+ *
+ *  A drawing is written in decimals and so is the reading taken against it.
+ *  Scaling both onto the finest grid either of them uses turns the comparison
+ *  into integer arithmetic, where 100.7 − 0.1 is 100.6 and nothing else.
+ */
+
+/** How many decimal places a number is written to. */
+function decimalPlaces(value: number): number {
+  if (!Number.isFinite(value) || Number.isInteger(value)) return 0;
+
+  const text = String(value);
+  const e = text.indexOf("e");
+  if (e === -1) {
+    const dot = text.indexOf(".");
+    return dot === -1 ? 0 : text.length - dot - 1;
+  }
+
+  // Exponent form, as small tolerances print: 1e-7, 1.5e-7.
+  const mantissa = text.slice(0, e);
+  const dot = mantissa.indexOf(".");
+  const written = dot === -1 ? 0 : mantissa.length - dot - 1;
+  return Math.max(0, written - Number(text.slice(e + 1)));
+}
+
+/** Deep enough for any drawing, shallow enough that every scaled value stays a
+ *  whole number a double can hold exactly. */
+const MAX_PLACES = 9;
+
+function gridFactor(...values: number[]): number {
+  return 10 ** Math.min(MAX_PLACES, Math.max(0, ...values.map(decimalPlaces)));
+}
+
+const onGrid = (value: number, factor: number): number => Math.round(value * factor);
+
 export function toleranceBand(spec: Spec): { min: number; max: number } | null {
-  if (spec.nominal == null || Number.isNaN(spec.nominal)) return null;
+  if (spec.nominal == null || !Number.isFinite(spec.nominal)) return null;
+
+  const minus = Math.abs(spec.tolMinus ?? 0);
+  const plus = Math.abs(spec.tolPlus ?? 0);
+  const factor = gridFactor(spec.nominal, minus, plus);
+  const nominal = onGrid(spec.nominal, factor);
+
+  // Divided back so the band reads as the decimal it is — both to compare
+  // against and to put on the screen, where 50.800000000000004 was showing.
   return {
-    min: spec.nominal - Math.abs(spec.tolMinus ?? 0),
-    max: spec.nominal + Math.abs(spec.tolPlus ?? 0),
+    min: (nominal - onGrid(minus, factor)) / factor,
+    max: (nominal + onGrid(plus, factor)) / factor,
   };
 }
 
@@ -24,20 +76,31 @@ export function toleranceBand(spec: Spec): { min: number; max: number } | null {
  *  works to, and it is stated here rather than left to a `<` somebody might
  *  later "tidy" into a `<=` or the other way about. */
 export function result(spec: Spec): Result {
-  if (spec.actual == null || Number.isNaN(spec.actual)) return "NOT_MEASURED";
+  if (spec.actual == null || !Number.isFinite(spec.actual)) return "NOT_MEASURED";
   const band = toleranceBand(spec);
   if (!band) return "NOT_MEASURED";
-  return spec.actual >= band.min && spec.actual <= band.max ? "PASS" : "FAIL";
+
+  const factor = gridFactor(spec.actual, band.min, band.max);
+  const actual = onGrid(spec.actual, factor);
+  return actual >= onGrid(band.min, factor) && actual <= onGrid(band.max, factor)
+    ? "PASS"
+    : "FAIL";
 }
 
 /** How far outside the band a reading sits; zero when it is inside. Sorts a
  *  report worst-first, and tells a machinist how much to take off. */
 export function deviation(spec: Spec): number | null {
-  if (spec.actual == null || Number.isNaN(spec.actual)) return null;
+  if (spec.actual == null || !Number.isFinite(spec.actual)) return null;
   const band = toleranceBand(spec);
   if (!band) return null;
-  if (spec.actual < band.min) return spec.actual - band.min;
-  if (spec.actual > band.max) return spec.actual - band.max;
+
+  const factor = gridFactor(spec.actual, band.min, band.max);
+  const actual = onGrid(spec.actual, factor);
+  const min = onGrid(band.min, factor);
+  const max = onGrid(band.max, factor);
+
+  if (actual < min) return (actual - min) / factor;
+  if (actual > max) return (actual - max) / factor;
   return 0;
 }
 

@@ -59,6 +59,81 @@ describe("how far out a reading is", () => {
   });
 });
 
+describe("a limit is a limit, whatever binary floating point does to it", () => {
+  // `100.7 - 0.1` is `100.60000000000001` as a double, so a part measured at
+  // exactly its lower limit used to be rejected. These are the cases that
+  // caught it and a sweep wide enough that the next arithmetic change cannot
+  // put it back quietly.
+
+  const round = (x: number, places: number) => Number(x.toFixed(places));
+
+  it("passes the reading that used to be rejected", () => {
+    expect(result({ nominal: 100.7, tolMinus: 0.1, tolPlus: 0.1, actual: 100.6 })).toBe("PASS");
+  });
+
+  it("states the band as the decimal it is, not as the double it computes to", () => {
+    // This is what the screen was showing beside the reading.
+    expect(toleranceBand({ nominal: 50.6, tolMinus: 0.2, tolPlus: 0.2 })).toEqual({
+      min: 50.4,
+      max: 50.8,
+    });
+    expect(toleranceBand({ nominal: 0.3, tolMinus: 0.1, tolPlus: 0.1 })).toEqual({
+      min: 0.2,
+      max: 0.4,
+    });
+  });
+
+  it("passes every reading on a limit, across the values a drawing actually uses", () => {
+    const rejected: string[] = [];
+    for (let tenths = 1; tenths <= 20000; tenths += 1) {
+      const nominal = round(tenths / 10, 1);
+      for (const tol of [0.05, 0.1, 0.2, 0.25, 0.3, 0.5]) {
+        const lo = round(nominal - tol, 3);
+        const hi = round(nominal + tol, 3);
+        for (const actual of [lo, hi, nominal]) {
+          if (result({ nominal, tolMinus: tol, tolPlus: tol, actual }) !== "PASS")
+            rejected.push(`${nominal} ±${tol} @ ${actual}`);
+        }
+      }
+    }
+    expect(rejected.slice(0, 5)).toEqual([]);
+    expect(rejected).toHaveLength(0);
+  });
+
+  it("still fails a reading one step outside, so nothing is loosened to fix it", () => {
+    // The fix must not become a tolerance of its own: a thousandth over is
+    // still over.
+    const accepted: string[] = [];
+    for (let tenths = 1; tenths <= 20000; tenths += 1) {
+      const nominal = round(tenths / 10, 1);
+      for (const tol of [0.05, 0.1, 0.2, 0.25, 0.3, 0.5]) {
+        for (const actual of [round(nominal - tol - 0.001, 3), round(nominal + tol + 0.001, 3)]) {
+          if (result({ nominal, tolMinus: tol, tolPlus: tol, actual }) !== "FAIL")
+            accepted.push(`${nominal} ±${tol} @ ${actual}`);
+        }
+      }
+    }
+    expect(accepted.slice(0, 5)).toEqual([]);
+    expect(accepted).toHaveLength(0);
+  });
+
+  it("reports how far out a reading is without the same error", () => {
+    expect(deviation({ nominal: 100.7, tolMinus: 0.1, tolPlus: 0.1, actual: 100.5 })).toBe(-0.1);
+    expect(deviation({ nominal: 0.3, tolMinus: 0.1, tolPlus: 0.1, actual: 0.5 })).toBe(0.1);
+    expect(deviation({ nominal: 100.7, tolMinus: 0.1, tolPlus: 0.1, actual: 100.6 })).toBe(0);
+  });
+
+  it("handles a tolerance fine enough to print in exponent form", () => {
+    expect(result({ nominal: 1, tolMinus: 1e-7, tolPlus: 1e-7, actual: 0.9999999 })).toBe("PASS");
+    expect(result({ nominal: 1, tolMinus: 1e-7, tolPlus: 1e-7, actual: 0.9999998 })).toBe("FAIL");
+  });
+
+  it("treats a reading that is not a number as not measured", () => {
+    for (const actual of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])
+      expect(result({ nominal: 10, tolMinus: 1, tolPlus: 1, actual })).toBe("NOT_MEASURED");
+  });
+});
+
 describe("the verdict the evidence requires", () => {
   it("accepts when every dimension is in tolerance and nothing was seen", () => {
     const s = suggest([dim(), dim({ key: "len", name: "Length", nominal: 120, actual: 120 })], []);

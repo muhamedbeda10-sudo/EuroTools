@@ -43,13 +43,15 @@ function check(label, ok, detail = "") {
  */
 const PROJECT = `MM26${String(Date.now()).slice(-6)}`;
 const CORE = `${PROJECT}-Core-001`;
-/** The carry-forward walk needs an item nobody has measured before, and the
- *  carry-forward is by item and stage across every project — so a fixed code
- *  would inherit the previous run's sheet and the test would stop testing
- *  anything. The item name stays the same; only the code is made unique. */
-const CAVITY = `Cavity${PROJECT.slice(-5)}`;
+const CAVITY = "Cavity";
 const CAVITY_1 = `${PROJECT}-${CAVITY}-001`;
 const CAVITY_2 = `${PROJECT}-${CAVITY}-002`;
+/** The same item on a second project. Carrying forward is scoped to a planning
+ *  line, so this line must not inherit the first line's sheet — a repeat order
+ *  can be to a revised drawing, and pre-filled limits are the ones nobody
+ *  re-checks. */
+const OTHER = `${PROJECT}B`;
+const OTHER_CAVITY = `${OTHER}-${CAVITY}-001`;
 const SHEET = join(tmpdir(), `qc-planning-${Date.now()}.csv`);
 writeFileSync(
   SHEET,
@@ -58,6 +60,7 @@ writeFileSync(
     `${PROJECT},MP,Core,Core insert,2,CMM,12/09/2026,A,,,`,
     `${PROJECT},MP,${CAVITY},Cavity block,2,Traditional,12/09/2026,B,,,`,
     `${PROJECT},MP,Guide,Guide bar,1,Traditional,12/09/2026,C,,,`,
+    `${OTHER},MP,${CAVITY},Cavity block,1,Traditional,12/09/2026,D,,,`,
   ].join("\n"),
   "utf8"
 );
@@ -88,9 +91,9 @@ const save = async (label) => {
  *  Scoped to one card, because the same line appears under both "Waiting on
  *  quality" and "In rework" and an unscoped click opens whichever comes first
  *  — which is how this silently opened the wrong one. */
-const openLine = async (itemCode, card = "Waiting on quality") => {
+const openLine = async (itemCode, card = "Waiting on quality", project = PROJECT) => {
   await page.click(
-    `section.card:has(h2:text-is("${card}")) button:has-text("${PROJECT}"):has-text("${itemCode}")`
+    `section.card:has(h2:text-is("${card}")) button:has-text("${project}"):has-text("${itemCode}")`
   );
   await page.waitForTimeout(600);
 };
@@ -169,14 +172,14 @@ try {
   await page.setInputFiles('input[type="file"]', SHEET);
   await page.waitForSelector("text=row(s) ready", { timeout: 15000 });
   const preview = await page.textContent("body");
-  check("the sheet is read before anything is written", preview.includes("3 row(s) ready"));
+  check("the sheet is read before anything is written", preview.includes("4 row(s) ready"));
 
   await page.click('button:has-text("Bring in")');
   await page.waitForSelector("text=brought in", { timeout: 25000 });
   await go("/planning/", `text=${PROJECT}`);
   const planning = await page.textContent("body");
   check(
-    "all three lines are in",
+    "all four lines are in",
     planning.includes(PROJECT) && planning.includes("Cavity") && planning.includes("Guide bar")
   );
 
@@ -210,7 +213,7 @@ try {
   const edited = await page.textContent("body");
   check("a line can be corrected in place", edited.includes("Guide bar, revised") && edited.includes("MP9"));
 
-  await go("/queue/", "text=Waiting on quality");
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
   await page.waitForTimeout(2500);
   const resized = await page.textContent("body");
   check(
@@ -234,7 +237,7 @@ try {
   );
 
   // ── the queue: two lines, standing closed ──
-  await go("/queue/", "text=Waiting on quality");
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
   await page.waitForTimeout(2500);
   const queue = await page.textContent("body");
   check(
@@ -244,7 +247,7 @@ try {
   check("a closed line says how many pieces are under it", /2\s*pieces/.test(queue));
   check(
     "and keeps the serials out of the way until it is opened",
-    !queue.includes(CORE)
+    !(await page.locator(`a:has-text("${CORE}")`).first().isVisible())
   );
 
   // ── the filter narrows the queue ──
@@ -283,13 +286,16 @@ try {
   check("holding it puts it with the department", afterHold.includes("Machining"));
 
   // ── the department reports back ──
-  await go("/queue/", "text=In rework");
+  await go("/queue/", 'h2:text-is("In rework")');
   await page.waitForTimeout(2500);
   await openLine("Core", "In rework");
   page.once("dialog", (d) => d.accept());
-  await page.click('button:has-text("Rework done")');
+  // Scoped to this run's piece. Every group's rows are in the page now, open
+  // or not, so an unscoped match can land on a button inside a closed group
+  // left behind by an earlier run.
+  await page.click(`tr:has-text("${CORE}") button:has-text("Rework done")`);
   await page.waitForTimeout(2500);
-  await go("/queue/", "text=Waiting on quality");
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
   await page.waitForTimeout(2500);
   await openLine("Core");
   const backWithQc = await page.textContent("body");
@@ -311,7 +317,7 @@ try {
   // ── the drawing carries to the next piece of the same part ──
   // Cavity is deliberately not configured in settings: everything the second
   // piece knows, it can only have learned from the sheet signed for the first.
-  await go("/queue/", "text=Waiting on quality");
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
   await page.waitForTimeout(2500);
   await openLine(CAVITY);
   await page.click(`a:has-text("${CAVITY_1}")`);
@@ -331,7 +337,7 @@ try {
   await save("Sign the");
   await page.waitForTimeout(2500);
 
-  await go("/queue/", "text=Waiting on quality");
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
   await page.waitForTimeout(2500);
   await openLine(CAVITY);
   await page.click(`a:has-text("${CAVITY_2}")`);
@@ -362,6 +368,31 @@ try {
     "the carried tolerance is applied to the new reading, not the old one",
     ownVerdict.includes("outside tolerance")
   );
+
+  // ── and it stops at the line it came from ──
+  // Same item code, different planning line. Carrying forward is scoped to the
+  // line, so this sheet must open empty rather than holding the other batch's
+  // drawing.
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
+  await page.waitForTimeout(2500);
+  await openLine(CAVITY, "Waiting on quality", OTHER);
+  await page.click(`a:has-text("${OTHER_CAVITY}")`);
+  await page.waitForSelector("text=not set up yet", { timeout: 25000 });
+  await page.waitForTimeout(900);
+  const otherLine = await page.locator('input[name="readingKey"]').count();
+  check(
+    "another line of the same item does not inherit this one's drawing",
+    otherLine === 0,
+    otherLine === 0 ? "" : `${otherLine} dimension(s) carried across`
+  );
+
+  // Back to the piece the defect checks run against.
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
+  await page.waitForTimeout(2500);
+  await openLine(CAVITY);
+  await page.click(`a:has-text("${CAVITY_2}")`);
+  await page.waitForSelector("text=Bore depth", { timeout: 25000 });
+  await page.waitForTimeout(700);
 
   // ── recording a defect ──
   // Picked from a list, added to the sheet, no department beside it.
@@ -410,6 +441,55 @@ try {
     (await page.locator('select[name="defectDepartment"]').count()) === 0 &&
       (await page.locator('select[name="holdDepartment"]').count()) === 1
   );
+
+  // ── two inspectors, one piece ──
+  // Both open the same piece while it is with quality and both sign. Firestore
+  // reads the piece inside the transaction that moves it, so the second signer
+  // re-reads a piece that has already left quality and the state machine
+  // refuses it. Exactly one verdict lands; the loser is told why rather than
+  // silently overwriting the first.
+  await go("/queue/", 'h2:text-is("Waiting on quality")');
+  await page.waitForTimeout(2500);
+  await openLine("Core");
+  const contested = await page.locator('a[href^="/piece/"]').first().getAttribute("href");
+
+  const second = await browser.newPage();
+  await second.goto(`${BASE}/login/`, { waitUntil: "domcontentloaded" });
+  await second.fill('input[name="email"]', EMAIL);
+  await second.fill('input[name="password"]', PASSWORD);
+  await second.click('button[type="submit"]');
+  await second.waitForURL((url) => !url.pathname.includes("login"), { timeout: 25000 });
+
+  for (const p of [page, second]) {
+    await p.goto(`${BASE}${contested}`, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector('input[name="readingActual"]', { timeout: 25000 });
+    await p.fill('input[name="readingActual"]', "50.6");
+  }
+
+  await Promise.all([
+    page.click('button:has-text("Sign the")'),
+    second.click('button:has-text("Sign the")'),
+  ]);
+  await page.waitForTimeout(3500);
+  await second.waitForTimeout(3500);
+
+  const bodies = [await page.textContent("body"), await second.textContent("body")];
+  const refused = bodies.filter((b) => /no longer|not with quality|already/i.test(b)).length;
+  check(
+    "when two inspectors sign the same piece at once, only one verdict lands",
+    refused === 1,
+    `${refused} of 2 were refused`
+  );
+
+  await second.goto(`${BASE}${contested}`, { waitUntil: "domcontentloaded" });
+  await second.waitForTimeout(2500);
+  const counted = await second.textContent("body");
+  check(
+    "and the piece was measured once, not twice",
+    /Times measured[\s\S]{0,80}\b1\b/.test(counted),
+    (counted.match(/Times measured[\s\S]{0,40}/) ?? [""])[0].replace(/\s+/g, " ")
+  );
+  await second.close();
 
   // ── the dashboard reads the tallies ──
   await go("/", "text=Waiting on quality");

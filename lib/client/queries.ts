@@ -220,7 +220,7 @@ export async function getPiece(pieceId: string) {
       getDoc(docIn(itemConfigs(), configKey(piece.itemCode))),
       getDepartments(),
       getDefectCatalogue(),
-      lastReadings(piece.itemCode, piece.stage),
+      lastReadings(piece.lineId, piece.stage),
     ]);
 
   const item = itemSnap.exists() ? asDoc<ItemConfigDoc>(itemSnap) : null;
@@ -252,23 +252,27 @@ export async function getPiece(pieceId: string) {
   };
 }
 
-/** The dimensions the last sheet for this item and stage actually used.
+/** The dimensions the last sheet on this planning line, at this stage, used.
  *
- *  Nominal and tolerance are properties of the part, not of the piece: five
- *  pieces of one item are measured against the same drawing. Typing them again
- *  on every piece is work that invites a typo, and a typo here changes what
- *  passes.
+ *  Nominal and tolerance are properties of the part, not of the piece: the
+ *  pieces of one line are measured against one drawing. Typing them again on
+ *  every piece is work that invites a typo, and a typo here changes what
+ *  passes. So whatever was measured on the piece before comes back filled in,
+ *  and only the reading is left blank.
  *
- *  So whatever was measured last time comes back filled in, and only the
- *  reading is left blank. Where the item is configured, the configuration
- *  wins — it is the authority, and a sheet that disagreed with it was somebody
- *  working round it rather than a new standard.
+ *  Scoped to the line, and deliberately. It used to look the item up across
+ *  every project, which sounds more helpful and is not: the same part number
+ *  ordered again a year later may be to a revised drawing, and the first piece
+ *  of the new batch would have opened carrying last year's limits. Silently
+ *  pre-filled numbers are the ones nobody re-checks. A drawing that really is
+ *  the standard belongs in the item's configuration, which wins over this
+ *  anyway; a sheet is a record of one batch, not a standard.
  */
-async function lastReadings(itemCode: string, stage: Stage): Promise<DimensionSpec[]> {
+async function lastReadings(lineId: string, stage: Stage): Promise<DimensionSpec[]> {
   const snapshot = await getDocs(
     query(
       inspections(),
-      where("itemCode", "==", itemCode),
+      where("lineId", "==", lineId),
       where("stage", "==", stage),
       orderBy("inspectedAt", "desc"),
       limit(1)

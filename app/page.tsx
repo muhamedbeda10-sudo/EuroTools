@@ -5,6 +5,8 @@ import { useMemo, useState } from "react";
 
 import { Async } from "@/components/Async";
 import { FilterBar } from "@/components/FilterBar";
+import { PrintButton } from "@/components/PrintButton";
+import { PrintHeader } from "@/components/PrintHeader";
 import { Card, Empty, Stat, StatusPill } from "@/components/ui";
 import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
 import { matchesText } from "@/lib/filter";
@@ -29,6 +31,16 @@ export default function DashboardPage() {
     <Async state={state}>
       {(d) => (
         <>
+
+          <PrintHeader
+            title="Quality summary"
+            subtitle={`${d.totals.pieces} piece(s) on ${d.totals.lines} planning line(s)`}
+            by={me.displayName}
+          />
+
+          <div className="no-print mb-3 flex justify-end">
+            <PrintButton label="Print" />
+          </div>
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Waiting on quality" value={d.totals.withQc} tone={d.totals.withQc > 0 ? "warn" : "ok"}
@@ -154,7 +166,7 @@ function Waiting({ rows }: { rows: Dashboard["oldestWaiting"] }) {
                     <th>Stage</th>
                     <th>Priority</th>
                     <th>With quality</th>
-                    <th />
+                    <th className="no-print" />
                   </tr>
                 </thead>
                 <tbody>
@@ -166,7 +178,7 @@ function Waiting({ rows }: { rows: Dashboard["oldestWaiting"] }) {
                       <td><StatusPill status={p.stage} /></td>
                       <td className="ltr">{p.priority ?? "—"}</td>
                       <td className="num">{fmtDuration(p.qcMs)}</td>
-                      <td>
+                      <td className="no-print">
                         <Link href={`/piece/?id=${p.id}`} className="font-bold text-[var(--brand)]">
                           Measure
                         </Link>

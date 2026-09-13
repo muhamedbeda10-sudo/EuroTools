@@ -5,6 +5,8 @@ import { useMemo, useState } from "react";
 
 import { Async } from "@/components/Async";
 import { FilterBar } from "@/components/FilterBar";
+import { PrintButton } from "@/components/PrintButton";
+import { PrintHeader } from "@/components/PrintHeader";
 import { ImportPanel } from "@/components/ImportPanel";
 import { InlineForm } from "@/components/InlineForm";
 import { PasteGrid, emptyRow, type GridColumn, type GridRow } from "@/components/PasteGrid";
@@ -81,9 +83,30 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
   );
 
   const columns = 13 + (mayPlan ? 1 : 0);
+  const shownIsFiltered = shown.length !== lines.length;
 
   return (
-    <Card className="rise" title="Lines" action={<span className="pill pill-neutral">{lines.length}</span>}>
+    <>
+      <PrintHeader
+        title="Planning lines"
+        subtitle={
+          shownIsFiltered
+            ? `${shown.length} of ${lines.length} lines — filtered`
+            : `${lines.length} line(s)`
+        }
+        by={me.displayName}
+      />
+
+      <Card
+        className="rise"
+        title="Lines"
+        action={
+          <span className="flex items-center gap-2">
+            <span className="pill pill-neutral">{lines.length}</span>
+            <PrintButton label="Print" />
+          </span>
+        }
+      >
       <FilterBar
         query={query}
         onQuery={setQuery}
@@ -138,7 +161,7 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
                 <th>Closed</th>
                 <th>Measured</th>
                 <th>Complete</th>
-                {mayPlan && <th />}
+                {mayPlan && <th className="no-print" />}
               </tr>
             </thead>
             <tbody>
@@ -183,7 +206,7 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
                       )}
                     </td>
                     {mayPlan && (
-                      <td>
+                      <td className="no-print">
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
@@ -216,7 +239,8 @@ function Lines({ me, lines, refresh }: { me: SessionUser; lines: Line[]; refresh
           </table>
         </div>
       )}
-    </Card>
+      </Card>
+    </>
   );
 }
 
@@ -362,7 +386,7 @@ function Entry({ me, onSaved }: { me: SessionUser; onSaved: () => void }) {
   }
 
   return (
-    <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="no-print mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
       <Card
         className="rise"
         title={
