@@ -243,11 +243,10 @@ export async function getPiece(pieceId: string) {
         completedAt: toDate(data.completedAt),
       };
     }),
-    /** What to ask for at this stage: the item's own dimensions, and the
-     *  defects to look for — the item's, falling back to the catalogue so an
-     *  unconfigured item still gives the inspector something to tick. */
+    /** What to ask for at this stage: the item's own dimensions, and the one
+     *  shared list of defects an inspector can record. */
     dimensions: mergeDimensions(item?.dimensions?.[piece.stage] ?? [], previous),
-    defects: item && item.defects.length > 0 ? item.defects : catalogue,
+    defects: catalogue,
     departments,
     itemConfigured: item != null,
   };

@@ -188,7 +188,6 @@ function PieceView({ id }: { id: string }) {
                         {insp.defects.map((f, i) => (
                           <li key={`${f.key}-${i}`}>
                             • <strong>{f.name}</strong>
-                            {f.department ? ` — ${f.department}` : ""}
                             {f.note ? ` · ${f.note}` : ""}
                           </li>
                         ))}

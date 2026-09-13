@@ -124,6 +124,27 @@ try {
   await go("/settings/", "text=Machining");
   check("departments are saved and read back", (await page.textContent("body")).includes("Grinding"));
 
+  // ── settings: the defects an inspector can record ──
+  // One shared list. The grid has one column — no item, no department.
+  await go("/settings/", 'textarea[name="departments"]');
+  const defectCard = 'section.card:has(h2:has-text("Visual defects"))';
+  check(
+    "a defect is a name and nothing else",
+    (await page.locator(`${defectCard} table th`).count()) === 3
+  );
+
+  await page.fill(`${defectCard} [data-cell="0:0"]`, "Scratch");
+  await page.click(`${defectCard} button:has-text("Add a row")`);
+  await page.waitForTimeout(400);
+  await page.fill(`${defectCard} [data-cell="1:0"]`, "Grinding burn");
+  await page.click(`${defectCard} button:has-text("Save")`);
+  await page.waitForTimeout(2800);
+  await go("/settings/", "text=Scratch");
+  check(
+    "the defect list is saved and read back",
+    (await page.textContent("body")).includes("Grinding burn")
+  );
+
   // ── settings: what one item has to be ──
   await go("/settings/item/", 'input[name="itemCode"]');
   await page.fill('input[name="itemCode"]', "Core");
@@ -340,6 +361,54 @@ try {
   check(
     "the carried tolerance is applied to the new reading, not the old one",
     ownVerdict.includes("outside tolerance")
+  );
+
+  // ── recording a defect ──
+  // Picked from a list, added to the sheet, no department beside it.
+  check(
+    "nothing is recorded against a defect until one is chosen",
+    (await page.textContent("body")).includes("None recorded.")
+  );
+
+  await page.selectOption('select[aria-label="Add a defect"]', { label: "Grinding burn" });
+  await page.waitForTimeout(500);
+  const withDefect = await page.textContent("body");
+  check(
+    "a defect picked from the list goes onto the sheet",
+    withDefect.includes("Grinding burn") && !withDefect.includes("None recorded.")
+  );
+  check(
+    "and the hold it requires says which defect it is for",
+    withDefect.includes("Visual defect: Grinding burn")
+  );
+
+  await page.selectOption('select[aria-label="Add a defect"]', { label: "Scratch" });
+  await page.waitForTimeout(500);
+  check(
+    "a second defect is added rather than replacing the first",
+    (await page.textContent("body")).includes("Scratch") &&
+      (await page.textContent("body")).includes("Grinding burn")
+  );
+  check(
+    "a defect already on the sheet is not offered again",
+    (await page.locator('select[aria-label="Add a defect"] option').allTextContents()).filter(
+      (t) => t === "Scratch" || t === "Grinding burn"
+    ).length === 0
+  );
+
+  await page.click('button[aria-label="Remove Scratch"]');
+  await page.waitForTimeout(500);
+  const afterRemove = await page.textContent("body");
+  check(
+    "and one added by mistake comes off again",
+    !afterRemove.includes("Visual defect: Scratch") && afterRemove.includes("Grinding burn")
+  );
+
+  // The department is asked for once, on the hold — not beside every defect.
+  check(
+    "the department is chosen on the hold, not against each defect",
+    (await page.locator('select[name="defectDepartment"]').count()) === 0 &&
+      (await page.locator('select[name="holdDepartment"]').count()) === 1
   );
 
   // ── the dashboard reads the tallies ──

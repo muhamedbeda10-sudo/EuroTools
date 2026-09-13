@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { ActionForm } from "./ActionForm";
 import { PhotoField } from "./PhotoField";
 import { StatusPill } from "./ui";
+import { TrashIcon } from "./icons";
 import { allows } from "@/lib/domain/roles";
 import { result, suggest, type Reading } from "@/lib/domain/measurement";
 import { STAGE_LABELS, VERDICTS, VERDICT_LABELS, type Verdict } from "@/lib/domain/workflow";
@@ -26,10 +27,11 @@ interface Row extends DimensionSpec {
   adHoc: boolean;
 }
 
-interface Ticked extends DefectSpec {
-  seen: boolean;
+/** A defect the inspector has put on this sheet, and the note they added to
+ *  it. Only defects actually chosen are held here, so the sheet records what
+ *  was seen rather than a verdict on every defect in the catalogue. */
+interface Seen extends DefectSpec {
   note: string;
-  chosenDepartment: string;
 }
 
 export function InspectionSheet({
@@ -58,9 +60,7 @@ export function InspectionSheet({
   const [rows, setRows] = useState<Row[]>(() =>
     dimensions.map((d) => ({ ...d, actual: "", adHoc: false }))
   );
-  const [ticks, setTicks] = useState<Ticked[]>(() =>
-    defects.map((d) => ({ ...d, seen: false, note: "", chosenDepartment: d.department ?? "" }))
-  );
+  const [seen, setSeen] = useState<Seen[]>([]);
   const [chosen, setChosen] = useState<Verdict | "">("");
   const [department, setDepartment] = useState("");
 
@@ -76,17 +76,25 @@ export function InspectionSheet({
     }));
     return suggest(
       readings,
-      ticks.filter((t) => t.seen).map((t) => ({ key: t.key, name: t.name, department: t.chosenDepartment || null }))
+      seen.map((d) => ({ key: d.key, name: d.name }))
     );
-  }, [rows, ticks]);
+  }, [rows, seen]);
 
   const verdict: Verdict = chosen || suggestion.verdict;
   const mayBypass = allows(me, "verdict.bypass");
   const isConcession = verdict !== "HOLD" && suggestion.verdict === "HOLD";
-  const holdDepartment = department || suggestion.department || "";
 
   const update = (i: number, patch: Partial<Row>) =>
     setRows((rs) => rs.map((r, at) => (at === i ? { ...r, ...patch } : r)));
+
+  /** Chosen from the list, added to the sheet. The dropdown resets itself and
+   *  drops what is already on the sheet, so the same defect cannot be recorded
+   *  twice — two entries with one key would be counted twice in the tallies. */
+  const addDefect = (key: string) => {
+    const spec = defects.find((d) => d.key === key);
+    if (!spec || seen.some((d) => d.key === key)) return;
+    setSeen((ds) => [...ds, { ...spec, note: "" }]);
+  };
 
   const addRow = () =>
     setRows((rs) => [
@@ -218,65 +226,59 @@ export function InspectionSheet({
       </div>
 
       {/* ── visual defects ── */}
-      <h3 className="mt-4 mb-2 text-sm font-bold">Visual defects</h3>
-      {ticks.length === 0 ? (
+      <div className="mt-4 mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-bold">Visual defects</h3>
+        {defects.length > 0 && (
+          <select
+            className="select w-auto min-w-52"
+            aria-label="Add a defect"
+            value=""
+            onChange={(e) => addDefect(e.target.value)}
+          >
+            <option value="">+ Add a defect</option>
+            {defects
+              .filter((d) => !seen.some((s) => s.key === d.key))
+              .map((d) => (
+                <option key={d.key} value={d.key}>{d.name}</option>
+              ))}
+          </select>
+        )}
+      </div>
+
+      {defects.length === 0 ? (
         <p className="text-sm text-[var(--muted)]">No defect list yet.</p>
+      ) : seen.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">None recorded.</p>
       ) : (
         <div className="grid gap-2">
-          {ticks.map((t, i) => (
+          {seen.map((d, i) => (
             <div
-              key={t.key}
-              className="grid gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5 sm:grid-cols-[1fr_auto]"
+              key={d.key}
+              className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border)] p-2.5"
             >
-              <input type="hidden" name="defectKey" value={t.key} />
-              <input type="hidden" name="defectName" value={t.name} />
-              <input type="hidden" name="defectSeen" value={t.seen ? "1" : "0"} />
+              <input type="hidden" name="defectKey" value={d.key} />
+              <input type="hidden" name="defectName" value={d.name} />
 
-              <label className="flex min-h-11 items-center gap-2 text-sm font-semibold">
-                <input
-                  type="checkbox"
-                  checked={t.seen}
-                  onChange={(e) =>
-                    setTicks((ts) => ts.map((x, at) => (at === i ? { ...x, seen: e.target.checked } : x)))
-                  }
-                />
-                {t.name}
-              </label>
+              <span className="text-sm font-semibold">{d.name}</span>
 
-              {t.seen && (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <select
-                    className="select"
-                    name="defectDepartment"
-                    value={t.chosenDepartment}
-                    onChange={(e) =>
-                      setTicks((ts) =>
-                        ts.map((x, at) => (at === i ? { ...x, chosenDepartment: e.target.value } : x))
-                      )
-                    }
-                  >
-                    <option value="">— Whose defect? —</option>
-                    {departments.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
-                  <input
-                    className="input"
-                    name="defectNote"
-                    placeholder="Note (optional)"
-                    value={t.note}
-                    onChange={(e) =>
-                      setTicks((ts) => ts.map((x, at) => (at === i ? { ...x, note: e.target.value } : x)))
-                    }
-                  />
-                </div>
-              )}
-              {!t.seen && (
-                <>
-                  <input type="hidden" name="defectDepartment" value="" />
-                  <input type="hidden" name="defectNote" value="" />
-                </>
-              )}
+              <input
+                className="input min-w-0 flex-1 basis-48"
+                name="defectNote"
+                placeholder="Note (optional)"
+                value={d.note}
+                onChange={(e) =>
+                  setSeen((ds) => ds.map((x, at) => (at === i ? { ...x, note: e.target.value } : x)))
+                }
+              />
+
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label={`Remove ${d.name}`}
+                onClick={() => setSeen((ds) => ds.filter((_, at) => at !== i))}
+              >
+                <TrashIcon />
+              </button>
             </div>
           ))}
         </div>
@@ -321,7 +323,7 @@ export function InspectionSheet({
                 id="holdDepartment"
                 className="select"
                 name="holdDepartment"
-                value={holdDepartment}
+                value={department}
                 onChange={(e) => setDepartment(e.target.value)}
                 required
               >

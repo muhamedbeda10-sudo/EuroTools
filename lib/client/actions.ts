@@ -522,22 +522,22 @@ function readReadings(formData: FormData): ReadingEntry[] {
   });
 }
 
-/** Only the defects actually ticked. An untouched checklist records nothing,
- *  rather than recording that every defect was absent — the sheet says what
- *  was seen, and a blank is not an observation. */
+/** The defects the inspector actually added.
+ *
+ *  The sheet posts a row per defect chosen and nothing for the rest, so the
+ *  record says what was seen. A checklist would have posted every defect in
+ *  the catalogue with a flag, which records that a defect was absent — and a
+ *  blank is not an observation. */
 function readDefects(formData: FormData): DefectEntry[] {
   return formData
     .getAll("defectKey")
     .map(String)
+    .filter((key) => key.trim() !== "")
     .map((key, i) => ({
       key,
       name: String(formData.getAll("defectName")[i] ?? key),
-      department: optionalString(formData.getAll("defectDepartment")[i]),
       note: optionalString(formData.getAll("defectNote")[i]),
-      seen: String(formData.getAll("defectSeen")[i] ?? "") === "1",
-    }))
-    .filter((d) => d.seen)
-    .map((d) => ({ key: d.key, name: d.name, department: d.department, note: d.note }));
+    }));
 }
 
 async function readPhotos(formData: FormData) {
@@ -825,9 +825,11 @@ export const saveDepartments =
     return { ok: true, info: `${unique.length} department(s) saved.` };
   };
 
-/** The defects every item starts from. An item with none of its own still
- *  gives the inspector something to tick, which is the difference between a
- *  defect being recorded and being remembered. */
+/** The defects an inspector can record — one list, used by every item.
+ *
+ *  Saved whole, so a defect deleted here stops being offered. A key is never
+ *  re-issued: the dashboard's tallies are kept against it, and re-wording a
+ *  line must not orphan the history behind it. */
 export const saveDefectCatalogue =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
@@ -852,7 +854,6 @@ function readDefectSpecs(formData: FormData): DefectSpec[] {
       // keyed by it, and re-wording a line must not orphan its history.
       key: optionalString(formData.getAll("defectKey")[i]) ?? slug(name),
       name: name.trim(),
-      department: optionalString(formData.getAll("defectDepartment")[i]),
     }))
     .filter((d) => d.name.length > 0);
 }
@@ -885,10 +886,13 @@ export function slug(value: string): string {
   );
 }
 
-/** What an item has to be: its dimensions at each stage, and the defects to
- *  look for. Saved whole, because a dimension removed from the sheet has to
- *  disappear from the next inspection, not linger. Sheets already signed keep
- *  their own copy and are unaffected. */
+/** What an item has to be: its dimensions at each stage. Saved whole, because
+ *  a dimension removed from the sheet has to disappear from the next
+ *  inspection, not linger. Sheets already signed keep their own copy and are
+ *  unaffected.
+ *
+ *  Defects are not here. They are one list, shared by every item — see
+ *  `saveDefectCatalogue`. */
 export const saveItemConfig =
   (actor: SessionUser) =>
   async (formData: FormData): Promise<ActionResult> => {
@@ -906,7 +910,6 @@ export const saveItemConfig =
         ROUGHING: readDimensionSpecs(formData, "ROUGHING"),
         FINISH: readDimensionSpecs(formData, "FINISH"),
       },
-      defects: readDefectSpecs(formData),
       updatedAt: now(),
       updatedByUid: actor.uid,
       updatedByName: actor.displayName,
@@ -953,11 +956,10 @@ export interface DimensionInput {
   tolPlus: number | null;
 }
 
-/** One defect row as it arrives from the configuration sheet. */
+/** One defect row as it arrives from the configuration sheet. A name; the
+ *  catalogue is shared by every item. */
 export interface DefectInput {
-  itemCode: string | null;
   name: string;
-  department: string | null;
 }
 
 /** Bring in dimensions and defects for many items at once.
@@ -983,7 +985,6 @@ export const importItemConfigs =
       itemCode,
       itemName: itemName ?? itemCode,
       dimensions: { ROUGHING: [], FINISH: [] },
-      defects: [],
       updatedAt: now(),
       updatedByUid: actor.uid,
       updatedByName: actor.displayName,
@@ -1003,18 +1004,16 @@ export const importItemConfigs =
       byItem.set(row.itemCode, item);
     }
 
-    // A defect row with no item code belongs to every item, so it goes to the
-    // catalogue rather than to one of them.
+    // One catalogue, shared. Two rows naming the same defect are one defect:
+    // they would otherwise become two entries with the same key, and the
+    // inspector would be offered the same thing twice.
     const catalogue: DefectSpec[] = [];
+    const have = new Set<string>();
     for (const row of defects) {
-      const spec = { key: slug(row.name), name: row.name.trim(), department: row.department };
-      if (!row.itemCode) {
-        catalogue.push(spec);
-        continue;
-      }
-      const item = byItem.get(row.itemCode) ?? blank(row.itemCode, null);
-      item.defects.push(spec);
-      byItem.set(row.itemCode, item);
+      const key = slug(row.name);
+      if (have.has(key)) continue;
+      have.add(key);
+      catalogue.push({ key, name: row.name.trim() });
     }
 
     try {
@@ -1032,7 +1031,7 @@ export const importItemConfigs =
       items: byItem.size,
       info:
         `${byItem.size} item(s) configured` +
-        (catalogue.length > 0 ? `, and ${catalogue.length} defect(s) added to the shared list.` : "."),
+        (catalogue.length > 0 ? `, and ${catalogue.length} defect(s) in the shared list.` : "."),
     };
   };
 

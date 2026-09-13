@@ -47,10 +47,17 @@ export interface Reading extends Spec {
   unit?: string | null;
 }
 
+/** A defect, as the sheet records it.
+ *
+ *  A name and nothing else. It used to carry the department responsible for
+ *  it, which filled the hold's department in for the inspector whenever every
+ *  ticked defect agreed on one. That saved a click and cost a screen: every
+ *  defect in the catalogue needed a department set up beside it, and every
+ *  defect on the sheet came with a dropdown of its own. The inspector chooses
+ *  the department once, on the hold, where the decision actually belongs. */
 export interface Defect {
   key: string;
   name: string;
-  department?: string | null;
 }
 
 export interface Suggestion {
@@ -60,9 +67,6 @@ export interface Suggestion {
   reasons: string[];
   failed: Reading[];
   unmeasured: Reading[];
-  /** The department to hold against, when every defect points at the same one
-   *  and so the answer is not a guess. */
-  department: string | null;
 }
 
 /** The verdict the readings and the defects require.
@@ -82,13 +86,10 @@ export function suggest(readings: Reading[], defects: Defect[]): Suggestion {
   for (const r of failed) reasons.push(`${r.name} is outside tolerance`);
   for (const d of defects) reasons.push(`Visual defect: ${d.name}`);
 
-  const departments = [...new Set(defects.map((d) => d.department?.trim()).filter(Boolean))];
-
   return {
     verdict: failed.length > 0 || unmeasured.length > 0 || defects.length > 0 ? "HOLD" : "ACCEPTED",
     reasons: reasons.length > 0 ? reasons : ["Every dimension is in tolerance and no defect was recorded"],
     failed,
     unmeasured,
-    department: departments.length === 1 ? (departments[0] as string) : null,
   };
 }

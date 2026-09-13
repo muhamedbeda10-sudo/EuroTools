@@ -10,8 +10,8 @@ import { Card, Empty } from "@/components/ui";
 import { allows } from "@/lib/domain/roles";
 import { STAGES, STAGE_LABELS, type Stage } from "@/lib/domain/workflow";
 import { saveItemConfig } from "@/lib/client/actions";
-import { getDepartments, getItemConfig } from "@/lib/client/queries";
-import type { DefectSpec, DimensionSpec } from "@/lib/model";
+import { getItemConfig } from "@/lib/client/queries";
+import type { DimensionSpec } from "@/lib/model";
 import { useAsync } from "@/lib/client/use-async";
 import { useRequireSession, type SessionUser } from "@/lib/client/session";
 
@@ -26,10 +26,9 @@ import { useRequireSession, type SessionUser } from "@/lib/client/session";
 function ItemEditor({ code }: { code: string | null }) {
   const me = useRequireSession();
   const state = useAsync(
-    async () => ({
-      item: code ? await getItemConfig(code) : null,
-      departments: await getDepartments(),
-    }),
+    // Departments are not read here any more: what an item has to be is its
+    // dimensions, and who reworks a defect is chosen on the hold.
+    async () => ({ item: code ? await getItemConfig(code) : null }),
     [code]
   );
   if (!me) return null;
@@ -43,7 +42,6 @@ function ItemEditor({ code }: { code: string | null }) {
           me={me}
           code={code}
           item={d.item}
-          departments={d.departments}
           onSaved={state.refresh}
         />
       )}
@@ -52,7 +50,6 @@ function ItemEditor({ code }: { code: string | null }) {
 }
 
 type DimRow = DimensionSpec & { rowId: string };
-type DefRow = DefectSpec & { rowId: string };
 
 let counter = 0;
 const rowId = () => `r${(counter += 1)}_${Date.now().toString(36)}`;
@@ -61,22 +58,17 @@ function Editor({
   me,
   code,
   item,
-  departments,
   onSaved,
 }: {
   me: SessionUser;
   code: string | null;
   item: Awaited<ReturnType<typeof getItemConfig>>;
-  departments: string[];
   onSaved: () => void;
 }) {
   const [dims, setDims] = useState<Record<Stage, DimRow[]>>(() => ({
     ROUGHING: (item?.dimensions?.ROUGHING ?? []).map((d) => ({ ...d, rowId: rowId() })),
     FINISH: (item?.dimensions?.FINISH ?? []).map((d) => ({ ...d, rowId: rowId() })),
   }));
-  const [defects, setDefects] = useState<DefRow[]>(() =>
-    (item?.defects ?? []).map((d) => ({ ...d, rowId: rowId() }))
-  );
 
   const blankDim = (): DimRow => ({
     rowId: rowId(),
@@ -224,70 +216,6 @@ function Editor({
           </Card>
         ))}
 
-        <Card
-          className="mt-4"
-          title="Visual defects for this item"
-          subtitle="On top of the shared list — leave empty to use it alone"
-          action={
-            <button
-              type="button"
-              className="btn"
-              onClick={() =>
-                setDefects((ds) => [...ds, { rowId: rowId(), key: "", name: "", department: null }])
-              }
-            >
-              + Add
-            </button>
-          }
-        >
-          {defects.length === 0 ? (
-            <Empty>None of its own.</Empty>
-          ) : (
-            <div className="grid gap-2">
-              {defects.map((row) => (
-                <div key={row.rowId} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                  <input type="hidden" name="defectKey" value={row.key} />
-                  <input
-                    className="input"
-                    name="defectName"
-                    value={row.name}
-                    onChange={(e) =>
-                      setDefects((ds) =>
-                        ds.map((d) => (d.rowId === row.rowId ? { ...d, name: e.target.value } : d))
-                      )
-                    }
-                    placeholder="Scratch"
-                    required
-                  />
-                  <select
-                    className="select"
-                    name="defectDepartment"
-                    value={row.department ?? ""}
-                    onChange={(e) =>
-                      setDefects((ds) =>
-                        ds.map((d) =>
-                          d.rowId === row.rowId ? { ...d, department: e.target.value || null } : d
-                        )
-                      )
-                    }
-                  >
-                    <option value="">— Usually nobody&rsquo;s in particular —</option>
-                    {departments.map((dep) => (
-                      <option key={dep} value={dep}>{dep}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setDefects((ds) => ds.filter((d) => d.rowId !== row.rowId))}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
       </ActionForm>
 
       <p className="mt-4 text-sm">

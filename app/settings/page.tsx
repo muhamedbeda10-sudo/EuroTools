@@ -45,11 +45,9 @@ const DIMENSION_GRID: GridColumn[] = [
 const DIMENSION_HEADERS = ["Item", "Item name", "Stage", "Dimension", "Unit", "Nominal", "Tol -", "Tol +"];
 
 const DEFECT_GRID: GridColumn[] = [
-  { key: "item", label: "Item", width: 12, placeholder: "blank = every item" },
-  { key: "defect", label: "Defect", width: 18, placeholder: "Scratch" },
-  { key: "department", label: "Department", width: 14 },
+  { key: "defect", label: "Defect", width: 28, placeholder: "Scratch" },
 ];
-const DEFECT_HEADERS = ["Item", "Defect", "Department"];
+const DEFECT_HEADERS = ["Defect"];
 
 export default function SettingsPage() {
   const me = useRequireSession();
@@ -91,7 +89,7 @@ export default function SettingsPage() {
                 onSaved={state.refresh}
                 icon={<AlertIcon />}
                 title="Visual defects"
-                subtitle="Leave Item blank to apply it to every item"
+                subtitle="One list, used by every item"
                 columns={DEFECT_GRID}
                 headers={DEFECT_HEADERS}
                 parse={parseDefects}
@@ -99,7 +97,7 @@ export default function SettingsPage() {
                 fileColumns={DEFECT_COLUMNS}
                 fileParse={parseDefects}
                 fileCommit={(me2, rows) => importItemConfigs(me2)([], rows as DefectRow[])}
-                describe={(r) => `${r.itemCode ?? "(all items)"} · ${r.name}`}
+                describe={(r) => r.name}
               />
             </>
           )}
@@ -154,10 +152,7 @@ export default function SettingsPage() {
               ) : (
                 <ul className="grid gap-1 text-sm">
                   {c.catalogue.map((d) => (
-                    <li key={d.key} className="flex items-baseline justify-between gap-3">
-                      <span>{d.name}</span>
-                      <span className="text-xs text-[var(--muted)]">{d.department ?? "—"}</span>
-                    </li>
+                    <li key={d.key}>{d.name}</li>
                   ))}
                 </ul>
               )}
@@ -218,7 +213,6 @@ export default function SettingsPage() {
                         {STAGES.map((s) => (
                           <td key={s} className="num">{item.dimensions?.[s]?.length ?? 0}</td>
                         ))}
-                        <td className="num">{item.defects?.length ?? 0}</td>
                         <td className="num whitespace-nowrap">{fmtDateTime(item.updatedAt)}</td>
                         {mayManage && (
                           <td>
@@ -311,7 +305,7 @@ function Grid<T>({
   }
 
   return (
-    <div className="mb-4 grid gap-4 xl:grid-cols-[2fr_1fr]">
+    <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
       <Card
         className="rise"
         title={<span className="inline-flex items-center gap-2">{icon} {title}</span>}

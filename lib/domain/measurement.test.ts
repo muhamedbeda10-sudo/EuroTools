@@ -82,32 +82,31 @@ describe("the verdict the evidence requires", () => {
   });
 
   it("holds on a visual defect even when every dimension is good", () => {
-    const s = suggest([dim()], [{ key: "scratch", name: "Scratch", department: "Grinding" }]);
+    const s = suggest([dim()], [{ key: "scratch", name: "Scratch" }]);
     expect(s.verdict).toBe("HOLD");
     expect(s.reasons.join(" ")).toContain("Scratch");
   });
 
-  it("suggests the department when every defect points at the same one", () => {
+  it("names every defect in its reasons, so the hold says what it is for", () => {
     const s = suggest(
       [dim()],
       [
-        { key: "scratch", name: "Scratch", department: "Grinding" },
-        { key: "burn", name: "Burn", department: "Grinding" },
+        { key: "scratch", name: "Scratch" },
+        { key: "dent", name: "Dent" },
       ]
     );
-    expect(s.department).toBe("Grinding");
+    const reasons = s.reasons.join(" ");
+    expect(reasons).toContain("Scratch");
+    expect(reasons).toContain("Dent");
   });
 
-  it("suggests nobody when the defects disagree", () => {
-    // Two departments and one hold: the inspector decides, not a coin toss.
-    const s = suggest(
-      [dim()],
-      [
-        { key: "scratch", name: "Scratch", department: "Grinding" },
-        { key: "dent", name: "Dent", department: "Handling" },
-      ]
-    );
-    expect(s.department).toBeNull();
+  it("holds on a defect whatever the readings say, and does not pick a department", () => {
+    // Who reworks it is the inspector's call on the hold, not something
+    // derived from which defects were ticked. The evidence decides the
+    // verdict; a person decides who answers for it.
+    const s = suggest([dim({ actual: 50 })], [{ key: "scratch", name: "Scratch" }]);
+    expect(s.verdict).toBe("HOLD");
+    expect(s).not.toHaveProperty("department");
   });
 
   it("never suggests a bypass", () => {

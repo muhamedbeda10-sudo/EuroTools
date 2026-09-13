@@ -176,7 +176,6 @@ export interface ReadingEntry {
 export interface DefectEntry {
   key: string;
   name: string;
-  department: string | null;
   note: string | null;
 }
 
@@ -252,12 +251,16 @@ export interface DimensionSpec {
   tolPlus: number | null;
 }
 
+/** One line of the defect catalogue: a name, and a key the answers are stored
+ *  against.
+ *
+ *  Nothing else. The catalogue is shared by every item, and the department
+ *  responsible is chosen on the hold rather than attached to the defect —
+ *  which defect was seen and who has to put it right are two different
+ *  questions, and the second one has an answer the first cannot supply. */
 export interface DefectSpec {
   key: string;
   name: string;
-  /** The department a defect usually belongs to. A suggestion on the sheet,
-   *  never a decision: the inspector confirms it. */
-  department: string | null;
 }
 
 /** What an item has to be. Keyed by item code, so there is one of these per
@@ -266,7 +269,6 @@ export interface ItemConfigDoc {
   itemCode: string;
   itemName: string;
   dimensions: Record<Stage, DimensionSpec[]>;
-  defects: DefectSpec[];
   updatedAt: StoredTimestamp;
   updatedByUid: string;
   updatedByName: string;

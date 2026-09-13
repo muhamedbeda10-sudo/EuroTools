@@ -213,19 +213,32 @@ describe("the dimensions sheet", () => {
 });
 
 describe("the defects sheet", () => {
-  it("reads a defect against one item", () => {
-    const { rows } = parseDefects([["Item", "Defect", "Department"], ["Core", "Scratch", "Grinding"]]);
-    expect(rows[0]).toEqual({ itemCode: "Core", name: "Scratch", department: "Grinding" });
-  });
-
-  it("treats a blank item as a defect every item should be checked for", () => {
-    const { rows } = parseDefects([["Item", "Defect", "Department"], ["", "Dent", "Handling"]]);
-    expect(rows[0].itemCode).toBeNull();
-  });
-
-  it("works from a sheet that only has the defect names", () => {
+  it("reads a list of defect names", () => {
     const { rows, problems } = parseDefects([["Defect"], ["Scratch"], ["Burn"]]);
     expect(problems).toEqual([]);
+    expect(rows).toEqual([{ name: "Scratch" }, { name: "Burn" }]);
+  });
+
+  it("ignores columns an older sheet still carries", () => {
+    // Item and Department used to be part of this sheet. Somebody will import
+    // one of those, and it should bring the defects in rather than refuse.
+    const { rows, problems } = parseDefects([
+      ["Item", "Defect", "Department"],
+      ["Core", "Scratch", "Grinding"],
+    ]);
+    expect(problems).toEqual([]);
+    expect(rows).toEqual([{ name: "Scratch" }]);
+  });
+
+  it("says which column it needs when the defect column is missing", () => {
+    const { rows, problems } = parseDefects([["Item", "Department"], ["Core", "Grinding"]]);
+    expect(rows).toEqual([]);
+    expect(problems[0].message).toContain("Defect");
+  });
+
+  it("reports the row when a name is blank rather than storing an unnamed defect", () => {
+    const { rows, problems } = parseDefects([["Defect"], ["Scratch"], [""], ["  "], ["Burn"]]);
     expect(rows.map((r) => r.name)).toEqual(["Scratch", "Burn"]);
+    expect(problems).toEqual([]);
   });
 });

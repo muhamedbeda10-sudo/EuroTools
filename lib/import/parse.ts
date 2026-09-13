@@ -315,13 +315,10 @@ export function parseDimensions(grid: unknown[][]): Parsed<DimensionRow> {
 const abs = (n: number | null) => (n == null ? null : Math.abs(n));
 
 export interface DefectRow {
-  /** Blank means the defect belongs to every item, not to one. */
-  itemCode: string | null;
   name: string;
-  department: string | null;
 }
 
-export const DEFECT_COLUMNS = ["Item", "Defect", "Department"];
+export const DEFECT_COLUMNS = ["Defect"];
 
 export function parseDefects(grid: unknown[][]): Parsed<DefectRow> {
   const problems: Problem[] = [];
@@ -329,9 +326,7 @@ export function parseDefects(grid: unknown[][]): Parsed<DefectRow> {
 
   const headers = grid[0].map((h) => String(h ?? ""));
   const at = {
-    item: column(headers, "item", "itemcode", "code"),
     defect: column(headers, "defect", "visualdefect", "name", "description"),
-    department: column(headers, "department", "dept", "responsible", "section"),
   };
 
   if (at.defect == null)
@@ -358,11 +353,7 @@ export function parseDefects(grid: unknown[][]): Parsed<DefectRow> {
       continue;
     }
 
-    rows.push({
-      itemCode: text(cell(raw, at.item)),
-      name,
-      department: text(cell(raw, at.department)),
-    });
+    rows.push({ name });
   }
 
   return { rows, problems };
