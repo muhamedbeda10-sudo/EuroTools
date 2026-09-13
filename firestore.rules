@@ -54,10 +54,6 @@ service cloud.firestore {
         && account().active == true;
     }
 
-    function hasRole(roles) {
-      return signedIn() && account().role in roles;
-    }
-
     /** What a role carries, before anything is said about the person holding
      *  it. These sets mirror `MATRIX` in `lib/domain/roles.ts`. Rules cannot
      *  import, so widening a role means editing both — which is the point: it
