@@ -118,16 +118,14 @@ function NewAccount({ me, onSaved }: { me: SessionUser; onSaved: () => void }) {
           <PlusIcon /> Add somebody
         </span>
       }
-      subtitle="Creates their sign-in and their access together"
+      subtitle="Sign-in and access together"
     >
       <ActionForm action={grantAccess(me)} onSuccess={onSaved} submitLabel="Create account">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="displayName">Name</label>
             <input id="displayName" className="input" name="displayName" required placeholder="Hala Fouad" />
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              This is the name that signs every inspection they record.
-            </p>
+
           </div>
           <div>
             <label className="label" htmlFor="email">Email address</label>
@@ -136,9 +134,7 @@ function NewAccount({ me, onSaved }: { me: SessionUser; onSaved: () => void }) {
           <div>
             <label className="label" htmlFor="password">Starting password</label>
             <input id="password" className="input ltr" name="password" type="text" minLength={8} required />
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              Hand it over in person and ask them to change it.
-            </p>
+
           </div>
           <div>
             <label className="label" htmlFor="employeeNo">Employee number (optional)</label>
@@ -326,7 +322,7 @@ function Person({
 
       {self && (
         <p className="mt-2 text-xs text-[var(--muted)]">
-          You cannot change your own role or permissions. Another administrator has to.
+          Somebody else has to change your own permissions.
         </p>
       )}
 

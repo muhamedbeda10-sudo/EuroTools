@@ -35,7 +35,6 @@ interface Ticked extends DefectSpec {
 export function InspectionSheet({
   me,
   pieceId,
-  serial,
   stage,
   round,
   dimensions,
@@ -47,7 +46,6 @@ export function InspectionSheet({
 }: {
   me: SessionUser;
   pieceId: string;
-  serial: string;
   stage: "ROUGHING" | "FINISH";
   round: number;
   dimensions: DimensionSpec[];
@@ -110,20 +108,16 @@ export function InspectionSheet({
       <input type="hidden" name="pieceId" value={pieceId} />
 
       {!itemConfigured && (
-        <p className="mb-3 rounded-[var(--radius-sm)] border border-[var(--warn-fg)] bg-[var(--warn-bg)] p-2.5 text-sm text-[var(--warn-fg)]">
-          Nothing is configured for this item yet, so no dimensions were filled in for you. Add what
-          you measured below, then ask an administrator to set the item up in Settings so the next
-          piece comes ready.
+        <p className="mb-3 rounded-[var(--radius-sm)] bg-[var(--warn-bg)] p-2 text-sm text-[var(--warn-fg)]">
+          This item is not set up yet — add what you measured.
         </p>
       )}
 
       {/* ── dimensions ── */}
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-bold">
-          Dimensions — {STAGE_LABELS[stage]}
-          <span className="ms-2 font-normal text-[var(--muted)]">
-            {serial} · round {round + 1}
-          </span>
+          Dimensions
+          <span className="ms-2 font-normal text-[var(--muted)]">round {round + 1}</span>
         </h3>
         <button type="button" className="btn" onClick={addRow}>
           + Add a dimension
@@ -226,9 +220,7 @@ export function InspectionSheet({
       {/* ── visual defects ── */}
       <h3 className="mt-4 mb-2 text-sm font-bold">Visual defects</h3>
       {ticks.length === 0 ? (
-        <p className="text-sm text-[var(--muted)]">
-          No defect list is configured. An administrator can add one in Settings.
-        </p>
+        <p className="text-sm text-[var(--muted)]">No defect list yet.</p>
       ) : (
         <div className="grid gap-2">
           {ticks.map((t, i) => (
@@ -317,7 +309,6 @@ export function InspectionSheet({
               {VERDICTS.filter((v) => v !== "ACCEPTED_BYPASS" || mayBypass).map((v) => (
                 <option key={v} value={v}>
                   {VERDICT_LABELS[v]}
-                  {v === suggestion.verdict ? " — what the evidence says" : ""}
                 </option>
               ))}
             </select>
@@ -357,21 +348,19 @@ export function InspectionSheet({
               placeholder="The concession, and who authorised it"
             />
             <p className="mt-1 text-xs text-[var(--warn-fg)]">
-              This piece does not meet what the drawing asks for. Accepting it is a concession,
-              recorded against your name.
+              A concession, recorded against your name.
             </p>
           </div>
         )}
 
         {isConcession && !mayBypass && (
           <p className="mt-2 text-xs font-semibold text-[var(--bad-fg)]">
-            Your account cannot grant a concession. Hold the piece, or ask a supervisor.
+            You cannot grant a concession — hold it, or ask a supervisor.
           </p>
         )}
 
         <p className="mt-3 text-xs text-[var(--muted)]">
-          Signed by <strong>{me.displayName}</strong>. Once signed, this sheet cannot be changed —
-          measure the piece again instead.
+          Signed by <strong>{me.displayName}</strong>. Cannot be changed afterwards.
         </p>
       </div>
     </ActionForm>

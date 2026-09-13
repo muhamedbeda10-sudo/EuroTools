@@ -44,6 +44,10 @@ const REQUIRED = [
   ["the pieces cut from one planning line", "pieces(lineId asc, pieceNo asc)"],
   ["a piece's measurement history", "inspections(pieceId asc, inspectedAt desc)"],
   ["a piece's rework history", "reworks(pieceId asc, heldAt desc)"],
+  [
+    "the dimensions the last sheet for this item and stage used",
+    "inspections(itemCode asc, stage asc, inspectedAt desc)",
+  ],
 ] as const;
 
 /** Sorting alone, or filtering alone, is served by the single-field indexes
@@ -55,6 +59,7 @@ const FILTERED_FIELDS = [
   // which Firestore answers by merging single-field indexes.
   "active",
   "completedAt",
+  "itemCode",
   "lineId",
   "pieceId",
   "role",

@@ -11,7 +11,7 @@ import { PhotoGallery } from "@/components/PhotoGallery";
 import { PrintButton } from "@/components/PrintButton";
 import { Card, Empty, Kv, StatusPill } from "@/components/ui";
 import { allows } from "@/lib/domain/roles";
-import { STAGES, STAGE_LABELS } from "@/lib/domain/workflow";
+import { STAGE_LABELS } from "@/lib/domain/workflow";
 import { fmtDate, fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
 import { recordInspection, recordReworkDone } from "@/lib/client/actions";
 import { getPiece } from "@/lib/client/queries";
@@ -70,7 +70,6 @@ function PieceView({ id }: { id: string }) {
                   <InspectionSheet
                     me={me}
                     pieceId={d.piece.id}
-                    serial={d.piece.serial}
                     stage={d.piece.stage}
                     round={d.piece.round}
                     dimensions={d.dimensions}
@@ -84,8 +83,7 @@ function PieceView({ id }: { id: string }) {
               ) : d.piece.state === "WAITING_REWORK" ? (
                 <Card title="In rework" subtitle={`Held against ${d.piece.holdDepartment}`}>
                   <p className="text-sm">
-                    This piece stays at {STAGE_LABELS[d.piece.stage]} until the rework is done. When
-                    the department reports back, close it out here and measure it again.
+                    Close this out when {d.piece.holdDepartment} reports back, then measure it again.
                   </p>
                   {allows(me, "rework.record") && (
                     <div className="mt-3">
@@ -107,10 +105,7 @@ function PieceView({ id }: { id: string }) {
                 </Card>
               ) : (
                 <Card title="Closed">
-                  <p className="text-sm">
-                    This piece has been through {STAGES.map((s) => STAGE_LABELS[s]).join(" and ")},
-                    and was accepted at the end.
-                  </p>
+                  <p className="text-sm">Through both stages and accepted.</p>
                 </Card>
               )}
             </div>

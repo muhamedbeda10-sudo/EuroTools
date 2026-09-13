@@ -191,8 +191,7 @@ export function PasteGrid({
           <PlusIcon /> Add a row
         </button>
         <p className="text-xs text-[var(--muted)]">
-          Copy a block out of Excel and paste it into any cell — it fills from
-          there and adds rows to fit. Enter moves down, Tab moves across.
+          Paste a block from Excel into any cell. Enter moves down.
         </p>
       </div>
     </div>

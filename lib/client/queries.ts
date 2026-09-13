@@ -22,6 +22,7 @@ import {
   toDate,
   toDateRequired,
   type DefectCatalogueDoc,
+  type DimensionSpec,
   type DefectSpec,
   type DepartmentsDoc,
   type InspectionDoc,
@@ -124,6 +125,61 @@ export function byUrgency(a: QueueRow, b: QueueRow): number {
   return pa.localeCompare(pb) || a.plannedAt.getTime() - b.plannedAt.getTime();
 }
 
+/** One planning line's worth of pieces, standing together.
+ *
+ *  Five pieces of the same part are five rows that say the same thing five
+ *  times. Grouping them under the line they came from is what makes a queue
+ *  readable: the eye reads the project and the item once, and the pieces
+ *  underneath are the only thing that differs.
+ */
+export interface QueueGroup {
+  lineId: string;
+  project: string;
+  itemCode: string;
+  itemName: string;
+  measuringType: string;
+  priority: string | null;
+  plannedAt: Date;
+  pieces: QueueRow[];
+  /** The longest any one piece in this group has been waiting — what makes a
+   *  group urgent is its worst piece, not its average. */
+  longestWaitMs: number;
+}
+
+export function groupByLine(rows: QueueRow[]): QueueGroup[] {
+  const groups = new Map<string, QueueGroup>();
+
+  for (const row of rows) {
+    const existing = groups.get(row.lineId);
+    if (existing) {
+      existing.pieces.push(row);
+      existing.longestWaitMs = Math.max(existing.longestWaitMs, row.qcMs);
+      continue;
+    }
+    groups.set(row.lineId, {
+      lineId: row.lineId,
+      project: row.project,
+      itemCode: row.itemCode,
+      itemName: row.itemName,
+      measuringType: row.measuringType,
+      priority: row.priority,
+      plannedAt: row.plannedAt,
+      pieces: [row],
+      longestWaitMs: row.qcMs,
+    });
+  }
+
+  for (const group of groups.values()) group.pieces.sort((a, b) => a.pieceNo - b.pieceNo);
+
+  // The same order the pieces were in: highest priority first, then whatever
+  // has waited longest.
+  return [...groups.values()].sort(
+    (a, b) =>
+      (a.priority?.trim() || "\uffff").localeCompare(b.priority?.trim() || "\uffff") ||
+      a.plannedAt.getTime() - b.plannedAt.getTime()
+  );
+}
+
 /** Everything standing at one stage: what quality has to measure, and what a
  *  department still owes back. Both in one read, because the queue screen
  *  shows both and a second query would cost a second read per view. */
@@ -139,9 +195,13 @@ export async function getQueue(stage: Stage) {
 
   const now = new Date();
   const rows = snapshot.docs.map((d) => toQueueRow(d.id, asDoc<PieceDoc>(d), now));
+  const toMeasure = rows.filter((r) => r.state === "WAITING_QC").sort(byUrgency);
+  const inRework = rows.filter((r) => r.state === "WAITING_REWORK").sort(byUrgency);
+
   return {
-    toMeasure: rows.filter((r) => r.state === "WAITING_QC").sort(byUrgency),
-    inRework: rows.filter((r) => r.state === "WAITING_REWORK").sort(byUrgency),
+    toMeasure,
+    inRework,
+    byLine: { toMeasure: groupByLine(toMeasure), inRework: groupByLine(inRework) },
   };
 }
 
@@ -152,14 +212,16 @@ export async function getPiece(pieceId: string) {
   if (!snapshot.exists()) return null;
   const piece = asDoc<PieceDoc>(snapshot);
 
-  const [lineSnap, historySnap, reworkSnap, itemSnap, departments, catalogue] = await Promise.all([
-    getDoc(docIn(planningLines(), piece.lineId)),
-    getDocs(query(inspections(), where("pieceId", "==", pieceId), orderBy("inspectedAt", "desc"))),
-    getDocs(query(reworks(), where("pieceId", "==", pieceId), orderBy("heldAt", "desc"))),
-    getDoc(docIn(itemConfigs(), configKey(piece.itemCode))),
-    getDepartments(),
-    getDefectCatalogue(),
-  ]);
+  const [lineSnap, historySnap, reworkSnap, itemSnap, departments, catalogue, previous] =
+    await Promise.all([
+      getDoc(docIn(planningLines(), piece.lineId)),
+      getDocs(query(inspections(), where("pieceId", "==", pieceId), orderBy("inspectedAt", "desc"))),
+      getDocs(query(reworks(), where("pieceId", "==", pieceId), orderBy("heldAt", "desc"))),
+      getDoc(docIn(itemConfigs(), configKey(piece.itemCode))),
+      getDepartments(),
+      getDefectCatalogue(),
+      lastReadings(piece.itemCode, piece.stage),
+    ]);
 
   const item = itemSnap.exists() ? asDoc<ItemConfigDoc>(itemSnap) : null;
 
@@ -184,11 +246,55 @@ export async function getPiece(pieceId: string) {
     /** What to ask for at this stage: the item's own dimensions, and the
      *  defects to look for — the item's, falling back to the catalogue so an
      *  unconfigured item still gives the inspector something to tick. */
-    dimensions: item?.dimensions?.[piece.stage] ?? [],
+    dimensions: mergeDimensions(item?.dimensions?.[piece.stage] ?? [], previous),
     defects: item && item.defects.length > 0 ? item.defects : catalogue,
     departments,
     itemConfigured: item != null,
   };
+}
+
+/** The dimensions the last sheet for this item and stage actually used.
+ *
+ *  Nominal and tolerance are properties of the part, not of the piece: five
+ *  pieces of one item are measured against the same drawing. Typing them again
+ *  on every piece is work that invites a typo, and a typo here changes what
+ *  passes.
+ *
+ *  So whatever was measured last time comes back filled in, and only the
+ *  reading is left blank. Where the item is configured, the configuration
+ *  wins — it is the authority, and a sheet that disagreed with it was somebody
+ *  working round it rather than a new standard.
+ */
+async function lastReadings(itemCode: string, stage: Stage): Promise<DimensionSpec[]> {
+  const snapshot = await getDocs(
+    query(
+      inspections(),
+      where("itemCode", "==", itemCode),
+      where("stage", "==", stage),
+      orderBy("inspectedAt", "desc"),
+      limit(1)
+    )
+  );
+
+  const sheet = snapshot.docs[0]?.data() as InspectionDoc | undefined;
+  return (sheet?.readings ?? []).map((r) => ({
+    key: r.key,
+    name: r.name,
+    unit: r.unit,
+    nominal: r.nominal,
+    tolMinus: r.tolMinus,
+    tolPlus: r.tolPlus,
+  }));
+}
+
+/** What the sheet should ask for: the item's own dimensions, and anything the
+ *  last sheet measured that they do not cover. */
+export function mergeDimensions(
+  configured: DimensionSpec[],
+  previous: DimensionSpec[]
+): DimensionSpec[] {
+  const have = new Set(configured.map((d) => d.key));
+  return [...configured, ...previous.filter((d) => !have.has(d.key))];
 }
 
 // ───────────────────────── planning ─────────────────────────

@@ -4,41 +4,92 @@
       "collectionGroup": "pieces",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "stage", "order": "ASCENDING" },
-        { "fieldPath": "state", "order": "ASCENDING" },
-        { "fieldPath": "plannedAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "stage",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "state",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "plannedAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "pieces",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "state", "order": "ASCENDING" },
-        { "fieldPath": "plannedAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "state",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "plannedAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "pieces",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "lineId", "order": "ASCENDING" },
-        { "fieldPath": "pieceNo", "order": "ASCENDING" }
+        {
+          "fieldPath": "lineId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "pieceNo",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "inspections",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pieceId", "order": "ASCENDING" },
-        { "fieldPath": "inspectedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "pieceId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "inspectedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "reworks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pieceId", "order": "ASCENDING" },
-        { "fieldPath": "heldAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "pieceId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "heldAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "inspections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "itemCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "stage",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "inspectedAt",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],

@@ -64,7 +64,7 @@ export default function SettingsPage() {
         <>
           {!mayManage && (
             <p className="mb-4 rounded-[var(--radius-sm)] bg-[var(--surface-2)] p-2.5 text-sm text-[var(--muted)]">
-              You can read this. Changing what a piece has to be needs the permission for it.
+              Read only — changing this needs the permission for it.
             </p>
           )}
 
@@ -75,7 +75,7 @@ export default function SettingsPage() {
                 onSaved={state.refresh}
                 icon={<RulerIcon />}
                 title="Dimensions"
-                subtitle="One row per dimension, per item, per stage. Paste a block straight out of Excel."
+                subtitle="One row per dimension, per item, per stage"
                 columns={DIMENSION_GRID}
                 headers={DIMENSION_HEADERS}
                 parse={parseDimensions}
@@ -91,7 +91,7 @@ export default function SettingsPage() {
                 onSaved={state.refresh}
                 icon={<AlertIcon />}
                 title="Visual defects"
-                subtitle="Leave Item blank for a defect every item should be checked for."
+                subtitle="Leave Item blank to apply it to every item"
                 columns={DEFECT_GRID}
                 headers={DEFECT_HEADERS}
                 parse={parseDefects}
@@ -112,7 +112,7 @@ export default function SettingsPage() {
                   <BuildingIcon /> Departments
                 </span>
               }
-              subtitle="What a hold may be recorded against. One per line."
+              subtitle="One per line"
             >
               {mayManage ? (
                 <ActionForm
@@ -127,11 +127,7 @@ export default function SettingsPage() {
                     defaultValue={c.departments.join("\n")}
                     placeholder={"Machining\nGrinding\nHeat treatment\nAssembly"}
                   />
-                  <p className="mt-1 text-xs text-[var(--muted)]">
-                    A list rather than free text on purpose: otherwise
-                    &ldquo;Machining&rdquo;, &ldquo;machining&rdquo; and &ldquo;M/C shop&rdquo;
-                    become three columns on the dashboard describing one place.
-                  </p>
+
                 </ActionForm>
               ) : c.departments.length === 0 ? (
                 <Empty>No departments yet.</Empty>
@@ -154,7 +150,7 @@ export default function SettingsPage() {
               subtitle="Every item starts from these"
             >
               {c.catalogue.length === 0 ? (
-                <Empty>Nothing yet — an inspector would have nothing to tick.</Empty>
+                <Empty>Nothing yet.</Empty>
               ) : (
                 <ul className="grid gap-1 text-sm">
                   {c.catalogue.map((d) => (
@@ -186,7 +182,7 @@ export default function SettingsPage() {
           >
             {c.items.length === 0 ? (
               <Empty>
-                No item is configured. Until one is, an inspector types every dimension by hand.
+                No items yet.
               </Empty>
             ) : (
               <div className="scroll-x">
@@ -352,7 +348,6 @@ function Grid<T>({
         }
       >
         <ImportPanel<T>
-          title={subtitle}
           columns={fileColumns}
           parse={fileParse}
           commit={(r) => fileCommit(me, r)}

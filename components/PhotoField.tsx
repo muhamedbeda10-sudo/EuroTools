@@ -2,92 +2,143 @@
 
 import { useRef, useState } from "react";
 
+import { PlusIcon, TrashIcon } from "./icons";
 import { PHOTO_MAX_PER_INSPECTION } from "@/lib/model";
 
-/** Photographing a defect, from the sheet that records it.
+/** Camera or gallery, both from inside the page.
  *
- *  `capture="environment"` is what makes a tablet open its rear camera rather
- *  than a file browser, which is the whole difference between an inspector
- *  taking a photograph and an inspector deciding not to bother.
+ *  Two inputs rather than one, because `capture` is not a choice a browser
+ *  offers afterwards: an input carrying it opens the camera and an input
+ *  without it opens the picker. One control cannot do both, so there are two
+ *  buttons and one hidden input behind each.
  *
- *  The chosen files stay in the input and are posted with the rest of the
- *  sheet — the resizing and the writing happen in the action, in the same
- *  transaction as the verdict. Nothing is stored until the sheet is signed, so
- *  abandoning a half-filled form leaves nothing behind.
+ *  Files accumulate rather than replace. Picking a second photograph with a
+ *  single input throws the first away, which is not what anybody means by
+ *  taking another one.
  */
 export function PhotoField() {
-  const input = useRef<HTMLInputElement>(null);
-  const [previews, setPreviews] = useState<{ url: string; name: string }[]>([]);
-  const [tooMany, setTooMany] = useState(false);
+  const camera = useRef<HTMLInputElement>(null);
+  const gallery = useRef<HTMLInputElement>(null);
+  const carrier = useRef<HTMLInputElement>(null);
+  const [shots, setShots] = useState<{ url: string; name: string; file: File }[]>([]);
 
-  function choose(files: FileList | null) {
-    // Revoking first: each preview holds a blob alive until it is let go.
-    for (const p of previews) URL.revokeObjectURL(p.url);
+  /** The input the form actually posts. Kept in step with the previews by a
+   *  DataTransfer, which is the only way to put a chosen file back into an
+   *  input element. */
+  function republish(next: { url: string; name: string; file: File }[]) {
+    const bag = new DataTransfer();
+    for (const s of next) bag.items.add(s.file);
+    if (carrier.current) carrier.current.files = bag.files;
+    setShots(next);
+  }
 
+  function add(files: FileList | null) {
     const chosen = Array.from(files ?? []);
-    setTooMany(chosen.length > PHOTO_MAX_PER_INSPECTION);
-    setPreviews(
-      chosen
-        .slice(0, PHOTO_MAX_PER_INSPECTION)
-        .map((f) => ({ url: URL.createObjectURL(f), name: f.name }))
-    );
+    if (chosen.length === 0) return;
+
+    const next = [...shots];
+    for (const file of chosen) {
+      if (next.length >= PHOTO_MAX_PER_INSPECTION) break;
+      next.push({ url: URL.createObjectURL(file), name: file.name, file });
+    }
+    republish(next);
+
+    // So the same file can be chosen twice in a row.
+    if (camera.current) camera.current.value = "";
+    if (gallery.current) gallery.current.value = "";
   }
 
-  function clear() {
-    for (const p of previews) URL.revokeObjectURL(p.url);
-    setPreviews([]);
-    setTooMany(false);
-    if (input.current) input.current.value = "";
+  function remove(url: string) {
+    URL.revokeObjectURL(url);
+    republish(shots.filter((s) => s.url !== url));
   }
+
+  const full = shots.length >= PHOTO_MAX_PER_INSPECTION;
 
   return (
     <div className="mt-3">
-      <label className="label" htmlFor="photos">
-        Defect photographs (optional)
-      </label>
+      <p className="label">Photographs</p>
 
+      <input ref={carrier} name="photos" type="file" multiple className="hidden" />
       <input
-        ref={input}
-        id="photos"
-        name="photos"
+        ref={camera}
         type="file"
         accept="image/*"
         capture="environment"
+        className="hidden"
+        onChange={(e) => add(e.target.files)}
+      />
+      <input
+        ref={gallery}
+        type="file"
+        accept="image/*"
         multiple
-        className="input"
-        onChange={(e) => choose(e.target.files)}
+        className="hidden"
+        onChange={(e) => add(e.target.files)}
       />
 
-      <p className="mt-1 text-xs text-[var(--muted)]">
-        Up to {PHOTO_MAX_PER_INSPECTION}. They are resized on this device before
-        upload, saved with the inspection, and cannot be changed or removed once
-        the sheet is signed.
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="btn"
+          disabled={full}
+          onClick={() => camera.current?.click()}
+        >
+          <CameraIcon /> Camera
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={full}
+          onClick={() => gallery.current?.click()}
+        >
+          <PlusIcon /> Upload
+        </button>
+        <span className="text-xs text-[var(--muted)]">
+          {shots.length}/{PHOTO_MAX_PER_INSPECTION}
+        </span>
+      </div>
 
-      {tooMany && (
-        <p className="mt-1 text-xs font-semibold text-[var(--bad-fg)]">
-          You chose more than {PHOTO_MAX_PER_INSPECTION} photographs, so the
-          sheet will be refused. Clear them and choose at most
-          {PHOTO_MAX_PER_INSPECTION}.
-        </p>
-      )}
-
-      {previews.length > 0 && (
-        <div className="mt-2 flex flex-wrap items-start gap-2">
-          {previews.map((p) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={p.url}
-              src={p.url}
-              alt={p.name}
-              className="h-20 w-20 rounded-[var(--radius-sm)] border border-[var(--border)] object-cover"
-            />
+      {shots.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {shots.map((s) => (
+            <span key={s.url} className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={s.url}
+                alt={s.name}
+                className="h-20 w-20 rounded-[var(--radius-sm)] border border-[var(--border)] object-cover"
+              />
+              <button
+                type="button"
+                className="btn btn-icon absolute -end-2 -top-2 h-7 w-7 min-h-0 rounded-full"
+                aria-label={`Remove ${s.name}`}
+                onClick={() => remove(s.url)}
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+              </button>
+            </span>
           ))}
-          <button type="button" className="btn" onClick={clear}>
-            Clear photographs
-          </button>
         </div>
       )}
     </div>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-[1.15em] w-[1.15em]"
+      aria-hidden
+    >
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
   );
 }

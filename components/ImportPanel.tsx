@@ -17,14 +17,12 @@ import type { Parsed, Problem } from "@/lib/import/parse";
  *  button.
  */
 export function ImportPanel<T>({
-  title,
   columns,
   parse,
   commit,
   onDone,
   describe,
 }: {
-  title: string;
   /** The headings the sheet is expected to carry, shown before anybody picks a
    *  file so a mismatch is fixed in Excel rather than discovered here. */
   columns: string[];
@@ -80,10 +78,9 @@ export function ImportPanel<T>({
 
   return (
     <div className="grid gap-3">
-      <p className="text-sm text-[var(--muted)]">
-        {title} Expected headings:{" "}
-        <span className="ltr font-semibold">{columns.join(" · ")}</span>. Column order does not
-        matter, and extra columns are ignored. <code>.xlsx</code> or <code>.csv</code>.
+      <p className="text-xs text-[var(--muted)]">
+        <span className="ltr font-semibold">{columns.join(" · ")}</span> — any order,
+        <code className="ms-1">.xlsx</code> or <code>.csv</code>.
       </p>
 
       <input

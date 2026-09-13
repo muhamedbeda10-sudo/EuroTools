@@ -43,13 +43,15 @@ function check(label, ok, detail = "") {
  */
 const PROJECT = `MM26${String(Date.now()).slice(-6)}`;
 const CORE = `${PROJECT}-Core-001`;
+const CAVITY_1 = `${PROJECT}-Cavity-001`;
+const CAVITY_2 = `${PROJECT}-Cavity-002`;
 const SHEET = join(tmpdir(), `qc-planning-${Date.now()}.csv`);
 writeFileSync(
   SHEET,
   [
     "Project,MPLPR,Item,Name,Qty,Measuring type,Date,Priority,Duration,Description,Complete",
     `${PROJECT},MP,Core,Core insert,2,CMM,12/09/2026,A,,,`,
-    `${PROJECT},MP,Cavity,Cavity block,1,Traditional,12/09/2026,B,,,`,
+    `${PROJECT},MP,Cavity,Cavity block,2,Traditional,12/09/2026,B,,,`,
   ].join("\n"),
   "utf8"
 );
@@ -141,7 +143,7 @@ try {
   const queue = await page.textContent("body");
   check(
     "every piece of every line is waiting",
-    queue.includes(CORE) && queue.includes(`${PROJECT}-Cavity-001`)
+    queue.includes(CORE) && queue.includes(CAVITY_1)
   );
 
   // ── measure it, and hold it ──
@@ -186,6 +188,55 @@ try {
   const moved = await page.textContent("body");
   check("accepting it moves it to finish", moved.includes("Finish"));
   check("its measurement count follows it", /Times measured[\s\S]{0,80}2/.test(moved));
+
+  // ── the drawing carries to the next piece of the same part ──
+  // Cavity is deliberately not configured in settings: everything the second
+  // piece knows, it can only have learned from the sheet signed for the first.
+  await go("/queue/", "text=Waiting on quality");
+  await page.waitForTimeout(2500);
+  await page.click(`a:has-text("${CAVITY_1}")`);
+  await page.waitForSelector("text=not set up yet", { timeout: 25000 });
+
+  await page.click('button:has-text("Add a dimension")');
+  await page.waitForSelector('input[name="readingName"]:not([type="hidden"])', { timeout: 10000 });
+  await page.fill('input[name="readingName"]', "Bore depth");
+  await page.fill('input[name="readingNominal"]', "18");
+  await page.fill('input[name="readingTolMinus"]', "-0.05");
+  await page.fill('input[name="readingTolPlus"]', "0.05");
+  await page.fill('input[name="readingActual"]', "18.02");
+  await save("Sign the");
+  await page.waitForTimeout(2500);
+
+  await go("/queue/", "text=Waiting on quality");
+  await page.waitForTimeout(2500);
+  await page.click(`a:has-text("${CAVITY_2}")`);
+  await page.waitForSelector("text=Bore depth", { timeout: 25000 });
+
+  const carried = {
+    nominal: await page.inputValue('input[name="readingNominal"]'),
+    tolMinus: await page.inputValue('input[name="readingTolMinus"]'),
+    tolPlus: await page.inputValue('input[name="readingTolPlus"]'),
+    actual: await page.inputValue('input[name="readingActual"]'),
+  };
+  check(
+    "the next piece opens with the first piece's nominal and tolerance already in",
+    carried.nominal === "18" && carried.tolMinus === "-0.05" && carried.tolPlus === "0.05",
+    JSON.stringify(carried)
+  );
+  check(
+    "and only the reading is left to type",
+    carried.actual === "",
+    `actual was ${JSON.stringify(carried.actual)}`
+  );
+
+  // Carried forward, not carried over: the verdict is still this piece's own.
+  await page.fill('input[name="readingActual"]', "18.4");
+  await page.waitForTimeout(400);
+  const ownVerdict = await page.textContent("body");
+  check(
+    "the carried tolerance is applied to the new reading, not the old one",
+    ownVerdict.includes("outside tolerance")
+  );
 
   // ── the dashboard reads the tallies ──
   await go("/", "text=Waiting on quality");

@@ -50,7 +50,7 @@ export default function PlanningPage() {
             action={<span className="pill pill-neutral">{lines.length}</span>}
           >
             {lines.length === 0 ? (
-              <Empty>No lines yet. Type or paste a few above, or bring in a sheet.</Empty>
+              <Empty>No lines yet.</Empty>
             ) : (
               <div className="scroll-x">
                 <table className="tbl">
@@ -182,7 +182,7 @@ function Entry({ me, onSaved }: { me: SessionUser; onSaved: () => void }) {
             <BoxIcon /> New lines
           </span>
         }
-        subtitle="Type them, or paste a block straight out of the planning sheet"
+        subtitle="Type or paste from the planning sheet"
       >
         <PasteGrid columns={COLUMNS} rows={rows} onChange={setRows} />
 
@@ -216,7 +216,6 @@ function Entry({ me, onSaved }: { me: SessionUser; onSaved: () => void }) {
         }
       >
         <ImportPanel<PlanningRow>
-          title="Each row becomes a line, and its quantity becomes that many pieces."
           columns={PLANNING_COLUMNS}
           parse={parsePlanning}
           commit={(r) => importPlanning(me)(r)}
