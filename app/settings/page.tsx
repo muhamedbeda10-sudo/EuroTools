@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { api, apiUrl } from "@/lib/api";
+import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { State } from "@/components/ui";
@@ -118,9 +118,7 @@ function DataImport() {
     if (f.name.trim()) body.set("name", f.name.trim());
     if (f.sector.trim()) body.set("sector", f.sector.trim());
     try {
-      const res = await fetch(apiUrl("/api/v1/data/bars/import"), { method: "POST", body });
-      const json = await res.json();
-      if (!res.ok) throw new Error(typeof json.detail === "string" ? json.detail : "Import failed");
+      const json = await (await request("/api/v1/data/bars/import", { method: "POST", body })).json();
       setMsg({ ok: true, text: `${json.symbol}: imported ${json.rows} bars (${json.first_date} → ${json.last_date}). Any sample data for this stock was replaced.` });
       status.reload();
     } catch (e: any) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }

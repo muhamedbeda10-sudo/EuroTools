@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { Fragment, useState } from "react";
-import { apiUrl } from "@/lib/api";
+import { download } from "@/lib/api";
 import { egp, int, num, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import TradeTicket from "@/components/TradeTicket";
@@ -23,7 +23,7 @@ export default function Trades() {
           <h1>Trades &amp; Transactions</h1>
           <p className="sub">Append-only ledger of every simulated buy and sell, with its fees. Entries are never edited or deleted.</p>
         </div>
-        <a className="btn" href={apiUrl("/api/v1/trades/export.csv")}>Export CSV</a>
+        <button onClick={() => download("/api/v1/trades/export.csv", "egx-paper-trades.csv").catch((e) => alert(e.message))}>Export CSV</button>
       </div>
       <State loading={loading} error={error}>
         {t && (

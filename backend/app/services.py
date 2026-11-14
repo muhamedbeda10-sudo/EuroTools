@@ -16,7 +16,7 @@ from .domain.fees import DEFAULT_FEE_SCHEDULE, FeeSchedule, compute_fees
 from .domain.ledger import LedgerError, build_trade, replay
 from .domain.money import ZERO, D, f, money
 from .domain.strategies import StrategyConfig, signals
-from .store.sqlite_store import Store
+from .store.firestore_store import ConflictError
 
 
 class NotFound(LookupError):
@@ -45,36 +45,60 @@ def clean(obj):
 
 
 class App:
-    def __init__(self, store: Store, settings: Settings):
+    """One unit of work for one user. `cache` outlives it (per user, per server instance)."""
+
+    def __init__(self, store, settings: Settings, cache: dict | None = None):
         self.store = store
         self.settings = settings
-        self.market = MarketData(store)
-        self._quotes_version = -1
-        self._quotes: pd.DataFrame | None = None
+        self.cache = cache if cache is not None else {}
+        self._app_settings: dict | None = None
+        self.market: MarketData = None  # set by bootstrap()
 
     # ---- bootstrap -------------------------------------------------------
-    def bootstrap(self) -> None:
-        self.market.seed_instruments()
-        if self.settings.seed_sample_data:
-            self.market.seed_sample_bars(self.settings.sample_history_days)
-        if self.store.get("settings", "fees") is None:
-            self.store.put("settings", "fees", DEFAULT_FEE_SCHEDULE.model_dump(mode="json"))
-        if self.store.get("settings", "app") is None:
-            with self.store.transaction():
-                self.store.put("settings", "app", {
-                    "starting_capital": str(self.settings.initial_capital_egp),
-                    "currency": "EGP",
-                    "benchmark": "EGX30",
-                    "active_portfolio_id": None,
-                })
-                self._new_portfolio(self.settings.initial_capital_egp, reason="initial")
+    def bootstrap(self) -> App:
+        """Read this user's settings (creating them on first use) and attach market data.
+
+        On the deployed app this first read is also the authentication check:
+        the database refuses it unless the caller's sign-in token is valid.
+        """
+        cfg = self.store.get("settings", "app")
+        if cfg is None:
+            try:
+                with self.store.transaction():
+                    self._app_settings = {"starting_capital": str(self.settings.initial_capital_egp), "currency": "EGP",
+                                          "benchmark": "EGX30", "active_portfolio_id": None, "data_version": 0}
+                    self.store.put("settings", "fees", DEFAULT_FEE_SCHEDULE.model_dump(mode="json"))
+                    self._new_portfolio(self.settings.initial_capital_egp, reason="initial")
+            except ConflictError:
+                # A first page load fires several requests at once. The commit is atomic and
+                # its audit entry can only be created once, so exactly one of them sets the
+                # account up; the others land here and read what the winner wrote.
+                pass
+            cfg = self.store.get("settings", "app")
+            if cfg is None:
+                raise RuntimeError("could not initialise this account; reload the page")
+        self._app_settings = cfg
+        self.market = MarketData(self.store, self.cache.setdefault("market", {}),
+                                 data_version=int(self._app_settings.get("data_version", 0)),
+                                 sample=self.settings.seed_sample_data)
+        return self
+
+    def bump_data_version(self) -> None:
+        cfg = self.app_settings()
+        cfg["data_version"] = int(cfg.get("data_version", 0)) + 1
+        self._save_settings(cfg)
+        self.market.data_version = cfg["data_version"]
+
+    def _save_settings(self, cfg: dict) -> None:
+        self.store.put("settings", "app", cfg)
+        self._app_settings = dict(cfg)
 
     def audit(self, action: str, entity: str, detail: dict | None = None) -> None:
         self.store.append("audit", {"ts": now_iso(), "action": action, "entity": entity, "detail": detail or {}})
 
     # ---- settings --------------------------------------------------------
     def app_settings(self) -> dict:
-        return self.store.get("settings", "app")
+        return dict(self._app_settings)
 
     def update_app_settings(self, *, starting_capital: Decimal | None, benchmark: str | None) -> dict:
         with self.store.transaction():
@@ -87,7 +111,7 @@ class App:
                 if ins is None:
                     raise NotFound(f"unknown benchmark {benchmark}")
                 cur["benchmark"] = benchmark
-            self.store.put("settings", "app", cur)
+            self._save_settings(cur)
             self.audit("update", "settings", {"before": before, "after": cur})
             return cur
 
@@ -105,8 +129,10 @@ class App:
     # ---- quotes ----------------------------------------------------------
     def quotes(self) -> pd.DataFrame:
         """Latest quote row per stock, with short-term returns."""
-        if self._quotes is not None and self._quotes_version == self.store.bars_version:
-            return self._quotes
+        self.market._load()
+        mcache = self.market.cache
+        if "quotes" in mcache:
+            return mcache["quotes"]
         rows = []
         for insx in self.market.instruments(include_indices=True):
             df = self.market.bars(insx["symbol"])
@@ -129,9 +155,8 @@ class App:
                 "source": self.market.source(insx["symbol"]),
                 "spark": [round(float(v), 2) for v in close.tail(30)],
             })
-        self._quotes = pd.DataFrame(rows)
-        self._quotes_version = self.store.bars_version
-        return self._quotes
+        mcache["quotes"] = pd.DataFrame(rows)
+        return mcache["quotes"]
 
     def _records(self, df: pd.DataFrame) -> list[dict]:
         return clean(df.astype(object).where(df.notna(), None).to_dict("records"))
@@ -278,11 +303,11 @@ class App:
             raise LedgerError("starting capital must be positive")
         doc = {"id": pid, "created_at": now_iso(), "starting_capital": str(capital), "mode": "paper"}
         self.store.put("portfolios", pid, doc)
-        self.store.append(f"ledger:{pid}", {"type": "DEPOSIT", "amount": str(capital), "ts": now_iso(),
+        self.store.append(f"ledger_{pid}", {"type": "DEPOSIT", "amount": str(capital), "ts": now_iso(),
                                              "trade_date": None, "note": "Starting paper capital"})
         cfg = self.app_settings()
         cfg["active_portfolio_id"] = pid
-        self.store.put("settings", "app", cfg)
+        self._save_settings(cfg)
         self.audit("create", "portfolio", {**doc, "reason": reason})
         return doc
 
@@ -292,7 +317,7 @@ class App:
             return self._new_portfolio(D(self.app_settings()["starting_capital"]), reason="reset")
 
     def _ledger_coll(self) -> str:
-        return f"ledger:{self.app_settings()['active_portfolio_id']}"
+        return f"ledger_{self.app_settings()['active_portfolio_id']}"
 
     def _price_on(self, symbol: str, trade_date: str | None) -> tuple[Decimal, str]:
         df = self.market.bars(symbol)

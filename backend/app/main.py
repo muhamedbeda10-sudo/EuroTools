@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import csv
 import io
-from contextlib import asynccontextmanager
+from collections import OrderedDict
 from datetime import date
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -20,6 +20,7 @@ from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
 from .services import App, NotFound
+from .store.firestore_store import AuthError, ConflictError, FirestoreStore, uid_from_token
 from .store.sqlite_store import Store
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
@@ -53,22 +54,52 @@ class BacktestIn(BaseModel):
     capital: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
 
 
+MAX_CACHED_USERS = 20
+
+
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
     settings = settings or get_settings()
-    core = App(store or Store(settings.data_dir / "egx.sqlite3"), settings)
+    firestore = settings.store_backend == "firestore"
+    if firestore and not settings.firebase_project_id:
+        raise RuntimeError("FIREBASE_PROJECT_ID is required when STORE_BACKEND=firestore")
+    local_store = None if firestore else (store or Store(settings.data_dir / "egx.sqlite3"))
+    caches: OrderedDict[str, dict] = OrderedDict()
 
-    @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    def get_core(request: Request) -> App:
+        """Build the per-request application object for the signed-in user."""
+        if not firestore:
+            return App(local_store, settings, caches.setdefault("local", {})).bootstrap()
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            raise AuthError("sign in to use the app")
+        token = header[7:].strip()
+        uid = uid_from_token(token)
+        # bootstrap() reads the user's settings first; Firestore rejects that read
+        # unless the token is genuine, so the cache below is never reached by a forgery.
+        core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {})
         core.bootstrap()
-        yield
+        core.cache = caches.setdefault(uid, {})
+        core.market.cache = core.cache.setdefault("market", {})
+        caches.move_to_end(uid)
+        while len(caches) > MAX_CACHED_USERS:
+            caches.popitem(last=False)
+        return core
 
-    api = FastAPI(title="EGX Intelligence API", version="0.1.0", lifespan=lifespan)
-    api.state.core = core
+    api = FastAPI(title="EGX Intelligence API", version="0.2.0",
+                  docs_url=None if firestore else "/docs", redoc_url=None, openapi_url=None if firestore else "/openapi.json")
     api.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-        allow_methods=["*"], allow_headers=["*"],
+        allow_methods=["*"], allow_headers=["*"], expose_headers=["Content-Disposition"],
     )
+
+    @api.exception_handler(AuthError)
+    async def _auth(_: Request, exc: AuthError):
+        return JSONResponse({"detail": str(exc)}, status_code=401)
+
+    @api.exception_handler(ConflictError)
+    async def _conflict(_: Request, exc: ConflictError):
+        return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @api.exception_handler(NotFound)
     async def _not_found(_: Request, exc: NotFound):
@@ -89,63 +120,64 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         return {"status": "ok", "environment": settings.app_env}
 
     @api.get("/api/v1/status")
-    def status():
+    def status(core: App = Depends(get_core)):
         return {
             "trading_mode": "paper",
             "live_trading_enabled": False,
             "broker_connected": False,
             "broker_note": "Younit is not connected. This release cannot send orders to any broker.",
             "data": core.market.status(),
+            "storage": settings.store_backend,
             "fees_verified": core.fee_schedule().verified,
         }
 
     # ---- market ----------------------------------------------------------
     @api.get("/api/v1/market/overview")
-    def market_overview():
+    def market_overview(core: App = Depends(get_core)):
         return core.market_overview()
 
     @api.get("/api/v1/market/sectors")
-    def market_sectors():
+    def market_sectors(core: App = Depends(get_core)):
         return core.sectors()
 
     @api.get("/api/v1/stocks")
-    def stocks(sector: str | None = None, q: str | None = Query(default=None, max_length=60),
+    def stocks(core: App = Depends(get_core), *, sector: str | None = None, q: str | None = Query(default=None, max_length=60),
                category: str | None = None):
         return core.stock_rows(sector, q, category)
 
     @api.get("/api/v1/stocks/{symbol}")
-    def stock(symbol: str, timeframe: Literal["d", "w", "m"] = "d"):
+    def stock(core: App = Depends(get_core), *, symbol: str, timeframe: Literal["d", "w", "m"] = "d"):
         return core.stock_detail(symbol, timeframe)
 
     # ---- watchlist & categories -----------------------------------------
     @api.get("/api/v1/watchlist")
-    def watchlist():
+    def watchlist(core: App = Depends(get_core)):
         return core.watchlist()
 
     @api.put("/api/v1/watchlist/{symbol}")
-    def watch(symbol: str):
+    def watch(core: App = Depends(get_core), *, symbol: str):
         core.set_watch(symbol, True)
         return {"symbol": symbol.upper(), "watched": True}
 
     @api.delete("/api/v1/watchlist/{symbol}")
-    def unwatch(symbol: str):
+    def unwatch(core: App = Depends(get_core), *, symbol: str):
         core.set_watch(symbol, False)
         return {"symbol": symbol.upper(), "watched": False}
 
     @api.get("/api/v1/categories")
-    def categories():
+    def categories(core: App = Depends(get_core)):
         return core.store.list("categories")
 
     @api.post("/api/v1/categories", status_code=201)
-    def create_category(body: CategoryIn):
+    def create_category(core: App = Depends(get_core), *, body: CategoryIn):
         return core.save_category(body.name, body.symbols)
 
     @api.put("/api/v1/categories/{id}")
-    def update_category(id: str, body: CategoryIn):
+    def update_category(core: App = Depends(get_core), *, id: str, body: CategoryIn):
         return core.save_category(body.name, body.symbols, id)
 
     @api.delete("/api/v1/categories/{id}")
-    def delete_category(id: str):
+    def delete_category(core: App = Depends(get_core), *, id: str):
         if not core.store.delete("categories", id):
             raise HTTPException(404, "category not found")
         core.audit("delete", "category", {"id": id})
@@ -153,27 +185,27 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     # ---- portfolio & trades ---------------------------------------------
     @api.get("/api/v1/portfolio")
-    def portfolio():
+    def portfolio(core: App = Depends(get_core)):
         return core.portfolio()
 
     @api.post("/api/v1/portfolio/reset")
-    def reset_portfolio():
+    def reset_portfolio(core: App = Depends(get_core)):
         return core.reset_portfolio()
 
     @api.get("/api/v1/trades")
-    def trades():
+    def trades(core: App = Depends(get_core)):
         return core.trades()
 
     @api.post("/api/v1/trades/preview")
-    def preview_trade(body: TradeIn):
+    def preview_trade(core: App = Depends(get_core), *, body: TradeIn):
         return core.preview_trade(body.side, body.symbol, body.qty, iso(body.trade_date))
 
     @api.post("/api/v1/trades", status_code=201)
-    def post_trade(body: TradeIn):
+    def post_trade(core: App = Depends(get_core), *, body: TradeIn):
         return core.post_trade(body.side, body.symbol, body.qty, iso(body.trade_date), body.note, body.client_order_id)
 
     @api.get("/api/v1/trades/export.csv")
-    def export_trades():
+    def export_trades(core: App = Depends(get_core)):
         buf = io.StringIO()
         cols = ["seq", "ts", "trade_date", "type", "symbol", "qty", "price", "gross", "fees_total", "cash_delta",
                 "cash_after", "avg_cost", "realized_gross", "buy_fees_allocated", "realized_net", "price_source", "note"]
@@ -186,49 +218,49 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     # ---- settings --------------------------------------------------------
     @api.get("/api/v1/settings")
-    def get_app_settings():
+    def get_app_settings(core: App = Depends(get_core)):
         return core.app_settings()
 
     @api.put("/api/v1/settings")
-    def put_app_settings(body: AppSettingsIn):
+    def put_app_settings(core: App = Depends(get_core), *, body: AppSettingsIn):
         return core.update_app_settings(starting_capital=body.starting_capital, benchmark=body.benchmark)
 
     @api.get("/api/v1/settings/fees")
-    def get_fees():
+    def get_fees(core: App = Depends(get_core)):
         return core.fee_schedule()
 
     @api.put("/api/v1/settings/fees")
-    def put_fees(body: FeeSchedule):
+    def put_fees(core: App = Depends(get_core), *, body: FeeSchedule):
         return core.update_fee_schedule(body)
 
     # ---- strategies & backtests -----------------------------------------
     @api.get("/api/v1/strategy-types")
-    def strategy_types():
+    def strategy_types(core: App = Depends(get_core)):
         return STRATEGY_TYPES
 
     @api.get("/api/v1/strategies")
-    def strategies():
+    def strategies(core: App = Depends(get_core)):
         return core.store.list("strategies")
 
     @api.post("/api/v1/strategies", status_code=201)
-    def create_strategy(body: StrategyConfig):
+    def create_strategy(core: App = Depends(get_core), *, body: StrategyConfig):
         return core.save_strategy(body)
 
     @api.put("/api/v1/strategies/{id}")
-    def update_strategy(id: str, body: StrategyConfig):
+    def update_strategy(core: App = Depends(get_core), *, id: str, body: StrategyConfig):
         return core.save_strategy(body, id)
 
     @api.delete("/api/v1/strategies/{id}")
-    def delete_strategy(id: str):
+    def delete_strategy(core: App = Depends(get_core), *, id: str):
         core.delete_strategy(id)
         return {"deleted": id}
 
     @api.get("/api/v1/signals")
-    def active_signals():
+    def active_signals(core: App = Depends(get_core)):
         return core.active_signals()
 
     @api.post("/api/v1/backtests", status_code=201)
-    def run_backtest(body: BacktestIn):
+    def run_backtest(core: App = Depends(get_core), *, body: BacktestIn):
         if body.strategy is not None:
             cfg = body.strategy
         elif body.strategy_id:
@@ -242,11 +274,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                              start=iso(body.start), end=iso(body.end), capital=body.capital)
 
     @api.get("/api/v1/backtests")
-    def list_backtests():
+    def list_backtests(core: App = Depends(get_core)):
         return core.backtests()
 
     @api.get("/api/v1/backtests/{id}")
-    def get_backtest(id: str):
+    def get_backtest(core: App = Depends(get_core), *, id: str):
         doc = core.store.get("backtests", id)
         if doc is None:
             raise HTTPException(404, "backtest not found")
@@ -254,7 +286,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     # ---- data import & audit --------------------------------------------
     @api.post("/api/v1/data/bars/import")
-    async def import_bars(symbol: str = Form(max_length=12), file: UploadFile = File(),
+    async def import_bars(core: App = Depends(get_core), *, symbol: str = Form(max_length=12), file: UploadFile = File(),
                           name: str | None = Form(default=None, max_length=120),
                           sector: str | None = Form(default=None, max_length=80)):
         raw = await file.read(MAX_CSV_BYTES + 1)
@@ -264,13 +296,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             raise HTTPException(422, "file must be UTF-8 text") from None
-        result = core.market.import_csv(symbol, text, name=name, sector=sector)
-        core.audit("import", "bars", {**result, "filename": file.filename})
+        with core.store.transaction():
+            result = core.market.import_csv(symbol, text, name=name, sector=sector)
+            core.bump_data_version()
+            core.audit("import", "bars", {**result, "filename": file.filename})
         return result
 
     @api.get("/api/v1/audit")
-    def audit(limit: int = Query(default=100, ge=1, le=1000)):
-        return core.store.list("audit")[::-1][:limit]
+    def audit(core: App = Depends(get_core), *, limit: int = Query(default=100, ge=1, le=1000)):
+        return core.store.recent("audit", limit)
 
     return api
 

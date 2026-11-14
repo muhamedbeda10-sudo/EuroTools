@@ -1,0 +1,316 @@
+rules_version = '2';
+
+/** The whole security boundary.
+ *
+ *  This application is static files talking to Firestore from the browser.
+ *  There is no server left to check anything, so what this file allows is
+ *  exactly what anybody with the page open can do — including somebody who has
+ *  edited the JavaScript. Every check in `lib/client/actions.ts` is a courtesy
+ *  to the operator; every check here is the control.
+ *
+ *  ## What it enforces
+ *
+ *   - who may read: anybody with an account that is still active;
+ *   - who may write what, from the role on their own user document, re-read on
+ *     every single operation — so deactivating an account stops it on the next
+ *     click rather than when a token expires;
+ *   - that a signature is the caller's own;
+ *   - that a signed record is never edited or deleted, by anyone;
+ *   - that letting through a piece the measurements hold takes a concession,
+ *     and that not every role may grant one;
+ *   - that a piece already measured cannot be deleted with its planning line.
+ *
+ *  ## What it cannot enforce, and what catches it instead
+ *
+ *  It cannot recompute a verdict from the readings. `suggested` is written by
+ *  the client, so a doctored bundle could store a sheet whose verdict does not
+ *  follow from its own measurements. Nothing here can tell. What catches it is
+ *  that the stored readings are kept alongside the verdict: the same pure
+ *  function that suggested it can be run over the record afterwards, and a
+ *  record where the two disagree without a concession was not written by this
+ *  application. A test below pins that gap so it is a known one.
+ *
+ *  ## Keeping this in step with the code
+ *
+ *  The role sets below duplicate `lib/domain/roles.ts`. Rules cannot import,
+ *  so widening a role means editing both — which is the point: it has to be
+ *  deliberate twice.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function account() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function accountPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    /** Signed in to Firebase, provisioned here, and not deactivated. */
+    function signedIn() {
+      return request.auth != null
+        && exists(accountPath())
+        && account().active == true;
+    }
+
+    /** What a role carries, before anything is said about the person holding
+     *  it. These sets mirror `MATRIX` in `lib/domain/roles.ts`. Rules cannot
+     *  import, so widening a role means editing both — which is the point: it
+     *  has to be deliberate twice. */
+    function roleHas(role, permission) {
+      return (role == 'ADMIN'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record', 'config.manage', 'user.manage'])
+          || (role == 'QUALITY_MANAGER'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record', 'config.manage'])
+          || (role == 'SUPERVISOR'
+              && permission in ['planning.manage', 'inspection.record', 'verdict.bypass',
+                                'rework.record'])
+          || (role == 'INSPECTOR'
+              && permission in ['inspection.record', 'rework.record']);
+    }
+
+    /** What this account may actually do.
+     *
+     *  A role is the baseline; two lists on the account move it. `granted`
+     *  adds, `denied` takes away, and a denial wins — so taking access away
+     *  from one person is never ambiguous. The same three lines are in
+     *  `allows()` in `lib/domain/roles.ts`, which is what the interface asks
+     *  before it draws a button. This is what decides.
+     */
+    function grants(permission) {
+      return signedIn()
+        && !(permission in account().get('denied', []))
+        && (permission in account().get('granted', [])
+            || roleHas(account().role, permission));
+    }
+
+    function canRead() {
+      return signedIn();
+    }
+
+    function canPlan() {
+      return grants('planning.manage');
+    }
+
+    function canRecord() {
+      return grants('inspection.record');
+    }
+
+    function canBypass() {
+      return grants('verdict.bypass');
+    }
+
+    function canConfig() {
+      return grants('config.manage');
+    }
+
+    function canManageUsers() {
+      return grants('user.manage');
+    }
+
+    /** The keys an update actually changes. */
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // ───────────────────────── accounts ─────────────────────────
+
+    match /users/{uid} {
+      allow read: if canRead();
+
+      // Whoever may manage accounts may create and change them — except their
+      // own. Nobody edits their own account, which stops the likeliest way to
+      // strand a plant outside its own quality system, and stops somebody
+      // granting themselves a permission they were not given.
+      allow create, update: if canManageUsers() && uid != request.auth.uid;
+
+      // An inspector's own signature count goes up when they sign a sheet.
+      // Nothing else about their account may move with it.
+      allow update: if canRecord()
+        && uid == request.auth.uid
+        && changed().hasOnly(['signedInspections']);
+
+      // Retiring an account is deactivation. Deleting one would orphan every
+      // sheet it signed, and a Firestore reference cannot refuse the way a
+      // foreign key did — so the delete is refused here instead.
+      allow delete: if false;
+    }
+
+    match /userAuditEvents/{eventId} {
+      allow read: if canManageUsers();
+      allow create: if canManageUsers();
+      allow update, delete: if false;
+    }
+
+    // ───────────────────────── planning ─────────────────────────
+
+    match /planningLines/{lineId} {
+      allow read: if canRead();
+      allow create: if canPlan();
+
+      // Planning owns the line. An inspector may move its counters — that is
+      // what happens when a piece they measured changes hands — and nothing
+      // else: not the quantity, not the item, not the project.
+      allow update: if canPlan()
+        || (canRecord() && changed().hasOnly(['counts']));
+
+      // Cancelling a line is only for one nobody has measured yet. A line with
+      // sheets against it is a record; deleting it would leave signed
+      // inspections describing pieces that no longer exist.
+      allow delete: if canPlan();
+    }
+
+    match /pieces/{pieceId} {
+      allow read: if canRead();
+      allow create: if canPlan();
+
+      // A piece moves when it is measured or when a rework is closed out. The
+      // fields that say where it is may change; the ones that say what it is
+      // may not.
+      //
+      // Planning may correct the description it wrote — a misspelled item
+      // name, a priority that changed, the wrong measuring type — because
+      // those are copied onto the piece from the line and have to stay in step
+      // with it. What planning may not touch is where the piece stands: a line
+      // edit must never move a piece out of a hold or reset a round.
+      //
+      // Neither may touch what the piece *is*. `project`, `itemCode`, `serial`,
+      // `pieceNo` and `lineId` appear in no list here, so no caller can change
+      // them: every signed sheet carries a copy of them, and a piece whose
+      // serial moved is a piece its own inspection records no longer describe.
+      allow update: if (canRecord()
+          && changed().hasOnly([
+            'stage', 'state', 'holdDepartment', 'round', 'measuredTimes',
+            'lastVerdict', 'lastInspectedAt', 'qcSince', 'qcSettledMs', 'updatedAt'
+          ]))
+        || (canPlan()
+          && changed().hasOnly([
+            'itemName', 'measuringType', 'priority', 'updatedAt'
+          ]));
+
+      // The same rule the cancel path checks in the application, enforced
+      // where it cannot be edited out: a piece that has been measured stays.
+      allow delete: if canPlan() && resource.data.measuredTimes == 0;
+    }
+
+    // ───────────────────────── inspection sheets ─────────────────────────
+
+    match /inspections/{inspectionId} {
+      allow read: if canRead();
+
+      allow create: if canRecord()
+        // The signature is the caller's own. This is the guarantee that
+        // mattered most on a server and it survives intact here.
+        && request.resource.data.inspectorUid == request.auth.uid
+        // Letting through a piece the measurements hold is a concession, and
+        // not every role may grant one. Holding a piece the measurements would
+        // have passed needs nothing: stopping product is always allowed.
+        && (
+          request.resource.data.verdict == 'HOLD'
+          || (request.resource.data.suggested == 'ACCEPTED'
+              && request.resource.data.verdict == 'ACCEPTED')
+          || canBypass()
+        )
+        // A concession has to say why, and the sheet has to admit it is one.
+        && (request.resource.data.verdict != 'ACCEPTED_BYPASS'
+            || (request.resource.data.bypassReason is string
+                && request.resource.data.bypassReason.size() > 0));
+
+      // A signed sheet is a record, not a draft. Nobody edits or removes one —
+      // not even an administrator — so the trail cannot be rewritten.
+      allow update, delete: if false;
+
+      // ── defect photographs ──────────────────────────────────────────
+      // Evidence for a verdict somebody put their name to: yours to add,
+      // nobody's to change. Held well under Firestore's one-megabyte document
+      // limit, because a document refused on arrival would take the sheet
+      // written alongside it down too.
+
+      match /photos/{photoId} {
+        allow read: if canRead();
+        allow create: if canRecord()
+          && request.resource.data.capturedByUid == request.auth.uid
+          && request.resource.data.thumb is string
+          && request.resource.data.thumb.size() < 60000;
+        allow update, delete: if false;
+      }
+
+      match /photoData/{photoId} {
+        allow read: if canRead();
+        allow create: if canRecord()
+          && request.resource.data.data is string
+          && request.resource.data.data.size() < 900000;
+        allow update, delete: if false;
+      }
+    }
+
+    // ───────────────────────── rework ─────────────────────────
+
+    match /reworks/{reworkId} {
+      allow read: if canRead();
+      allow create: if canRecord();
+
+      // Closing one out records that a department reported back. Who held the
+      // piece, and when, is part of the record and does not move.
+      allow update: if canRecord()
+        && changed().hasOnly(['completedAt', 'recordedByUid', 'recordedByName', 'note'])
+        && request.resource.data.recordedByUid == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // ───────────────────────── configuration ─────────────────────────
+
+    // What a piece has to be. An inspector who could widen a tolerance could
+    // pass anything, so this is the other place the authority line falls.
+    match /itemConfigs/{itemId} {
+      allow read: if canRead();
+      allow write: if canConfig();
+    }
+
+    match /config/{settingId} {
+      allow read: if canRead();
+      allow write: if canConfig();
+    }
+
+    // ───────────────────────── tallies ─────────────────────────
+
+    match /stats/{statId} {
+      allow read: if canRead();
+      // Counters a report reads. They decide nothing — the answers they count
+      // are on the sheets themselves — which is why a looser rule is
+      // acceptable here and nowhere else.
+      allow create, update: if canRecord();
+      allow delete: if false;
+    }
+
+    // Anything not named above is denied.
+    // ── EGX Intelligence ─────────────────────────────────────────────────────
+    // Each account owns one private tree, `egx/{uid}/...`, and nobody else can
+    // read or write it. The API server holds no credentials of its own: it
+    // forwards the caller's sign-in token, so these rules are what authorise
+    // every one of its reads and writes too.
+    //
+    // The trade ledger and the audit trail are append-only here, not just in
+    // the application: an entry can be created once and never changed or
+    // removed, by anyone, including the account that owns it.
+    match /egx/{uid}/{coll}/{docId} {
+      function owner() {
+        return signedIn() && request.auth.uid == uid;
+      }
+      function appendOnly() {
+        return coll == 'audit' || coll.matches('ledger_.*');
+      }
+      allow read: if owner();
+      allow create: if owner();
+      allow update, delete: if owner() && !appendOnly();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

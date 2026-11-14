@@ -1,0 +1,30 @@
+{
+  "name": "egx-intelligence-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run --exclude 'tests/**'",
+    "test:rules": "vitest run tests/rules.test.ts",
+    "emulators": "firebase emulators:start --only firestore,auth",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "dependencies": {
+    "lightweight-charts": "4.2.3",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "firebase": "^12.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase-tools": "^15.30.0",
+    "vitest": "^4.1.10"
+  }
+}

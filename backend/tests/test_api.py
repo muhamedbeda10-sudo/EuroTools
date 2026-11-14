@@ -10,7 +10,7 @@ from app.store.sqlite_store import Store
 
 @pytest.fixture()
 def client(tmp_path):
-    settings = Settings(data_dir=tmp_path, sample_history_days=300)
+    settings = Settings(data_dir=tmp_path)
     with TestClient(create_app(settings, Store(tmp_path / "t.sqlite3"))) as c:
         yield c
 

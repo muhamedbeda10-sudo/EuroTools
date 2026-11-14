@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     data_dir: Path = Path(__file__).resolve().parent.parent / "var"
     initial_capital_egp: Decimal = Decimal("50000")
     seed_sample_data: bool = True
-    sample_history_days: int = 520
+    # "sqlite" for local runs and tests; "firestore" when deployed (per-user data,
+    # authenticated with the caller's own Firebase sign-in token).
+    store_backend: str = "sqlite"
+    firebase_project_id: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Live brokerage execution is a separate, future module. It is not implemented
     # and this flag exists only so the UI can state the fact explicitly.

@@ -2,6 +2,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
+import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { useApi } from "@/lib/useApi";
 
 const NAV = [
@@ -20,7 +22,62 @@ export const useTheme = () => useContext(ThemeCtx);
 
 const systemTheme = () => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
+function SignIn() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await signInWithEmailAndPassword(clientAuth(), email.trim(), password);
+    } catch (err: any) {
+      const code = String(err?.code || "");
+      setError(
+        code.includes("network") ? "Cannot reach the sign-in service. Check your connection."
+          : code.includes("too-many-requests") ? "Too many attempts. Wait a few minutes and try again."
+          : "Wrong email or password.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main style={{ maxWidth: 380, margin: "12vh auto", padding: "0 16px" }}>
+      <form className="card" onSubmit={submit}>
+        <h1>EGX Intelligence</h1>
+        <p className="sub" style={{ marginBottom: 16 }}>Sign in with your account to continue.</p>
+        <div className="field"><label htmlFor="si-email">Email</label>
+          <input id="si-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+        <div className="field"><label htmlFor="si-pass">Password</label>
+          <input id="si-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+        {error && <div className="note danger" role="alert">{error}</div>}
+        <button className="primary" type="submit" disabled={busy} style={{ width: "100%" }}>{busy ? "Signing in…" : "Sign in"}</button>
+        <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>Paper trading only. Accounts are created by the administrator.</p>
+      </form>
+    </main>
+  );
+}
+
+/** Nothing below this renders, and no request is made, until somebody is signed in. */
 export default function Shell({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null | undefined>(firebaseConfigured ? undefined : null);
+  useEffect(() => {
+    // Retire the previous application's service worker if this browser still has it.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => undefined);
+    }
+    if (!firebaseConfigured) return;
+    return onAuthStateChanged(clientAuth(), setUser);
+  }, []);
+  if (firebaseConfigured && user === undefined) return <div className="empty" style={{ padding: 24 }}>Loading…</div>;
+  if (firebaseConfigured && !user) return <SignIn />;
+  return <Frame email={user?.email ?? null}>{children}</Frame>;
+}
+
+function Frame({ children, email }: { children: React.ReactNode; email: string | null }) {
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
@@ -73,6 +130,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             <button onClick={toggle} aria-label="Toggle light or dark theme">
               {theme === "dark" ? "Light" : "Dark"} theme
             </button>
+            {email && (
+              <button onClick={() => signOut(clientAuth())} title={email} aria-label={`Sign out ${email}`}>Sign out</button>
+            )}
           </div>
           {error && <div className="banner danger" role="alert">{error}</div>}
           {d?.has_sample_data && (

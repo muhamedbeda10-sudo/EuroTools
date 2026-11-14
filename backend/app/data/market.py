@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..store.sqlite_store import Store
 from . import sample
 from .calendar import trading_days_between
 
@@ -20,69 +19,84 @@ class DataError(ValueError):
     pass
 
 
+MAX_CSV_ROWS = 6000
+
+
+def seed_instruments() -> list[dict]:
+    with open(SEED_FILE, newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+_SEED = seed_instruments()
+
+
 class MarketData:
-    def __init__(self, store: Store):
+    """Price history = imported CSV bars, with deterministic sample bars filling the gaps.
+
+    `cache` is a plain dict owned by the caller (one per user); it survives
+    between requests on a warm server instance and is invalidated by
+    `data_version`, which is bumped on every import, and by the calendar day.
+    """
+
+    def __init__(self, store, cache: dict, *, data_version: int, sample: bool, today: date | None = None):
         self.store = store
-        self._cache_version = -1
-        self._frames: dict[str, pd.DataFrame] = {}
-        self._sources: dict[str, str] = {}
-
-    # ---- bootstrap -------------------------------------------------------
-    def seed_instruments(self) -> None:
-        if self.store.list("instruments"):
-            return
-        with open(SEED_FILE, newline="", encoding="utf-8") as fh, self.store.transaction():
-            for row in csv.DictReader(fh):
-                self.store.put("instruments", row["symbol"], row)
-
-    def seed_sample_bars(self, days: int, today: date | None = None) -> None:
-        if self.store.bar_sources():
-            return
-        data = sample.generate(self.instruments(include_indices=True), today or date.today(), days)
-        with self.store.transaction():
-            for symbol, rows in data.items():
-                self.store.replace_bars(symbol, rows, "sample")
+        self.cache = cache
+        self.data_version = data_version
+        self.sample = sample
+        self.today = today or date.today()
 
     # ---- instruments -----------------------------------------------------
     def instruments(self, include_indices: bool = False) -> list[dict]:
-        items = self.store.list("instruments")
+        self._load()
+        items = self.cache["instruments"]
         return items if include_indices else [i for i in items if i["type"] == "stock"]
 
     def instrument(self, symbol: str) -> dict | None:
-        return self.store.get("instruments", symbol)
+        self._load()
+        return self.cache["by_symbol"].get(symbol)
 
     # ---- bars ------------------------------------------------------------
     def _load(self) -> None:
-        if self._cache_version == self.store.bars_version:
+        key = (self.data_version, self.today.isoformat(), self.sample)
+        if self.cache.get("key") == key:
             return
-        rows = self.store.all_bars()
+        custom = self.store.list("instruments")
+        seeded = {i["symbol"] for i in _SEED}
+        instruments = sorted(_SEED + [c for c in custom if c["symbol"] not in seeded], key=lambda i: i["symbol"])
         frames: dict[str, pd.DataFrame] = {}
         sources: dict[str, str] = {}
-        if rows:
-            df = pd.DataFrame([tuple(r) for r in rows],
-                              columns=["symbol", "date", "open", "high", "low", "close", "volume", "source"])
+
+        def frame(rows) -> pd.DataFrame:
+            df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
             df["date"] = pd.to_datetime(df["date"])
-            for symbol, g in df.groupby("symbol", sort=False):
-                sources[symbol] = g["source"].iloc[0]
-                frames[symbol] = g.drop(columns=["symbol", "source"]).set_index("date").sort_index()
-        self._frames, self._sources = frames, sources
-        self._cache_version = self.store.bars_version
+            return df.set_index("date").sort_index()
+
+        imported = {d["symbol"]: d["rows"] for d in self.store.list("bars")}
+        if self.sample:
+            for symbol, rows in sample.generate([i for i in instruments if i["symbol"] not in imported], self.today).items():
+                frames[symbol], sources[symbol] = frame(rows), "sample"
+        for symbol, rows in imported.items():
+            frames[symbol], sources[symbol] = frame(rows), "csv"
+        self.cache.clear()
+        self.cache.update(key=key, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
+                          frames=frames, sources=sources)
 
     def bars(self, symbol: str) -> pd.DataFrame | None:
         self._load()
-        return self._frames.get(symbol)
+        return self.cache["frames"].get(symbol)
 
     def source(self, symbol: str) -> str | None:
         self._load()
-        return self._sources.get(symbol)
+        return self.cache["sources"].get(symbol)
 
     def closes(self, symbols: list[str]) -> pd.DataFrame:
         self._load()
-        return pd.DataFrame({s: self._frames[s]["close"] for s in symbols if s in self._frames})
+        frames = self.cache["frames"]
+        return pd.DataFrame({s: frames[s]["close"] for s in symbols if s in frames})
 
     def latest_date(self) -> date | None:
         self._load()
-        dates = [f.index[-1] for f in self._frames.values() if len(f)]
+        dates = [f.index[-1] for f in self.cache["frames"].values() if len(f)]
         return max(dates).date() if dates else None
 
     # ---- import ----------------------------------------------------------
@@ -113,31 +127,34 @@ class MarketData:
                 raise DataError(f"line {n}: prices must be positive and volume non-negative")
             if h < max(o, c) or low > min(o, c):
                 raise DataError(f"line {n}: high/low inconsistent with open/close")
-            if d > date.today():
+            if d > self.today:
                 raise DataError(f"line {n}: date {d} is in the future")
             seen[d.isoformat()] = (d.isoformat(), o, h, low, c, v)
         if len(seen) < 2:
             raise DataError("need at least 2 rows of data")
-        rows = [seen[k] for k in sorted(seen)]
+        if len(seen) > MAX_CSV_ROWS:
+            raise DataError(f"too many rows ({len(seen)}); the limit is {MAX_CSV_ROWS} daily bars per stock")
+        rows = [list(seen[k]) for k in sorted(seen)]
         with self.store.transaction():
             if ins is None:
                 self.store.put("instruments", symbol,
                                {"symbol": symbol, "name": name.strip(), "sector": sector.strip(), "type": "stock"})
-            self.store.replace_bars(symbol, rows, "csv")
+            self.store.put("bars", symbol, {"symbol": symbol, "rows": rows})
         return {"symbol": symbol, "rows": len(rows), "first_date": rows[0][0], "last_date": rows[-1][0]}
 
     # ---- data quality ----------------------------------------------------
-    def status(self, today: date | None = None) -> dict:
-        today = today or date.today()
-        sources = [dict(r) for r in self.store.bar_sources()]
-        latest = self.latest_date()
-        age = trading_days_between(latest, today) if latest else None
-        names = {s["source"] for s in sources}
+    def status(self) -> dict:
         self._load()
-        stale_symbols = sorted(
-            s for s, f in self._frames.items() if latest and f.index[-1].date() < latest
-        )
-        missing = sorted(i["symbol"] for i in self.instruments(include_indices=True) if i["symbol"] not in self._frames)
+        frames, src = self.cache["frames"], self.cache["sources"]
+        sources = []
+        for name in sorted(set(src.values())):
+            fs = [frames[s] for s in frames if src[s] == name]
+            sources.append({"source": name, "symbols": len(fs), "bars": int(sum(len(f) for f in fs)),
+                            "first_date": min(f.index[0] for f in fs).strftime("%Y-%m-%d"),
+                            "last_date": max(f.index[-1] for f in fs).strftime("%Y-%m-%d")})
+        latest = self.latest_date()
+        age = trading_days_between(latest, self.today) if latest else None
+        names = set(src.values())
         return {
             "sources": sources,
             "mode": "none" if not names else "sample" if names == {"sample"} else "mixed" if "sample" in names else "imported",
@@ -146,8 +163,8 @@ class MarketData:
             "trading_days_behind": age,
             "is_stale": bool(age is not None and age > STALE_AFTER_TRADING_DAYS),
             "is_live": False,
-            "symbols_behind_latest": stale_symbols,
-            "symbols_without_data": missing,
+            "symbols_behind_latest": sorted(s for s, f in frames.items() if latest and f.index[-1].date() < latest),
+            "symbols_without_data": sorted(i["symbol"] for i in self.cache["instruments"] if i["symbol"] not in frames),
         }
 
 
