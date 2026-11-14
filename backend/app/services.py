@@ -16,7 +16,7 @@ from .domain.fees import DEFAULT_FEE_SCHEDULE, FeeSchedule, compute_fees
 from .domain.ledger import LedgerError, build_trade, replay
 from .domain.money import ZERO, D, f, money
 from .domain.strategies import StrategyConfig, signals
-from .store.firestore_store import ConflictError
+from .store.errors import ConflictError
 
 
 class NotFound(LookupError):
@@ -67,11 +67,12 @@ class App:
                 with self.store.transaction():
                     self._app_settings = {"starting_capital": str(self.settings.initial_capital_egp), "currency": "EGP",
                                           "benchmark": "EGX30", "active_portfolio_id": None, "data_version": 0}
-                    self.store.put("settings", "fees", DEFAULT_FEE_SCHEDULE.model_dump(mode="json"))
+                    # `create` is the guard: it can succeed for one request only.
+                    self.store.create("settings", "fees", DEFAULT_FEE_SCHEDULE.model_dump(mode="json"))
                     self._new_portfolio(self.settings.initial_capital_egp, reason="initial")
             except ConflictError:
                 # A first page load fires several requests at once. The commit is atomic and
-                # its audit entry can only be created once, so exactly one of them sets the
+                # the fee schedule can only be created once, so exactly one of them sets the
                 # account up; the others land here and read what the winner wrote.
                 pass
             cfg = self.store.get("settings", "app")

@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .errors import ConflictError
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
     coll TEXT NOT NULL,
@@ -74,6 +76,13 @@ class Store:
                 "ON CONFLICT(coll, id) DO UPDATE SET body=excluded.body",
                 (coll, id, json.dumps(doc)),
             )
+
+    def create(self, coll: str, id: str, doc: dict[str, Any]) -> None:
+        """Write a document that must not exist yet."""
+        with self.transaction():
+            if self.get(coll, id) is not None:
+                raise ConflictError(f"{coll}/{id} already exists")
+            self.put(coll, id, doc)
 
     def delete(self, coll: str, id: str) -> bool:
         with self.transaction():

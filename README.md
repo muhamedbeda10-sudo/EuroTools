@@ -21,11 +21,28 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Settings | Fee schedule, starting capital, CSV data import, audit trail |
 
 Not built yet: live-data paper trading, Younit integration, fundamentals, research/news,
-journal, alerts, AI analysis, corporate actions, login.
+journal, alerts, AI analysis, corporate actions.
+
+## How it is hosted
+
+One Vercel project serves everything from this repository:
+
+- the web app (Next.js static export, repository root),
+- the API (`backend/`, FastAPI) as a Python function behind `/api/*`.
+
+Sign-in and data use the existing Firebase project (`eurotools-a1ea6`), free tier:
+
+- Firebase Authentication (email and password, accounts created by the administrator),
+- Firestore, one private tree per account under `egx/{uid}/`.
+
+The API holds **no credentials**. It forwards the caller's sign-in token to Firestore,
+so `firestore.rules` authorises every read and write. The ledger and the audit trail are
+append-only in the rules themselves. Pushing a change to `firestore.rules` publishes the
+rules through `.github/workflows/rules.yml`; that workflow never touches Firebase Hosting.
 
 ## Run locally
 
-Backend (Python 3.12+):
+Without sign-in, on SQLite:
 
 ```bash
 cd backend
@@ -33,23 +50,26 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/uvicorn app.main:app --port 8000
 ```
 
-Frontend (Node 22+):
-
 ```bash
-cd frontend
 cp .env.example .env.local
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000. API docs: http://localhost:8000/docs.
+Open http://localhost:3000.
 
 ## Tests
 
 ```bash
 cd backend && .venv/bin/python -m pytest -q && .venv/bin/ruff check app tests
-cd frontend && npm run typecheck && npm run build
 ```
+
+```bash
+npm run typecheck && npm run build
+```
+
+`backend/tests/test_firestore.py` runs the API against the Firestore emulator with the real
+security rules. Start it first with `npm run emulators`; without it those tests are skipped.
 
 ## Accounting rules
 
@@ -68,8 +88,7 @@ hit in one bar the stop is assumed first. Long-only, whole shares, daily bars.
 
 ## Known limits
 
-- Storage is SQLite (`backend/var/`). The store interface is narrow so it can be moved to
-  Firestore for Firebase deployment.
-- The API has **no authentication**. Do not expose it publicly before login is added.
+- Any active account of the Firebase project can sign in; each one gets its own separate paper portfolio.
 - The instrument list is a seed of 53 stocks; sector names should be checked against EGX.
 - Trading calendar is Sunday–Thursday without public holidays.
+- Imported prices are used as given (no adjustment for splits, bonus shares or dividends).

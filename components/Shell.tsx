@@ -65,10 +65,6 @@ function SignIn() {
 export default function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null | undefined>(firebaseConfigured ? undefined : null);
   useEffect(() => {
-    // Retire the previous application's service worker if this browser still has it.
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => undefined);
-    }
     if (!firebaseConfigured) return;
     return onAuthStateChanged(clientAuth(), setUser);
   }, []);

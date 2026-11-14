@@ -1,0 +1,46 @@
+# Publishes firestore.rules to the Firebase project. Rules only: this never
+# touches Firebase Hosting, so the quality-inspection site served from that
+# project keeps running exactly as it is.
+#
+# Uses the Firebase credential already stored in this repository's secrets
+# (FIREBASE_SERVICE_ACCOUNT or FIREBASE_TOKEN).
+
+name: Firestore rules
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["firestore.rules", ".github/workflows/rules.yml"]
+
+concurrency:
+  group: firestore-rules
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Take the credential
+        env:
+          KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -n "$KEY" ]; then
+            printf '%s' "$KEY" > "$RUNNER_TEMP/firebase-key.json"
+            echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-key.json" >> "$GITHUB_ENV"
+          elif [ -z "$TOKEN" ]; then
+            echo "::error::No Firebase credential in repository secrets."
+            exit 1
+          fi
+      - name: Deploy rules
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: npx firebase deploy --only firestore:rules --project eurotools-a1ea6

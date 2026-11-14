@@ -20,13 +20,7 @@ from urllib.parse import quote
 
 import httpx
 
-
-class AuthError(PermissionError):
-    pass
-
-
-class ConflictError(RuntimeError):
-    pass
+from .errors import AuthError, ConflictError
 
 
 def uid_from_token(token: str) -> str:
@@ -168,6 +162,11 @@ class FirestoreStore:
     def put(self, coll: str, id: str, doc: dict[str, Any]) -> None:
         self._write(coll, id, doc)
         self._remember(coll, id, doc)
+
+    def create(self, coll: str, id: str, doc: dict[str, Any]) -> None:
+        """Write a document that must not exist yet; the commit fails with ConflictError if it does."""
+        self._remember(coll, id, doc)
+        self._write(coll, id, doc, must_not_exist=True)
 
     def delete(self, coll: str, id: str) -> bool:
         existed = self.get(coll, id) is not None

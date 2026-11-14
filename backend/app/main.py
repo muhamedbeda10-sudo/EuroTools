@@ -20,7 +20,8 @@ from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
 from .services import App, NotFound
-from .store.firestore_store import AuthError, ConflictError, FirestoreStore, uid_from_token
+from .store.errors import AuthError, ConflictError
+from .store.firestore_store import FirestoreStore, uid_from_token
 from .store.sqlite_store import Store
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
