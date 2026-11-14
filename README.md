@@ -1,110 +1,75 @@
-# Eurotools — فحص الجودة / Quality Inspection
+# EGX Intelligence
 
-تطبيق تتبّع الجودة من **استلام الخامة حتى الإفراج النهائي**، بواجهة عربية (RTL)
-وبيانات إنجليزية.
+Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 
-A quality-inspection app covering the full route from raw-material receiving
-to final quality release. Arabic RTL UI, English data values.
+> Paper trading only. Nothing in this codebase can send an order to a broker.
+> The app ships with **synthetic sample prices** (clearly labelled in the UI) until real
+> history is imported by CSV or a data feed is connected.
 
-## المسار (Process flow)
+## What is in this release
 
-```
-استلام الخامات (1)
-        ↓
-تحليل الخامة (2)  ──── عينات عشوائية تُقارن بالمواصفة
-        ↓
-      Roughing
-        ↓
-الفحص بعد الـ Roughing (3)        → Accepted / Rework / Rejected
-        ↓
-   Heat Treatment
-        ↓
-الفحص البصري + الصلادة (4)         → Accepted / Rejected / Further Investigation
-        ↓
-      Grinding
-        ↓
-الفحص بعد الـ Grinding (5)         → Accepted / Rework / Rejected
-        ↓
-      Finishing
-        ↓
-الفحص النهائي + CMM (6)            → Released / Rework / Rejected
-        ↓
-   الإفراج النهائي عن الجودة
-```
-
-## التشغيل محليًا
-
-على ويندوز: شغّل **`setup.bat`** مرة واحدة، ثم **`run.bat`** في كل مرة
-(و`stop.bat` لإيقاف الخادم). التطبيق يعمل على المنفذ **3001**، فيمكن تشغيله جنبًا
-إلى جنب مع تطبيق آخر على 3000 على نفس الجهاز.
-
-أو يدويًا:
-
-```bash
-cp .env.example .env        # ملف الاعدادات — غير موجود في git
-npm install
-npx prisma migrate deploy   # ينشئ prisma/dev.db
-npm run seed                # بيانات تجريبية تغطي كل المراحل (اختياري)
-npm run dev                 # http://localhost:3001
-```
-
-أوامر أخرى:
-
-```bash
-npm run test:run   # 81 اختبار وحدة للمنطق النقي
-npm run typecheck
-npm run lint
-npm run build && npm start
-npm run db:reset   # مسح القاعدة وإعادة تطبيق الـ migrations
-```
-
-`DATABASE_URL` في `.env` (النسخة الافتراضية `file:./dev.db`).
-لضبط المنطقة الزمنية للعرض: `NEXT_PUBLIC_QC_TIME_ZONE` (الافتراضي `Africa/Cairo`).
-
-## الصفحات
-
-| الصفحة | الوظيفة |
+| Screen | Contents |
 | --- | --- |
-| `/` | لوحة المتابعة: طوابير كل مرحلة، خامات تحتاج متابعة، نسبة القبول، آخر الفحوص |
-| `/lots` · `/lots/new` · `/lots/[id]` | استلام الخامات، الشهادات، كشف الاستلام، التحاليل، وإصدار الأجزاء |
-| `/queue` | الأجزاء الواقفة عند كل مرحلة فحص |
-| `/parts` · `/parts/[id]` | سجل تتبّع كل جزء: المسار، كشف المرحلة الحالية، تاريخ الفحوص، سجل الحركة |
-| `/materials` · `/materials/[id]` | المواصفات: مدى الصلادة، Ra، الشهادات المطلوبة، والخواص المقاسة لكل مرحلة |
-| `/reports` · `/reports/export` | أداء كل مرحلة، أكثر بنود عدم المطابقة، قياسات خارج السماحية، الإفراج النهائي، وتصدير CSV |
+| Dashboard | Indices, breadth, movers, paper portfolio (gross vs net), watchlist, strategy signals, data status |
+| Market & Categories | Sector performance, all stocks, search/filters, custom categories |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, technical and momentum read, simulated order ticket |
+| Watchlist | Tracked stocks |
+| Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
+| Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
+| Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout), risk limits |
+| Strategy Simulator | Historical backtest: return, drawdown, win rate, profit factor, equity curve vs benchmark, run history |
+| Settings | Fee schedule, starting capital, CSV data import, audit trail |
 
-## قواعد العمل (business rules)
+Not built yet: live-data paper trading, Younit integration, fundamentals, research/news,
+journal, alerts, AI analysis, corporate actions, login.
 
-كل القرارات تُتخذ في `lib/domain/` — دوال نقية بلا I/O، ومغطاة بالاختبارات:
+## Run locally
 
-- **الأبعاد**: تُقبل داخل `nominal − tolMinus … nominal + tolPlus` (الحدود نفسها مقبولة).
-- **GD&T**: تُقبل داخل `0 … gdtLimit`؛ لا تُقرأ لها سماحية أبعاد إطلاقًا.
-- **خاصية حرجة (Critical)** خارج السماحية → **رفض مباشر**، لا إعادة تشغيل.
-- **الصلادة** أقل من المدى → رفض؛ أعلى من المدى → **فحص إضافي** (لا رفض).
-- **كشف غير مكتمل** → الحالة تبقى `PENDING` ولا يتحرك الجزء — لكن أي عدم مطابقة
-  مُسجَّلة تُحسم فورًا دون انتظار باقي البنود.
-- **الاقتراح لا يُلزم الفاحص**: الواجهة تعرض النتيجة المقترحة وأسبابها، وللفاحص أن
-  يختار حالة أخرى من الحالات المسموحة لتلك المرحلة فقط.
-- **بوابات المسار**: الجزء لا يُفحص إلا في مرحلته الحالية؛ ولا تُصدر أجزاء من تشغيلة
-  قبل قبول الاستلام واعتماد التحليل.
-- كل إجابة بند وكل قياس يُحفظ منفصلًا (لا الحالة النهائية فقط)، ولذلك يستطيع تقرير
-  «أكثر البنود تكرارًا في عدم المطابقة» أن يعمل أصلًا.
+Backend (Python 3.12+):
 
-## البنية
-
-```
-app/            صفحات RTL (App Router) + route للتصدير
-components/     ChecklistForm (قلب التطبيق) + عناصر واجهة مشتركة
-lib/domain/     منطق نقي + اختباراته (stages.ts = مصدر الكشوف الوحيد)
-lib/server/     الاستعلامات وServer Actions فوق Prisma
-prisma/         schema + migrations
-scripts/seed.ts بيانات تجريبية
+```bash
+cd backend
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/uvicorn app.main:app --port 8000
 ```
 
-إضافة أو تعديل بند في أي كشف يتم من `lib/domain/stages.ts` وحده؛ الواجهة والتصدير
-والتقارير تلتقط التغيير تلقائيًا. `key` هو ما يُخزَّن، فتغيير نص البند لا يُبطل السجلات
-القديمة.
+Frontend (Node 22+):
 
-## التقنيات
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+```
 
-Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind v4 ·
-Prisma + SQLite · Vitest.
+Open http://localhost:3000. API docs: http://localhost:8000/docs.
+
+## Tests
+
+```bash
+cd backend && .venv/bin/python -m pytest -q && .venv/bin/ruff check app tests
+cd frontend && npm run typecheck && npm run build
+```
+
+## Accounting rules
+
+- Average cost excludes fees; fees are tracked separately.
+- Gross profit = (sell price − average cost) × quantity.
+- Net realized = gross − buy fees for the shares sold − sell fees.
+- Unrealized net is an estimate: it also subtracts the fees to sell at the last price.
+- Fees are stored on each trade when it is recorded; changing the schedule never rewrites history.
+- The default fee schedule is a **placeholder**. Verify it against the broker tariff in Settings.
+
+## Backtest execution model
+
+Signals are read at the close and filled at the next session's open, with slippage and the
+fee schedule applied. Stops and targets are checked against the day's low/high; if both are
+hit in one bar the stop is assumed first. Long-only, whole shares, daily bars.
+
+## Known limits
+
+- Storage is SQLite (`backend/var/`). The store interface is narrow so it can be moved to
+  Firestore for Firebase deployment.
+- The API has **no authentication**. Do not expose it publicly before login is added.
+- The instrument list is a seed of 53 stocks; sector names should be checked against EGX.
+- Trading calendar is Sunday–Thursday without public holidays.

@@ -1,19 +1,16 @@
-/node_modules
-/.next/
-/out/
-/build
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+backend/var/
+node_modules/
+.next/
+out/
 *.tsbuildinfo
 next-env.d.ts
-
-# env files — the example is committed as documentation
-.env*
-!.env.example
-
-# local database — runtime data, never in the repo
-prisma/dev.db
-prisma/dev.db-journal
-prisma/*.db
-prisma/*.db-*
-
+.firebase/
 *.log
-.DS_Store
