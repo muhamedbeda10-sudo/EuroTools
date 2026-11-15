@@ -528,3 +528,103 @@ def test_the_real_account_is_shown_to_its_named_owner_and_to_nobody_else(monkeyp
         assert fake.reads == []
     Feed.reset()
     broker.reset()
+
+
+# ---- real orders on the deployed store ------------------------------------------------------
+def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out(monkeypatch):
+    from datetime import datetime
+
+    from app import broker, real_orders
+    from app.config import Settings
+    from app.data.calendar import CAIRO
+    from app.data.feed import Feed
+    from app.main import create_app
+    from tests.test_broker import FakeBroker
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    monkeypatch.setattr(real_orders, "cairo_now", lambda: datetime(2026, 11, 15, 11, 0, tzinfo=CAIRO))   # a Sunday, mid-session
+    Feed.reset()
+    broker.reset()
+    real_orders.reset()
+    owner, admin = ("u-" + uuid.uuid4().hex[:10] for _ in range(2))
+    provision(owner)
+    provision(admin)
+    ho, ha = ({"Authorization": f"Bearer {token(u)}"} for u in (owner, admin))
+    fake = FakeBroker()
+    fake.listing = [s for s in fake.listing if s["symbol"] != "EAST"]   # market data is shared: leave it as the other tests expect it
+    limits = {"enabled": True, "max_order_value": 5000, "max_day_value": 8000, "max_day_orders": 1, "price_band_pct": 2, "symbols": []}
+    cfg = Settings(store_backend="firestore", firebase_project_id=PROJECT, broker_account_uids=owner, live_trading_enabled=True)
+    with TestClient(create_app(cfg, younit=fake)) as c:
+        while c.post("/api/v1/data/refresh", headers=ho).json()["remaining"]:
+            pass
+        comi = round(c.get("/api/v1/stocks/COMI", headers=ho).json()["quote"]["last"], 3)
+        tmgh = round(c.get("/api/v1/stocks/TMGH", headers=ho).json()["quote"]["last"], 3)
+
+        # another administrator is not the owner: nothing of real orders is theirs to see or to do
+        assert c.get("/api/v1/status", headers=ha).json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0}
+        for method, path, body in (("get", "/api/v1/real-orders", None), ("put", "/api/v1/real-orders/settings", limits),
+                                   ("post", "/api/v1/real-orders", {"symbol": "COMI", "side": "BUY", "qty": 1, "price": comi})):
+            assert c.request(method, path, json=body, headers=ha).status_code == 403
+        assert c.get("/api/v1/real-orders").status_code == 401                 # signed out
+
+        assert c.put("/api/v1/real-orders/settings", json=limits, headers=ho).json()["ready"] is True
+        a = c.post("/api/v1/real-orders", json={"symbol": "COMI", "side": "BUY", "qty": 10, "price": comi}, headers=ho).json()
+        b = c.post("/api/v1/real-orders", json={"symbol": "TMGH", "side": "BUY", "qty": 5, "price": tmgh}, headers=ho).json()
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 2}
+        assert c.post(f"/api/v1/real-orders/{a['id']}/approve", headers=ha,     # not theirs to approve either
+                      json={k: a[k] for k in ("symbol", "side", "qty", "price")}).status_code == 403
+
+        def approve(order):
+            return c.post(f"/api/v1/real-orders/{order['id']}/approve", headers=ho,
+                          json={k: order[k] for k in ("symbol", "side", "qty", "price")})
+
+        def on_another_server(order):
+            """The same yes arriving at a second server: its own store, none of this server's locks."""
+            from app.data.feed import FirestoreDocs
+            from app.services import App
+            from app.store.firestore_store import FirestoreStore
+            other = App(FirestoreStore(PROJECT, token(owner), owner), cfg, {}, Feed(FirestoreDocs(PROJECT, token(owner))), fake).bootstrap()
+            other.real_account_allowed = True
+            return real_orders._approve(other, order["id"], real_orders.ApproveIn(**{k: order[k] for k in ("symbol", "side", "qty", "price")}))
+
+        # While the first approval is being checked against the broker, a second one goes all the way through elsewhere.
+        asked, inner = fake.buying_power, {}
+
+        def slow(stock_id):
+            if not inner:
+                inner["started"] = True          # once: the approval made here asks the broker too
+                inner["res"] = on_another_server(b)
+            return asked(stock_id)
+        fake.buying_power = slow
+        first = approve(a)
+        fake.buying_power = asked
+        assert inner["res"]["status"] == "sent"
+        assert first.status_code == 409                                          # the database refused the stale yes
+        assert [o["stock_id"] for o in fake.sent] == [2]                         # one order went out, not two
+        # judged again against what is true now, the day's limit of one order stops it
+        again = approve(a)
+        assert again.status_code == 422 and "limit is 1 a day" in again.json()["detail"] and len(fake.sent) == 1
+
+        # the same proposal approved twice at the same moment: sent once
+        c.put("/api/v1/real-orders/settings", json={**limits, "max_day_orders": 5}, headers=ho)
+        inner.clear()
+
+        def twice(stock_id):
+            if not inner:
+                inner["started"] = True
+                inner["res"] = on_another_server(a)
+            return asked(stock_id)
+        fake.buying_power = twice
+        outer = approve(a)
+        fake.buying_power = asked
+        assert inner["res"]["status"] == "sent" and outer.status_code == 409
+        assert [o["stock_id"] for o in fake.sent] == [2, 1]
+        view = c.get("/api/v1/real-orders", headers=ho).json()
+        assert view["today"]["orders"] == 2 and view["waiting"] == [] and {o["status"] for o in view["orders"]} == {"sent"}
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"]["waiting"] == 0
+        # the paper side of the same account is untouched, and the other administrator's data holds none of it
+        assert c.get("/api/v1/portfolio", headers=ho).json()["holdings"] == []
+        assert not [e for e in c.get("/api/v1/audit", headers=ha).json() if e["entity"].startswith("real_")]
+        assert [e["action"] for e in c.get("/api/v1/audit", headers=ho).json() if e["entity"] == "real_order"][:2] == ["send", "approve"]
+    Feed.reset()
+    broker.reset()
+    real_orders.reset()

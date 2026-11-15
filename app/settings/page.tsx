@@ -6,6 +6,7 @@ import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import AssistantSettings from "@/components/AssistantSettings";
+import RealTradingSettings from "@/components/RealTradingSettings";
 import { useFeedUpdate } from "@/components/Shell";
 import { CardHead, Empty, State } from "@/components/ui";
 
@@ -259,7 +260,8 @@ function Audit() {
   );
 }
 
-const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["assistant", "Assistant"], ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
+const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["real", "Real trading"], ["assistant", "Assistant"],
+              ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
 
 /** Opens the tab named in the address (?tab=assistant), also when the page is already showing. */
 function TabFromAddress({ onTab }: { onTab: (tab: any) => void }) {
@@ -285,7 +287,7 @@ export default function Settings() {
       </div>
       <Suspense fallback={null}><TabFromAddress onTab={setTab} /></Suspense>
       <div className="tabs" role="tablist" aria-label="Settings sections">
-        {TABS.map(([key, label]) => (
+        {TABS.filter(([key]) => key !== "real" || real?.allowed).map(([key, label]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
         ))}
       </div>
@@ -293,13 +295,14 @@ export default function Settings() {
         {tab === "fees" && <Fees />}
         {tab === "portfolio" && <Capital />}
         {tab === "data" && <DataImport />}
+        {tab === "real" && <RealTradingSettings />}
         {tab === "assistant" && <AssistantSettings />}
         {tab === "accounts" && <AccountsCard />}
         {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
         {(tab === "data") && <div className="card">
           <h2>Connections</h2>
           <dl className="kv ruled" style={{ maxWidth: 720 }}>
-            <dt>Trading mode</dt><dd>Paper only</dd>
+            <dt>Trading mode</dt><dd>{status.data?.real_orders?.ready ? "Paper, and real orders you approve" : "Paper only"}</dd>
             <dt>Younit market data</dt><dd>{pv?.configured ? "Connected, read-only" : "Not connected"}</dd>
             {pv?.configured && (
               <>
@@ -330,7 +333,12 @@ export default function Settings() {
                 : real.allowed ? <>Shown to this sign-in, read-only · <Link href="/account">open</Link></>
                 : "Not enabled for this sign-in"}
             </dd>
-            <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
+            <dt>Real orders</dt>
+            <dd>
+              {!real?.allowed ? "Not for this sign-in"
+                : status.data?.real_orders?.ready ? <>On, each one on your approval · <Link href="/settings?tab=real">limits</Link></>
+                : <>Off · <Link href="/settings?tab=real">set up</Link></>}
+            </dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
           {status.data && <p className="foot-note" style={{ marginTop: 14 }}>{status.data.broker_note}</p>}

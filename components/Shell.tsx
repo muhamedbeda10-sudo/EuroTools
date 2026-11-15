@@ -53,6 +53,10 @@ function Banner({ tone = "warn", title, children }: { tone?: "warn" | "info" | "
 const ThemeCtx = createContext<"light" | "dark">("light");
 export const useTheme = () => useContext(ThemeCtx);
 
+/** What the server said about this sign-in and the data (GET /api/v1/status), for any screen that needs it without asking again. */
+const StatusCtx = createContext<any>(null);
+export const useStatus = () => useContext(StatusCtx);
+
 const systemTheme = () => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
 function SignIn() {
@@ -89,7 +93,7 @@ function SignIn() {
             <li><Check size={18} />A paper portfolio where every profit is shown gross and net</li>
           </ul>
         </div>
-        <p className="fine">Paper trading only. This application cannot send an order to a broker.</p>
+        <p className="fine">Trading here is on paper. A real order exists only for the brokerage account&apos;s owner, and only when they approve it.</p>
       </div>
       <div className="form">
         <form onSubmit={submit}>
@@ -102,7 +106,7 @@ function SignIn() {
             <input id="si-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
           {error && <div className="note danger" role="alert">{error}</div>}
           <button className="primary" type="submit" disabled={busy} style={{ width: "100%", height: 40, marginTop: 4 }}>{busy ? "Signing in…" : "Sign in"}</button>
-          <p className="muted" style={{ fontSize: 12, margin: "14px 0 0", textAlign: "center" }}>Paper trading only. No order reaches a broker.</p>
+          <p className="muted" style={{ fontSize: 12, margin: "14px 0 0", textAlign: "center" }}>Paper trading. Nothing reaches a broker without the account owner&apos;s approval.</p>
         </form>
       </div>
     </div>
@@ -402,6 +406,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   }
   return (
     <ThemeCtx.Provider value={theme}>
+      <StatusCtx.Provider value={status}>
       <LiveProvider enabled={!!status?.provider?.configured && !!status?.provider?.market_open}>
       <div className={`shell ${assistant ? "with-assistant" : ""}`}>
         <aside className={`side ${open ? "open" : ""}`}>
@@ -417,6 +422,9 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                 {group.items.filter(([href]) => href !== REAL_ACCOUNT || status?.real_account?.allowed).map(([href, label, Icon]) => (
                   <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
                     <Icon size={16} aria-hidden="true" />{label}
+                    {href === REAL_ACCOUNT && status?.real_orders?.waiting > 0 && (
+                      <span className="nav-count" title="Real orders waiting for your approval">{status.real_orders.waiting}<span className="sr-only"> waiting for your approval</span></span>
+                    )}
                   </Link>
                 ))}
               </div>
@@ -450,7 +458,12 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                   : d.mode === "younit" ? (d.is_live ? `Live · ${String(d.live_as_of).slice(11, 16)} Cairo` : `Close of ${d.latest_bar_date}`) : "No data"}
               </span>
             )}
-            <span className="pill paper hide-sm" title="Simulated orders only. Nothing is sent to a broker.">Paper trading</span>
+            <span className="pill paper hide-sm" title="Orders placed from these screens are simulated. Real orders are separate, on the Real account page.">Paper trading</span>
+            {status?.real_orders?.ready && (
+              <Link className="pill warn hide-sm" href={REAL_ACCOUNT} title="Real orders are switched on for this sign-in. Each one is sent only after you approve it.">
+                Real orders on{status.real_orders.waiting > 0 ? ` · ${status.real_orders.waiting} waiting` : ""}
+              </Link>
+            )}
             <button ref={assistantButton} className={`as-open ${assistant ? "on" : ""}`} onClick={() => showAssistant(!assistant)} aria-expanded={assistant}
               aria-label="Assistant" title="Ask the assistant, or tell it what to do">
               <Sparkles size={15} aria-hidden="true" /><span>Assistant</span>
@@ -476,13 +489,14 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           )}
           <main className="content">{children}</main>
           <footer className="foot">
-            <span>Paper trading only. Figures are for study, not investment advice.</span>
+            <span>Figures are for study, not investment advice. Trading is on paper unless the account&apos;s owner approves a real order.</span>
             <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
           </footer>
         </div>
         <Assistant key={assistantKey} open={assistant} onClose={() => showAssistant(false)} />
       </div>
       </LiveProvider>
+      </StatusCtx.Provider>
     </ThemeCtx.Provider>
   );
 }

@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     # (local SQLite) may look only if the list contains the word "local". See app/broker.py.
     broker_account_uids: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    # Live brokerage execution is a separate, future module. It is not implemented
-    # and this flag exists only so the UI can state the fact explicitly.
+    # The server's switch for real orders (LIVE_TRADING_ENABLED). Off unless set: with it off no order
+    # can reach the broker whatever anybody chose in the app. On, an order still needs the owner's own
+    # switch and limits (Settings → Real trading) and their approval of that order. See app/real_orders.py.
     live_trading_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

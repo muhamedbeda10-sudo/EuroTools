@@ -2,8 +2,9 @@
 
 Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 
-> Paper trading only. Nothing in this codebase can send an order to a broker.
-> The owner's real brokerage account can be **looked at** (read-only); it cannot be traded from here.
+> Trading here is on paper. One thing is real and fenced off: the owner of the brokerage account can
+> look at it, and can send a **real order they approved themselves**, one at a time. It is off unless
+> switched on twice (server and owner). Nothing else in this codebase reaches a broker.
 > The app ships with **synthetic sample prices** (clearly labelled in the UI) until real
 > history is imported by CSV or a data feed is connected.
 
@@ -16,7 +17,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
-| Real account | The owner's brokerage account, read-only: cash, holdings, shares free to sell, broker price next to the app's price, and checks on the reading. Owner only |
+| Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; and real orders, each sent only on the owner's approval. Owner only |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
 | Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
@@ -26,8 +27,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
-Not built yet: order execution, fundamentals (no verified source), corporate actions, AI analysis
-(needs a paid model key).
+Not built yet: real orders without the owner's approval, fundamentals (no verified source), corporate actions.
 
 ## How it is hosted
 
@@ -50,10 +50,9 @@ rules through `.github/workflows/rules.yml`; that workflow never touches Firebas
 
 When `YOUNIT_TRADING_ID` and `YOUNIT_API_KEY` are set on the server, prices come from the
 Younit (EFG Hermes) API instead of the synthetic sample: the EGX stock list and daily
-history, **read-only**. The code contains no call that places, changes or cancels an order
-or moves money (a test, `test_nothing_in_the_application_can_send_an_order`, keeps it that
-way). The credentials stay on the server; they are never sent to the browser, logged or
-committed.
+history, **read-only**. The same connection reads the owner's account and carries their real
+orders (the two sections below). The credentials stay on the server; they are never sent to the
+browser, logged or committed.
 
 Prices are the same for every account, so they are cached once in Firestore
 (`egxMarket/`). The first page load of the day pulls the update in short batches, and
@@ -97,7 +96,50 @@ account summary, holdings, and the holder's name with a masked account number.
 - **The assistant** can read it for the owner (`real_account`, a read tool). It is told to keep real
   and paper figures apart and that it cannot trade the account. What it reads becomes part of that
   conversation, which is stored in the owner's own data.
-- Not read yet: funds as a separate list, buying power, and the broker's order history.
+- Not read yet: funds as a separate list.
+
+## Real orders (sent only on the owner's approval)
+
+`backend/app/real_orders.py`. An order starts as a **proposal**, written by the owner on the Real
+account page or by the assistant. A proposal moves nothing. It reaches the broker in one way only:
+the owner opens it, reads the last look, and approves it (`POST /api/v1/real-orders/{id}/approve`).
+
+What stands between a proposal and the exchange, every time:
+
+1. **The owner's sign-in** (`BROKER_ACCOUNT_UIDS`), as for the Real account page.
+2. **Two switches.** `LIVE_TRADING_ENABLED` on the server (off unless set), and the owner's own
+   switch in Settings → Real trading, which cannot be turned on before the limits are written.
+   Either one stops everything at once.
+3. **The order's shape.** A listed stock, whole shares, a limit price, for the day. There is no
+   market order, no hidden order, no order that outlives the session, and no changing an order
+   (cancel it and prepare another).
+4. **The owner's limits.** Most for one order, most orders and most value in a day, the stocks
+   allowed (optional), and how far the price may sit on the costly side of the market (a buy above
+   it, a sell below it).
+5. **The broker's own figures, read at that moment.** What can be spent, for a buy; the shares
+   free to sell, for a sale; the price range the exchange accepts today.
+6. **The session is running.** A proposal written after the close is for the next session, and is
+   judged again with that day's figures when it is approved.
+
+**Sent once.** The approval is written first, with the day's lock, so two approvals at the same
+moment cannot both go out (the database refuses the stale one). Then one request goes to the
+broker. Refused: `rejected`, with the broker's reason. Never left: `failed`. Left and no clear
+answer: `unknown`, which is never sent again; the broker's own list is read to find it, and until it
+is settled no further order for that stock and side can be approved.
+
+**The assistant** can read real orders and write a proposal with its reasoning (`propose_real_order`),
+and take its own proposal back. It has no tool that approves, sends, cancels or changes the limits,
+and tests keep it so (`test_the_assistant_can_propose_and_nothing_more`,
+`test_orders_reach_the_broker_from_one_place_only`). Its proposals are bound by the same limits and
+capped at 20 a day.
+
+Proposals, orders and what became of them are kept in the owner's own data (`real_orders_YYYYMM`)
+and every step is in the activity log. The paper ledger is never written by any of this.
+
+The request sent to the broker is the one the broker's own SDK sends for a day limit order; a test
+pins it field by field. **It has not been exercised against the real broker from here** (there is no
+test environment): make the first real order a single cheap share and compare it with the EFG
+Hermes ONE app.
 
 ## Run locally
 
@@ -150,8 +192,8 @@ hit in one bar the stop is assumed first. Long-only, whole shares, daily bars.
 An assistant built into every screen (the **Assistant** button in the top bar). It answers questions about the
 market and the account's own data and operates the app through tools: it can read everything the screens show
 and do everything they do (paper trades, strategies, backtests, automatic runs, alerts, research, journal,
-settings). It has no tool for sign-in accounts or passwords, and none for real orders: no such code exists.
-For the brokerage account's owner it can also read the real account (never trade it).
+settings). It has no tool for sign-in accounts or passwords. For the brokerage account's owner it can
+also read the real account and propose a real order; it cannot approve, send or cancel one.
 
 ### What the assistant knows about trading
 

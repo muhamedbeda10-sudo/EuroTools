@@ -10,8 +10,18 @@ from tests.test_broker import FakeBroker
 class MovingYounit(FakeBroker):
     """Like the test double, but the live stream keeps ticking so a browser can watch it move.
 
-    It also has a made-up brokerage account behind it, so the Real account page can be opened locally.
+    It also has a made-up brokerage account behind it, so the Real account page can be opened locally,
+    and it takes orders: each one it is sent fills by half on the next look, then completely.
     """
+
+    def orders(self, profile_id):
+        rows = super().orders(profile_id)
+        for order in self.book:   # move each open order along a step, so a browser can watch it fill
+            if order["status"] == "Accepted":
+                order.update(status="Partially Executed", executed_qty=max(order["qty"] // 2, 1), average=order["price"])
+            elif order["status"] == "Partially Executed":
+                order.update(status="Executed", executed_qty=order["qty"], average=order["price"])
+        return rows
 
     def follow_stock(self, stock_id, max_seconds=240.0):
         price, started = 0.827, time.monotonic()
@@ -41,13 +51,15 @@ class MovingYounit(FakeBroker):
 import app.data.feed as _feed  # noqa: E402
 import app.data.market as _market  # noqa: E402
 import app.main as _main  # noqa: E402
+import app.real_orders as _real_orders  # noqa: E402
 import app.services as _services  # noqa: E402
 
-_feed.market_open = _services.market_open = _main.market_open = _market.market_open = lambda *a, **k: True
+_feed.market_open = _services.market_open = _main.market_open = _market.market_open = _real_orders.market_open = lambda *a, **k: True
 
 _younit = MovingYounit()
 # A stock priced like the app's feed, one the broker prices differently, one partly unsettled, and a fund.
 _younit.hold((1, "COMI", "Commercial International Bank", 120, 120, 33.4, 35.9), (2, "TMGH", "Talaat Moustafa Group", 300, 180, 47.25, 46.5),
              (3, "NEWCO", "A New Listing", 50, 50, 52.1, 55.9), (9001, None, "Money Market Fund", 250, 250, 1.52, 1.61))
 
-app = create_app(Settings(broker_account_uids="local"), younit=_younit)
+# Real orders can be tried end to end here: the stand-in broker takes them, and no real broker is anywhere near.
+app = create_app(Settings(broker_account_uids="local", live_trading_enabled=True), younit=_younit)

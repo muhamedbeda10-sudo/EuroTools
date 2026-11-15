@@ -1,9 +1,14 @@
-"""Read-only access to the Younit (EFG Hermes) API: market data, and a look at the brokerage account.
+"""The Younit (EFG Hermes) API: market data, a look at the brokerage account, and its orders.
 
-Everything here reads. Market data: the stock list, daily history, live prices and the
-order book. The account (see `app/broker.py`, which decides who may look): its cash, its
-holdings and whose it is. There is deliberately no code that places, changes or cancels
-an order, or that moves money: the application trades on paper only.
+Almost everything here reads. Market data: the stock list, daily history, live prices and
+the order book. The account (see `app/broker.py`, which decides who may look): its cash,
+its holdings and whose it is.
+
+Two calls change something at the broker: `place_limit_order` and `cancel_order`. Nothing in
+this file decides to use them. They are called from `app/real_orders.py` only, after the
+account's owner approved that one order and every check there passed. Each is sent once: an
+answer that never came is reported as doubtful (`OrderUncertain`), never tried again. There
+is no code for market orders, hidden orders, changing an order or moving money.
 
 The credentials come from the server's environment (YOUNIT_TRADING_ID,
 YOUNIT_API_KEY). They are never sent to the browser, logged, or stored.
@@ -42,10 +47,28 @@ TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPric
 MARKET_TICK_FIELDS = ["m_LastTradePrice", "m_PercentChange", "m_TradedVolume"]
 INDEX_FIELDS = ["m_IndexName", "m_EnglishName", "m_IndexValue", "m_IndexClose", "m_PrecentChange"]
 SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
+# The numbers the broker's order API uses. Only these are ever sent.
+SIDES = {"BUY": 100, "SELL": 200}   # a plain buy; a plain sell of settled shares (201 and 203 are same-day and T+1 sells)
+ORDER_NORMAL = 0                    # 1 is a concealed (iceberg) order: never used
+EXPIRES_TODAY = 7                   # a day order: gone at the session's close
+VIA_API = 8
+EXECUTION_DEFAULT = 1
 
 
 class YounitError(RuntimeError):
     pass
+
+
+class OrderRefused(YounitError):
+    """The broker answered and said no. Nothing was placed or cancelled; the message is the broker's own reason."""
+
+
+class OrderUncertain(YounitError):
+    """An order or a cancellation was sent and no clear answer came back.
+
+    It may or may not have taken effect. The only safe next step is to look at the
+    broker's list of orders; sending it again could place it twice.
+    """
 
 
 class YounitRateLimit(YounitError):
@@ -99,6 +122,33 @@ def _object(body):
         if isinstance(body, dict) and "data" in body:
             body = body["data"]
     return body
+
+
+def _messages(answer) -> str:
+    """What the broker said, from the `messages` of an answer. Its own words: shown to the owner, never acted on."""
+    found = answer.get("messages") if isinstance(answer, dict) else None
+    text = "; ".join(str(m).strip() for m in found if m and str(m).strip()) if isinstance(found, list) else ""
+    return text[:500]
+
+
+def _order_row(raw: dict) -> dict | None:
+    """One order from the broker's lists, whichever of its two spellings of the fields it uses."""
+    try:
+        order_id = int(_first(raw, "OrderId", "orderId", "orderID"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        stock_id = int(_first(raw, "StockId", "stockId", "securityID"))
+    except (TypeError, ValueError):
+        stock_id = None
+    word = str(_first(raw, "OrderTypeName", "orderType", "transactionType") or "").strip().lower()
+    symbol = str(_first(raw, "ReuterId", "reuterID") or "").split(".")[0].strip().upper()
+    return {"order_id": order_id, "stock_id": stock_id, "symbol": symbol if SYMBOL.fullmatch(symbol) else None,
+            "side": "BUY" if word.startswith("buy") else "SELL" if word.startswith("sell") else None,
+            "qty": _count(_first(raw, "Quantity", "quantity")), "price": _opt(_first(raw, "Price", "price")),
+            "status": str(_first(raw, "Status", "status") or "").strip()[:60] or None,
+            "executed_qty": _count(_first(raw, "ExecutedQty", "executedQty")),
+            "average": _opt(_first(raw, "Average", "average"))}
 
 
 def _untraded(row: dict) -> bool:
@@ -247,6 +297,64 @@ class YounitClient:
             except ValueError:
                 raise YounitError("Younit returned an unreadable response") from None
         raise YounitError("Younit rejected the request")
+
+    def _post(self, path: str, body: dict):
+        """A read that the API takes as a POST (a query with a body). Handled like any other read."""
+        for attempt in (0, 1):
+            try:
+                res = self._http.post(f"{self._base}{path}", json=body,
+                                      headers={"Authorization": self._authorization(force=attempt == 1)})
+            except httpx.TimeoutException:
+                raise YounitError("Younit took too long to answer") from None
+            except httpx.HTTPError as exc:
+                raise YounitError(f"cannot reach Younit ({exc.__class__.__name__})") from None
+            if res.status_code == 401 and attempt == 0:
+                continue
+            if res.status_code == 429:
+                raise YounitRateLimit(_retry_after(res))
+            if res.status_code >= 400:
+                raise YounitError(f"Younit request failed (HTTP {res.status_code})")
+            try:
+                return res.json()
+            except ValueError:
+                raise YounitError("Younit returned an unreadable response") from None
+        raise YounitError("Younit rejected the request")
+
+    def _change(self, path: str, body: dict):
+        """Send one request that changes something at the broker, and say plainly what became of it.
+
+        Returns the answer when the broker accepted the request for processing. Otherwise raises:
+        `YounitError` when it certainly did not arrive (no connection, sign-in refused, too many requests),
+        `OrderRefused` when the broker read it and said no, `OrderUncertain` when it was sent and the
+        outcome is not known (no answer, or a server error). It is never sent a second time, except
+        after a refused sign-in, which the broker gives before it looks at the request at all.
+        """
+        res = None
+        for attempt in (0, 1):
+            authorization = self._authorization(force=attempt == 1)   # a failure here means nothing was sent
+            try:
+                res = self._http.post(f"{self._base}{path}", json=body, headers={"Authorization": authorization})
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+                raise YounitError(f"cannot reach Younit ({exc.__class__.__name__}); nothing was sent") from None
+            except httpx.HTTPError as exc:
+                raise OrderUncertain(f"no answer came back from Younit ({exc.__class__.__name__})") from None
+            if res.status_code != 401:
+                break
+        if res.status_code == 401:
+            raise YounitError("Younit refused the sign-in; nothing was sent")
+        if res.status_code == 429:
+            raise YounitRateLimit(_retry_after(res))
+        try:
+            answer = res.json()
+        except ValueError:
+            answer = None
+        if res.status_code >= 500:
+            raise OrderUncertain(f"Younit answered with a server error (HTTP {res.status_code})")
+        if res.status_code >= 400:
+            raise OrderRefused(_messages(answer) or f"the broker refused the request (HTTP {res.status_code})")
+        if not isinstance(answer, dict):
+            raise OrderUncertain("Younit accepted the request but its answer could not be read")
+        return answer
 
     # ---- market data -----------------------------------------------------
     def snapshot(self) -> dict:
@@ -483,6 +591,92 @@ class YounitClient:
             if "quantity" not in first:
                 raise YounitError(f"Younit holdings could not be read: {_shape(body, rows)}")
         return {"positions": out, "stocks_value": _opt(data.get("stocksValue")) if isinstance(data, dict) else None}
+
+    # ---- orders -------------------------------------------------------------
+    def buying_power(self, stock_id: int) -> dict:
+        """What can be spent on this stock now, and the trading profile an order for it must name.
+
+        Returns {"profile_id", "buying_power", "held"}. Every order starts here: the broker
+        takes no order without the profile this call gives.
+        """
+        data = _object(self._get(f"/api/v1/trading/buying-power/normal/{int(stock_id)}", {"marketId": EGX_MARKET_ID}))
+        try:
+            profile_id = int(_first(data, "profileID", "profileId")) if isinstance(data, dict) else None
+        except (TypeError, ValueError):
+            profile_id = None
+        if profile_id is None:
+            raise YounitError("Younit gave no trading profile for this stock: it may not be tradable on this account")
+        return {"profile_id": profile_id, "buying_power": _opt(data.get("rawValue")),
+                "held": _count(data.get("certificatesQuantityHolded"))}   # the broker's own spelling
+
+    def trading_limits(self, stock_id: int) -> dict:
+        """The broker's own price for a stock and the lowest and highest price it accepts in an order today.
+
+        Returns {"last", "min_price", "max_price"}; a figure the broker leaves out, or gives as zero, is None.
+        """
+        data = _object(self._get(f"/api/stocks/stock-trading-info/{EGX_MARKET_ID}/{int(stock_id)}"))
+        if not isinstance(data, dict):
+            return {"last": None, "min_price": None, "max_price": None}
+
+        def positive(key):
+            value = _opt(data.get(key))
+            return value if value and value > 0 else None
+        return {"last": positive("price"), "min_price": positive("minPrice"), "max_price": positive("maxPrice")}
+
+    def place_limit_order(self, *, profile_id: int, stock_id: int, side: str, qty: int, price: float) -> int:
+        """Send one day order at a limit price to the exchange and return the order number the broker gave it.
+
+        Called only from `app/real_orders.py`, after the owner approved this order. Sent once:
+        see `_change` for what each failure means.
+        """
+        if side not in SIDES or isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0 \
+                or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+            raise YounitError("this is not an order that can be sent; nothing was sent")
+        answer = self._change("/api/v1/orders/normal", {
+            "profileID": int(profile_id), "stockID": int(stock_id), "orderCategory": ORDER_NORMAL,
+            "operationType": SIDES[side], "quantity": qty, "price": float(price),
+            "orderExpireTermsID": EXPIRES_TODAY, "orderVia": VIA_API, "isMarketPrice": False,
+            "executionInstructionId": EXECUTION_DEFAULT, "isEdit": False,
+        })
+        inner = answer.get("data")
+        if inner is False or (isinstance(inner, dict) and not inner.get("result")):
+            raise OrderRefused(_messages(answer) or "the exchange rejected the order")
+        try:
+            return int(inner["orderId"])
+        except (TypeError, KeyError, ValueError):
+            # accepted, by every sign, but without a number to follow it by
+            raise OrderUncertain("Younit accepted the order but gave no order number") from None
+
+    def cancel_order(self, order_id: int, profile_id: int) -> None:
+        """Ask the broker to cancel an order that is still open."""
+        answer = self._change(f"/api/v1/orders/normal/{int(order_id)}/cancel", {"profileId": int(profile_id)})
+        if answer.get("data") is False:
+            raise OrderRefused(_messages(answer) or "the broker refused to cancel the order")
+
+    def orders(self, profile_id: int) -> list[dict]:
+        """The account's current and recent orders, as the broker lists them (a read, though the API takes it as a POST).
+
+        Each: order_id, stock_id, symbol, side ("BUY", "SELL" or None when the broker's word is not understood),
+        qty, price, status (the broker's own word, such as "Accepted"), executed_qty, average.
+        """
+        body = self._post("/core-services/Orders", {"MarketId": EGX_MARKET_ID, "ProfileIds": [int(profile_id)],
+                                                    "GetFixOrders": False})
+        rows = body if isinstance(body, list) else _object(body)
+        return [o for o in (_order_row(r) for r in rows if isinstance(r, dict)) if o] if isinstance(rows, list) else []
+
+    def order_history(self, profile_id: int) -> list[dict]:
+        """Orders that are over (filled, cancelled, rejected, expired), newest as the broker sends them.
+
+        Each is shaped like a row of `orders`, plus rejected (bool) and reject_reason.
+        """
+        rows = _object(self._get(f"/api/stocks/order-history/{EGX_MARKET_ID}/{int(profile_id)}"))
+        out = []
+        for raw in rows if isinstance(rows, list) else []:
+            row = _order_row(raw) if isinstance(raw, dict) else None
+            if row:
+                out.append({**row, "rejected": raw.get("isRejected") is True,
+                            "reject_reason": str(raw.get("rejectReason") or "").strip()[:300] or None})
+        return out
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

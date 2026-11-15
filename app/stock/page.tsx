@@ -11,6 +11,7 @@ import { useStockStream } from "@/lib/useStockStream";
 import { MacdChart, PriceChart, RsiChart, SMA_VARS, type Pattern } from "@/components/Charts";
 import PriceDepth from "@/components/PriceDepth";
 import { ResearchItem } from "@/components/ResearchItem";
+import { useStatus } from "@/components/Shell";
 import TradeTicket from "@/components/TradeTicket";
 import { CardHead, Chg, Delta, Empty, Skeleton, SourceTag, State } from "@/components/ui";
 
@@ -94,6 +95,7 @@ function StockView() {
   const [tf, setTf] = useState<"d" | "w" | "m">("d");
   const [show, setShow] = useState({ sma20: true, sma50: true, sma200: false, volume: true, patterns: true });
   const { data, error, loading, reload } = useApi(symbol ? `/api/v1/stocks/${symbol}?timeframe=${tf}` : null);
+  const live = useStatus();   // whether this sign-in has real orders switched on
 
   // Tick-by-tick price and order book while this page is open (feed stocks only).
   const stream = useStockStream(symbol, data?.quote?.source === "younit");
@@ -233,6 +235,11 @@ function StockView() {
                   <div className="card">
                     <CardHead title="Simulated order"><span className="badge paper">paper</span></CardHead>
                     <TradeTicket symbol={symbol} onDone={reload} />
+                    {live?.real_orders?.ready && (
+                      <p className="foot-note" style={{ textAlign: "center" }}>
+                        <Link href={`/account?order=${symbol}`}>Prepare a real order for {symbol}</Link> (real money, sent only after your approval)
+                      </p>
+                    )}
                   </div>
                   {q.source === "younit" && (
                     <div className="card">

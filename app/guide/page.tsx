@@ -140,14 +140,19 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
     <>
       <p>The app keeps two things apart, and never mixes their figures.</p>
       <p><strong>The paper portfolio</strong> is the simulation: every trade, order, strategy run and profit figure elsewhere in the app belongs to it. No real money moves.</p>
-      <p><strong>The real account</strong> is the brokerage account at EFG Hermes. Its owner can look at it on the <em>Real account</em> page: cash, holdings, what the broker says they are worth, and how many shares are free to sell. The app <strong>only reads</strong> it. It cannot buy, sell, change an order or move money, and nothing on that page is stored.</p>
+      <p><strong>The real account</strong> is the brokerage account at EFG Hermes. Its owner can look at it on the <em>Real account</em> page: cash, holdings, what the broker says they are worth, and how many shares are free to sell.</p>
+      <p><strong>Real orders</strong> are the one thing in the app that moves real money, and only for the account&apos;s owner. An order is first <em>prepared</em> (by you, or proposed by the assistant) and waits. It goes to the broker only when you open it, read the last look and press <em>Send</em>. Nothing else can send one: not the assistant, not a strategy, not an automatic run.</p>
       <ul>
         <li><strong>Who sees it.</strong> Only the sign-in the server names as the account&apos;s owner. For everyone else the page is not in the menu at all.</li>
         <li><strong>Free to sell.</strong> Shares you bought settle two sessions later. Until then they count in the quantity but may not be sellable; the page shows them as unsettled.</li>
         <li><strong>Two prices.</strong> The broker&apos;s price and the app&apos;s own latest price are shown side by side. After the close they can differ a little, because the official close is a volume-weighted average and the app shows the last trade.</li>
         <li><strong>The checks.</strong> Each reading is checked: the holdings must add up to the broker&apos;s total, the total must equal cash plus stocks, and the two prices must agree. A check that fails is shown, not hidden.</li>
+        <li><strong>Switched on twice.</strong> Real orders are off until they are enabled on the server and you switch them on in <Link href="/settings?tab=real">Settings → Real trading</Link>, after writing your limits: most for one order, most in a day, and how far a price may be past the market.</li>
+        <li><strong>Limit orders for the day only.</strong> No market orders. Before sending, the app asks the broker what you can spend or how many shares are free to sell, and the session must be running.</li>
+        <li><strong>In doubt.</strong> If an order was sent and no clear answer came back, it is marked <em>in doubt</em> and never sent again. Look in the EFG Hermes ONE app; the page looks for it too.</li>
+        <li><strong>Start small.</strong> Make the first real order a single cheap share, and compare what the page shows with the broker&apos;s own app.</li>
       </ul>
-      <p>The assistant can read the real account for its owner and discuss it, but it cannot trade it. A view on real holdings is analysis: the decision, and the order, are yours.</p>
+      <p>The assistant can read the real account for its owner and propose an order with its reasoning, but it cannot approve, send or cancel one. A proposal is analysis: the decision is yours.</p>
     </>
   ) },
 ];

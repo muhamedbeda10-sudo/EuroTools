@@ -1,9 +1,11 @@
 "use client";
 import { Briefcase, CircleCheck, Landmark, RefreshCw, TriangleAlert } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { egp, int, num, price, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import RealOrders from "@/components/RealOrders";
 import { Chg, Empty, Kpi, State } from "@/components/ui";
 
 const PATH = "/api/v1/real-account";
@@ -54,8 +56,18 @@ function NotAvailable({ status }: { status: number | null }) {
   );
 }
 
+/** A link such as /account?order=COMI&side=SELL opens the page with the order ticket ready for that stock. */
+function OrderFromAddress({ onStart }: { onStart: (start: { symbol: string; side?: string }) => void }) {
+  const params = useSearchParams();
+  const symbol = params.get("order");
+  const side = params.get("side");
+  useEffect(() => { if (symbol) onStart({ symbol: symbol.toUpperCase().slice(0, 12), side: side ?? undefined }); }, [symbol, side]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
 export default function RealAccount() {
   const [path, setPath] = useState(PATH);
+  const [start, setStart] = useState<{ symbol: string; side?: string } | undefined>(undefined);
   const { data, loading, error, status, reload } = useApi(path);
   const refresh = () => (path === PATH ? setPath(`${PATH}?fresh=true`) : reload());
 
@@ -76,8 +88,8 @@ export default function RealAccount() {
     <>
       <div className="page-head">
         <div>
-          <h1>Real account <span className="badge warn" style={{ verticalAlign: "middle" }}>real money · read-only</span></h1>
-          <p className="sub">Your brokerage account at EFG Hermes, as the broker reports it. The app only looks: it cannot place an order.</p>
+          <h1>Real account <span className="badge warn" style={{ verticalAlign: "middle" }}>real money</span></h1>
+          <p className="sub">Your brokerage account at EFG Hermes, as the broker reports it. An order leaves the app only when you approve that order here.</p>
         </div>
         {data && (
           <div className="actions">
@@ -86,6 +98,7 @@ export default function RealAccount() {
           </div>
         )}
       </div>
+      <Suspense fallback={null}><OrderFromAddress onStart={setStart} /></Suspense>
       {refused ? <NotAvailable status={status} /> : (
         <State loading={loading} error={s ? null : error}>
           {s && error && <div className="note" role="status">The last refresh failed, so these are the figures from {String(data.as_of).slice(11, 16)} Cairo. {error}</div>}
@@ -104,6 +117,8 @@ export default function RealAccount() {
                 <Kpi label="Unrealized profit" value={egp(gain)} toneOf={gain} delta={gainPct}
                   hint={s.realized == null ? "before selling fees" : `Realized, per the broker: ${egp(s.realized)}`} />
               </div>
+
+              <RealOrders key={start?.symbol ?? "orders"} holdings={data.holdings} start={start} onChanged={refresh} />
 
               <div className="card flush section">
                 <div className="card-head"><h2>Holdings<span className="count">{data.holdings.length} position{data.holdings.length === 1 ? "" : "s"}</span></h2></div>
@@ -149,9 +164,9 @@ export default function RealAccount() {
               </div>
 
               <p className="foot-note" style={{ maxWidth: "110ch" }}>
-                Nothing on this page is stored: the figures are read from the broker when the page opens and when you refresh. The paper
-                portfolio is separate. No paper trade, order or automatic run changes this account, and nothing here enters the{" "}
-                <Link href="/portfolio">paper portfolio</Link>.
+                The account&apos;s figures are read from the broker when the page opens and when you refresh; they are not stored. Real orders,
+                and what became of them, are kept in your own data and in the activity log. The paper portfolio is separate: no paper trade,
+                stop-loss or automatic run changes this account, and nothing here enters the <Link href="/portfolio">paper portfolio</Link>.
               </p>
             </>
           )}

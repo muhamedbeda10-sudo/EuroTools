@@ -1,8 +1,8 @@
-"""The owner's real brokerage account, read-only.
+"""The owner's real brokerage account: who may see it, and a read-only look at it.
 
-This is the first step towards real trading, and it only looks: the cash, the holdings and
-what they are worth, read from Younit (EFG Hermes) with the server's credentials. There is no
-code here, or anywhere in this application, that places, changes or cancels a real order.
+This module only looks: the cash, the holdings and what they are worth, read from Younit
+(EFG Hermes) with the server's credentials. Orders are a separate matter, in `real_orders.py`,
+and use the same rule for who the owner is.
 
 Who may look
     The credentials open one person's brokerage account, while several people can sign in to
@@ -98,6 +98,19 @@ def _read(client, fresh: bool) -> tuple[float, str, dict]:
         cached = (time.monotonic(), cairo_now().isoformat(timespec="seconds"), reading)
         _readings[client] = cached
         return cached
+
+
+def reading(core: App, *, fresh: bool = False) -> dict:
+    """The broker's own figures for the account, for code that must check an order against them."""
+    if core.younit is None or not core.real_account_allowed:
+        raise NotAllowed("the real brokerage account is not enabled for this sign-in")
+    return _read(core.younit, fresh)[2]
+
+
+def forget(core: App) -> None:
+    """Drop the last reading: an order was just sent or cancelled, so the account is no longer what it was."""
+    with _lock:
+        _readings.pop(core.younit, None)
 
 
 def reset() -> None:

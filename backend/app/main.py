@@ -1,6 +1,7 @@
-"""EGX Intelligence API. Paper trading only: nothing in this service can send an order to a broker.
+"""EGX Intelligence API. Trading here is on paper, with one exception that is fenced off:
 
-The owner's real brokerage account can be looked at (app/broker.py), never traded."""
+the owner of the brokerage account can look at it (app/broker.py) and can send a real order
+they approved themselves (app/real_orders.py). Nothing else in this service reaches a broker."""
 from __future__ import annotations
 
 import csv
@@ -20,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, broker, orders, paper
+from . import assistant, broker, orders, paper, real_orders
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -191,6 +192,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     async def _assistant_blocked(_: Request, exc: assistant.Blocked):
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
+    @api.exception_handler(real_orders.OrderError)
     @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)
     @api.exception_handler(DataError)
@@ -233,15 +235,20 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def status(core: App = Depends(get_core)):
         core.store.warm(gets=[("settings", "fees")], lists=["instruments", "bars"])
         real = broker.access(core)
+        live = real_orders.menu_state(core)
         return {
             "trading_mode": "paper",
-            "live_trading_enabled": False,
+            "live_trading_enabled": bool(settings.live_trading_enabled),
             "broker_connected": False,
-            "broker_note": ("Younit is connected for market data, and this sign-in can look at the real brokerage account. "
-                            "Both are read-only: this release cannot send orders to any broker." if real["allowed"]
-                            else "Younit is connected for market data only (read-only). This release cannot send orders to any broker."
-                            if younit else "Younit is not connected. This release cannot send orders to any broker."),
+            "broker_note": ("Younit is connected for market data and for the real brokerage account. Real orders are on for this "
+                            "sign-in: each one goes to the broker only after you approve it. Everything else is paper trading."
+                            if live["ready"] else
+                            "Younit is connected for market data, and this sign-in can look at the real brokerage account. "
+                            "Real orders are off, so nothing can be sent to the broker." if real["allowed"]
+                            else "Younit is connected for market data only (read-only). Nothing here can send an order to a broker."
+                            if younit else "Younit is not connected. Nothing here can send an order to a broker."),
             "real_account": real,
+            "real_orders": live,
             "provider": core.provider_status(),
             "data": core.market.status(),
             "storage": settings.store_backend,
@@ -483,6 +490,56 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         Looks only. Refused (403) for every sign-in except the ones named on the server.
         """
         return broker.view(core, fresh=fresh)
+
+    # ---- real orders: prepared here, sent only on the owner's approval -------
+    @api.get("/api/v1/real-orders")
+    def list_real_orders(core: App = Depends(get_core)):
+        """The switches, the limits and today's use of them, the proposals that wait and the orders that were sent."""
+        return real_orders.view(core)
+
+    @api.get("/api/v1/real-orders/settings")
+    def get_real_trading_settings(core: App = Depends(get_core)):
+        return real_orders.settings_view(core)
+
+    @api.put("/api/v1/real-orders/settings")
+    def put_real_trading_settings(body: real_orders.LimitsIn, core: App = Depends(get_core)):
+        """The owner's own switch and limits for real orders."""
+        return real_orders.save_limits(core, body)
+
+    @api.post("/api/v1/real-orders/check")
+    def check_real_order(body: real_orders.OrderIn, core: App = Depends(get_core)):
+        """What stands in the way of an order, without writing anything down or sending anything."""
+        return real_orders.check(core, body)
+
+    @api.post("/api/v1/real-orders", status_code=201)
+    def propose_real_order(body: real_orders.OrderIn, core: App = Depends(get_core)):
+        """Write a proposal. It is not sent: it waits for approval."""
+        return real_orders.propose(core, body, "manual")
+
+    @api.post("/api/v1/real-orders/{id}/check")
+    def check_waiting_real_order(id: str, core: App = Depends(get_core)):
+        """The last look before approving: the proposal judged as it would be on sending, with fresh figures."""
+        return real_orders.check_waiting(core, id)
+
+    @api.post("/api/v1/real-orders/{id}/approve")
+    def approve_real_order(id: str, body: real_orders.ApproveIn, core: App = Depends(get_core)):
+        """The owner's yes: the one way an order goes to the broker. Reached from the Real account page only;
+        the assistant has no tool for it."""
+        return real_orders.approve(core, id, body)
+
+    @api.post("/api/v1/real-orders/{id}/decline")
+    def decline_real_order(id: str, core: App = Depends(get_core)):
+        return real_orders.decline(core, id)
+
+    @api.post("/api/v1/real-orders/{id}/cancel")
+    def cancel_real_order(id: str, core: App = Depends(get_core)):
+        """Ask the broker to cancel an order of ours that is still open."""
+        return real_orders.cancel(core, id)
+
+    @api.post("/api/v1/real-orders/{id}/not-placed")
+    def settle_real_order(id: str, core: App = Depends(get_core)):
+        """Close an order that was in doubt, after the owner checked at the broker that it was not placed."""
+        return real_orders.not_placed(core, id)
 
     # ---- protective orders ------------------------------------------------
     @api.get("/api/v1/orders")
