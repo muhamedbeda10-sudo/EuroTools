@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import assistant
-from app.assistant_tools import TOOLS, parse, tool_specs
+from app import assistant, assistant_tools
+from app.assistant_tools import MAX_RESULT_CHARS, TOOLS, fold, library, parse, render, tool_specs
 from app.config import Settings
 from app.llm import (
     BINDING_BETA,
@@ -329,8 +329,10 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     assert run("reset_portfolio")["new_portfolio"]["starting_capital"] == "60000.00"
     assert run("audit_log", limit=5)["entries"]
     refs = run("knowledge")["references"]
-    assert refs[0]["name"] == "app-guide" and "How EGX Intelligence works" in refs[0]["title"]
+    assert refs[0]["name"] == "app-guide" and "How EGX Intelligence works" in refs[0]["title"] and refs[0]["sections"] >= 6
     assert "Accounting rules" in run("knowledge", name="app-guide")["text"]
+    assert run("knowledge", name="App-Guide.md", sections=[2])["sections"][0]["title"] == "Screens"
+    assert run("knowledge", query="fee schedule placeholder")["matches"][0]["title"] == "Accounting rules"
     assert run("open_page", page="stock", symbol="comi") == {"opened": "/stock?symbol=COMI"}
     # without the live feed the order book says so instead of failing
     tool, parsed, _ = parse("price_depth", {"symbol": "COMI"})
@@ -340,6 +342,106 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     names = {t.name for t in TOOLS}
     assert not any(word in name for name in names for word in ("account", "password", "broker"))
     assert [s["name"] for s in tool_specs()] == [t.name for t in TOOLS]
+
+
+# ---- the reference library ------------------------------------------------------------------
+def ask(**args) -> dict:
+    """One call of the `knowledge` tool, the way the agent loop makes it."""
+    tool, parsed, problem = parse("knowledge", args)
+    assert problem is None, problem
+    assert tool.label(parsed)
+    return tool.run(None, parsed)
+
+
+@pytest.fixture
+def shelf(tmp_path, monkeypatch):
+    """A library of its own in a temporary folder; the shipped one is back afterwards."""
+    monkeypatch.setattr(assistant_tools, "KNOWLEDGE_DIR", tmp_path)
+    monkeypatch.setattr(assistant_tools, "KNOWLEDGE_PART", 400)
+    library.cache_clear()
+
+    def add(name: str, text: str):
+        (tmp_path / f"{name}.md").write_text(text, encoding="utf-8")
+        library.cache_clear()
+    yield add
+    library.cache_clear()
+
+
+def test_a_long_reference_is_read_by_section(shelf):
+    filler = "كلام عام عن السوق. " * 12
+    shelf("book", "# كتاب التداول\nملخص من سطر واحد.\n\nتمهيد قصير.\n\n"
+                  f"## الفصل الأول: السيولة (Liquidity)\n{filler}\n\n## الفصل الثاني: أداة فيبوناتشي\nالمستوى الذهبي 61.8%.\n{filler}\n")
+    shelf("note", "# A short note\nWhat it covers.\n\n## Only part\nBrief.\n")
+    listed = ask()["references"]
+    assert [(r["name"], r["sections"]) for r in listed] == [("book", 3), ("note", 1)]
+    assert listed[0]["title"] == "كتاب التداول" and listed[0]["about"] == "ملخص من سطر واحد."
+    assert ask(name="note")["text"] == "## Only part\nBrief."                # short: returned whole
+    outline = ask(name="book")
+    assert "text" not in outline and [s["title"] for s in outline["outline"]] == [
+        "Overview", "الفصل الأول: السيولة (Liquidity)", "الفصل الثاني: أداة فيبوناتشي"]
+    got = ask(name="book", sections=[3, 1, 3])
+    assert [s["section"] for s in got["sections"]] == [3, 1] and "61.8%" in got["sections"][0]["text"]
+    assert "not_returned" not in got
+    crowded = ask(name="book", sections=[2, 3, 1])                           # more than one answer holds
+    assert [s["section"] for s in crowded["sections"]] == [2] and crowded["not_returned"]["sections"] == [3, 1]
+    for bad in ({"name": "book", "sections": [4]}, {"name": "missing"}, {"sections": [1]}):
+        tool, parsed, _ = parse("knowledge", bad)
+        content, failed = assistant._execute(None, tool, parsed)
+        assert failed and "error" in content
+    assert parse("knowledge", {"name": "book", "sections": [0]})[2]             # refused before it runs
+
+
+def test_an_oversized_section_is_cut_at_blank_lines(shelf):
+    blocks = [f"فقرة رقم {n}. " + "نص " * 40 for n in range(1, 8)]
+    shelf("long", "# Long\nOne heading only.\n\n## Big\n" + "\n\n".join(blocks) + "\n\n" + "x" * 900)
+    ref = library()[0]
+    assert len(ref.sections) > 3 and all(len(text) <= 400 for _, text in ref.sections)
+    assert ref.sections[0][0] == "Big" and ref.sections[1][0] == "Big (continued 2)"
+    assert "".join(text for _, text in ref.sections).count("فقرة رقم") == 7      # nothing is lost
+    assert "".join(text for _, text in ref.sections).count("x") == 900
+
+
+def test_search_finds_arabic_and_english_however_they_are_typed(shelf):
+    shelf("book", "# كتاب\nوصف.\n\n## السيولة (Liquidity)\nالسيولة الشرائية فوق القمم.\n\n"
+                  "## أداة فيبوناتشي (Fibonacci)\nالمستوى الذهبي ٦١٫٨٪ منطقة مثالية. وتُذكر السيولة هنا مرة واحدة.\n\n"
+                  "## الأوردر بلوك (Order Block)\nآخر شمعة معاكسة قبل الحركة القوية.\n")
+    shelf("guide", "# Guide\nAbout the app.\n\n## Fees\nThe fee schedule and its lines.\n")
+    top = lambda **a: [(m["name"], m["section"]) for m in ask(**a)["matches"]]  # noqa: E731
+    assert top(query="السيولة") == [("book", 1), ("book", 2)]                  # a heading counts for more than a mention
+    assert top(query="سيوله")[0] == ("book", 1)                                # no "the", ta marbuta as ha
+    assert top(query="الاوردر بلوك") == [("book", 3)] == top(query="ORDER block") == top(query="بالأوردر")
+    assert top(query="فِيبُونَاتْشِي") == [("book", 2)] == top(query="61.8")       # vowel marks, Arabic digits
+    assert top(query="fee schedule") == [("guide", 1)]
+    assert top(query="السيولة", name="guide") == [] and "No section" in ask(query="zzz")["note"]
+    assert top(query="ما هو ال what is the") == []                             # filler words alone find nothing
+    assert ask(query="الذهبي")["matches"][0]["mentions"].startswith("المستوى الذهبي")
+    assert fold("الأَوَّلِيّة ىٰ") == "الاوليه ي" and fold("ﻻ RSI") == "لا rsi"
+
+
+def test_the_shipped_library_can_all_be_read():
+    library.cache_clear()
+    refs = library()
+    assert refs and refs[0].name == "app-guide"
+    for ref in refs:
+        assert ref.name == ref.name.lower() and ref.name.replace("-", "").isalnum() and ref.name.isascii()
+        assert ref.title and ref.about and ref.sections, ref.name
+        assert len({heading for heading, _ in ref.sections}) == len(ref.sections), f"{ref.name}: two sections share a heading"
+        for n in range(1, len(ref.sections) + 1):                              # every section fits in one answer
+            text = render(ask(name=ref.name, sections=[n]))
+            assert "too_large" not in text and len(text) <= MAX_RESULT_CHARS, f"{ref.name} section {n}"
+        assert "too_large" not in render(ask(name=ref.name))
+    assert "too_large" not in render(ask())
+
+
+def test_the_instructions_list_the_library(tmp_path):
+    prompt = assistant.system_prompt()
+    assert prompt == assistant.system_prompt() and "{library}" not in prompt   # fixed, so the cached prefix holds
+    for ref in library():
+        assert f"`{ref.name}`" in prompt and ref.title in prompt
+    script = Script({"say": "ok"})
+    with app_with(tmp_path, script) as c:
+        say(c, new_chat(c), "hello")
+    assert script.seen[0]["system"] == prompt
 
 
 # ---- the model wrapper ----------------------------------------------------------------------

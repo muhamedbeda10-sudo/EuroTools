@@ -141,8 +141,13 @@ settings). It has no tool for sign-in accounts or passwords, and none for real o
   assistant act inside the limits. Each review is a stored conversation. It runs only while the app is open in
   a browser; with anything less than full access it looks and reports only.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
-  description on the second). The assistant lists and reads them through its `knowledge` tool. Add a file to
-  teach it something; no code change is needed.
+  description on the second, then the text under `## ` headings). `app-guide` describes the app; any other
+  file is one of the owner's trading references. The assistant's instructions list every reference, and its `knowledge` tool reads them: the outline of a
+  reference, chosen sections by number, or a search for words in Arabic or English (spelling variants and
+  vowel marks are ignored). It is told to answer questions of method from these references, in their terms,
+  and to apply them to what the app has: daily candles, long-only paper trades, alerts instead of pending
+  orders. Add a file to teach it something; no code change is needed. A section longer than one answer holds
+  (24,000 characters) is cut at blank lines, so keep one topic per `## ` heading.
 - Try it locally without a key or any cost: `uvicorn e2e_assistant:app` runs the real API with a stand-in model.
 
 ## Protective orders
