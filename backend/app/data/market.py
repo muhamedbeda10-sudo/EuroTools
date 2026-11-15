@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import csv
 import io
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from . import sample
-from .calendar import cairo_now, trading_days_between
+from .calendar import cairo_now, market_open, trading_days_between
 
 SEED_FILE = Path(__file__).resolve().parent.parent.parent / "seed" / "egx_instruments.csv"
 STALE_AFTER_TRADING_DAYS = 2
@@ -21,6 +22,9 @@ class DataError(ValueError):
 
 MAX_CSV_ROWS = 6000
 UNCLASSIFIED = "Unclassified"
+# A page opens with several requests at once. The first one builds the price tables; the others
+# wait for it and reuse them instead of each doing the same work side by side.
+BUILD_LOCK = threading.RLock()
 
 
 def seed_instruments() -> list[dict]:
@@ -40,14 +44,17 @@ class MarketData:
     """
 
     def __init__(self, store, cache: dict, *, data_version: int, sample: bool, today: date | None = None,
-                 feed: dict | None = None):
+                 feed: dict | None = None, now: datetime | None = None):
         self.store = store
         self.cache = cache
         self.data_version = data_version
         self.feed = feed  # Feed.load() state from the shared Younit cache, or None
         # Synthetic prices are never mixed with a real feed.
         self.sample = sample and feed is None
-        self.today = today or cairo_now().date()
+        self.now = now or cairo_now()
+        self.today = today or self.now.date()
+        # A price is "live" only while a session is actually running.
+        self.open = self.today == self.now.date() and market_open(self.now)
 
     # ---- instruments -----------------------------------------------------
     def instruments(self, include_indices: bool = False) -> list[dict]:
@@ -62,25 +69,33 @@ class MarketData:
     # ---- bars ------------------------------------------------------------
     def _load(self) -> None:
         key = (self.data_version, self.today.isoformat(), self.sample,
-               (self.feed["version"], self.feed.get("live_ts")) if self.feed else None)
+               (self.feed["version"], self.feed.get("live_ts")) if self.feed else None, self.open)
         if self.cache.get("key") == key:
             return
+        with BUILD_LOCK:
+            if self.cache.get("key") != key:
+                self._build(key)
+
+    def _build(self, key: tuple) -> None:
         custom = self.store.list("instruments")
         if self.feed is not None:
             # The feed defines which stocks exist. It carries no sector, so the seed
             # list's classification is used where the symbol is known.
             sector = {i["symbol"]: i["sector"] for i in _SEED if i["type"] == "stock"}
             sector.update(((self.feed.get("live") or {}).get("sectors")) or {})  # the exchange's own, when the feed sent it
+            # A stock that left the feed's list stays known (marked `listed: False`): it may still be held.
             base = [{"symbol": i["symbol"], "name": i["name"], "type": "stock",
-                     "sector": sector.get(i["symbol"], UNCLASSIFIED)} for i in self.feed["instruments"]]
+                     "sector": sector.get(i["symbol"], UNCLASSIFIED), **({} if i.get("listed", True) else {"listed": False})}
+                    for i in self.feed["instruments"]]
         else:
             base = list(_SEED)
         listed = {i["symbol"] for i in base}
         instruments = sorted(base + [c for c in custom if c["symbol"] not in listed], key=lambda i: i["symbol"])
         frames: dict[str, pd.DataFrame] = {}
         sources: dict[str, str] = {}
-        settled: dict[str, pd.DataFrame] = {}  # history without today's unfinished session
+        watermark: dict[str, pd.Timestamp] = {}  # per stock: the last session whose bar is final
         live_symbols: set[str] = set()
+        snapshot_symbols: set[str] = set()  # today's bar comes from a price snapshot, live or not
 
         def frame(rows) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
@@ -95,13 +110,17 @@ class MarketData:
             live = self.feed.get("live") or {}
             live_quotes = live.get("quotes", {}) if live.get("date") == self.today.isoformat() else {}
             stamp = pd.Timestamp(self.today)
+            marks = self.feed.get("settled_until") or {}
             for symbol, df in self.feed["frames"].items():  # built once per server instance, shared by reference
                 if symbol in imported:
                     continue
-                settled[symbol] = df
+                # Without a record of when it was read, only days before today are taken as final.
+                mark = pd.Timestamp(marks[symbol]) if symbol in marks else stamp - pd.Timedelta(days=1)
+                watermark[symbol] = mark
                 q = live_quotes.get(symbol)
-                if q and len(df) and stamp >= df.index[-1]:
-                    # Today's session so far, as one bar on top of the settled history.
+                if q and len(df) and mark < stamp and stamp >= df.index[-1]:
+                    # Today's session so far, as one bar on top of the settled history. Once the final
+                    # bar has been read after the close (mark == today) the snapshot is no longer used.
                     last, opened, high, low, volume = q
                     if stamp == df.index[-1]:
                         row = df.iloc[-1]
@@ -111,29 +130,59 @@ class MarketData:
                     df = pd.concat([df, pd.DataFrame(
                         {"open": opened, "high": high, "low": low, "close": last, "volume": volume}, index=[stamp])])
                     df.index.name = "date"
-                    live_symbols.add(symbol)
+                    snapshot_symbols.add(symbol)
+                    if self.open:
+                        live_symbols.add(symbol)
                 frames[symbol], sources[symbol] = df, "younit"
         for symbol, rows in imported.items():
             frames[symbol], sources[symbol] = frame(rows), "csv"
+        for symbol, df in frames.items():  # imported and sample history is final as far as it reaches
+            if symbol not in watermark and len(df):
+                watermark[symbol] = df.index[-1]
         self.cache.clear()
         live_doc = (self.feed or {}).get("live") or {}
         self.cache.update(key=key, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
-                          frames=frames, sources=sources, settled=settled, live_symbols=live_symbols,
-                          live_as_of=live_doc.get("ts") if live_symbols else None,
+                          frames=frames, sources=sources, settled={}, watermark=watermark, live_symbols=live_symbols,
+                          snapshot_symbols=snapshot_symbols,
+                          live_as_of=live_doc.get("ts") if snapshot_symbols else None,
                           shared_only=self.feed is not None and not imported and not custom,
                           indices=[{**i, "as_of": live_doc.get("ts"), "live": live_doc.get("date") == self.today.isoformat()}
                                    for i in live_doc.get("indices") or []])
 
     def bars(self, symbol: str, *, settled: bool = False) -> pd.DataFrame | None:
-        """Price history. `settled=True` leaves out today's unfinished session (for backtests and signals)."""
+        """Price history. `settled=True` keeps completed sessions only: a bar whose session is still
+        running (or was read before it closed) is left out. Backtests, signals and automatic trades use it."""
         self._load()
-        if settled and symbol in self.cache["live_symbols"]:
-            return self.cache["settled"].get(symbol)
-        return self.cache["frames"].get(symbol)
+        df = self.cache["frames"].get(symbol)
+        if not settled or df is None:
+            return df
+        done = self.cache["settled"]
+        if symbol not in done:
+            mark = self.cache["watermark"].get(symbol)
+            done[symbol] = df if mark is None or not len(df) or df.index[-1] <= mark else df[df.index <= mark]
+        return done[symbol]
+
+    def settled_until(self, symbol: str) -> pd.Timestamp | None:
+        """The last session known to be final for this stock, whether or not it traded that day."""
+        self._load()
+        return self.cache["watermark"].get(symbol)
+
+    def latest_settled(self) -> pd.Timestamp | None:
+        """The most recent completed session any stock has a bar for."""
+        self._load()
+        if "latest_settled" not in self.cache:
+            dates = [df.index[-1] for s in self.cache["frames"] if (df := self.bars(s, settled=True)) is not None and len(df)]
+            self.cache["latest_settled"] = max(dates) if dates else None
+        return self.cache["latest_settled"]
 
     def is_live(self, symbol: str) -> bool:
         self._load()
         return symbol in self.cache["live_symbols"]
+
+    def from_snapshot(self, symbol: str) -> bool:
+        """True when today's bar is a price snapshot rather than the session's final bar."""
+        self._load()
+        return symbol in self.cache["snapshot_symbols"]
 
     def source(self, symbol: str) -> str | None:
         self._load()
@@ -166,9 +215,11 @@ class MarketData:
         if missing:
             raise DataError(f"missing column(s): {', '.join(missing)}. Expected date,open,high,low,close,volume")
         seen: dict[str, tuple] = {}
-        for n, row in enumerate(reader, start=2):
+        lines = list(reader)
+        fmt = _date_format([str(row.get(cols["date"]) or "").strip() for row in lines])
+        for n, row in enumerate(lines, start=2):
             try:
-                d = _parse_date(row[cols["date"]])
+                d = datetime.strptime(str(row[cols["date"]]).strip(), fmt).date()
                 o, h, low, c = (float(str(row[cols[k]]).replace(",", "")) for k in ("open", "high", "low", "close"))
                 v = float(str(row.get(cols.get("volume", ""), 0) or 0).replace(",", ""))
             except (ValueError, TypeError, KeyError) as exc:
@@ -221,11 +272,45 @@ class MarketData:
         }
 
 
-def _parse_date(text: str) -> date:
-    text = str(text).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y", "%Y%m%d"):
+UNAMBIGUOUS_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d", "%d-%m-%Y")
+DAY_FIRST, MONTH_FIRST = "%d/%m/%Y", "%m/%d/%Y"
+
+
+def _date_format(values: list[str]) -> str:
+    """The one date format every row of the file is written in.
+
+    Dates are never guessed row by row: 03/04/2025 would be read as 3 April on one
+    line and 4 March on another. A file that fits both day/month and month/day is
+    refused rather than imported on a coin toss.
+    """
+    def fits(fmt: str) -> bool:
         try:
-            return datetime.strptime(text, fmt).date()
+            for v in values:
+                datetime.strptime(v, fmt)
         except ValueError:
-            continue
-    raise ValueError(f"unrecognised date {text!r} (use YYYY-MM-DD)")
+            return False
+        return True
+
+    if not values:
+        raise DataError("need at least 2 rows of data")
+    for fmt in UNAMBIGUOUS_FORMATS:
+        if fits(fmt):
+            return fmt
+    day_first, month_first = fits(DAY_FIRST), fits(MONTH_FIRST)
+    if day_first and month_first:
+        raise DataError("the dates could be day/month or month/day (e.g. 03/04/2025); write them as YYYY-MM-DD")
+    if day_first or month_first:
+        return DAY_FIRST if day_first else MONTH_FIRST
+    # Name the first line that fits none of the formats the rest of the file could be in.
+    formats = [f for f in (*UNAMBIGUOUS_FORMATS, DAY_FIRST, MONTH_FIRST)]
+    for n, v in enumerate(values, start=2):
+        ok = []
+        for fmt in formats:
+            try:
+                datetime.strptime(v, fmt)
+                ok.append(fmt)
+            except ValueError:
+                pass
+        if not ok:
+            raise DataError(f"line {n}: unrecognised date {v!r} (use YYYY-MM-DD)")
+    raise DataError("the dates are not all written the same way; use YYYY-MM-DD on every line")

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { egp, int, num, pct } from "@/lib/format";
+import { egp, int, num, pct, price } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { CompareStrategies, PaperRuns } from "@/components/Automation";
 import { LinesChart } from "@/components/Charts";
@@ -45,7 +45,7 @@ function Result({ r }: { r: any }) {
               <thead><tr><th>Stock</th><th>Qty</th><th>Entry date</th><th>Entry price</th><th>Last price</th><th>Gross P/L</th><th>Net P/L est.</th></tr></thead>
               <tbody>
                 {r.open_positions.map((p: any) => (
-                  <tr key={p.symbol}><td>{p.symbol}</td><td>{int(p.qty)}</td><td>{p.entry_date}</td><td>{num(p.entry_price)}</td><td>{num(p.last_price)}</td>
+                  <tr key={p.symbol}><td>{p.symbol}</td><td>{int(p.qty)}</td><td>{p.entry_date}</td><td>{price(p.entry_price)}</td><td>{price(p.last_price)}</td>
                     <td className={p.gross_unrealized >= 0 ? "up" : "down"}>{num(p.gross_unrealized)}</td>
                     <td className={p.net_unrealized_est >= 0 ? "up" : "down"}>{num(p.net_unrealized_est)}</td></tr>
                 ))}
@@ -56,14 +56,14 @@ function Result({ r }: { r: any }) {
       )}
 
       <div className="card section">
-        <h2>Simulated trades ({r.trades.length})</h2>
+        <h2>Simulated trades ({r.trades_total > r.trades.length ? `latest ${int(r.trades.length)} of ${int(r.trades_total)}` : r.trades.length})</h2>
         {r.trades.length ? (
           <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
             <table>
               <thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th className="l">Exit reason</th><th>Gross P/L</th><th>Fees</th><th>Net P/L</th><th>Net %</th></tr></thead>
               <tbody>
                 {r.trades.map((t: any, i: number) => (
-                  <tr key={i}><td>{t.symbol}</td><td>{int(t.qty)}</td><td>{t.entry_date}</td><td>{num(t.entry_price)}</td><td>{t.exit_date}</td><td>{num(t.exit_price)}</td>
+                  <tr key={i}><td>{t.symbol}</td><td>{int(t.qty)}</td><td>{t.entry_date}</td><td>{price(t.entry_price)}</td><td>{t.exit_date}</td><td>{price(t.exit_price)}</td>
                     <td className="l">{t.exit_reason.replace("_", " ")}</td>
                     <td className={t.gross_pnl >= 0 ? "up" : "down"}>{num(t.gross_pnl)}</td><td>{num(t.fees)}</td>
                     <td className={t.net_pnl >= 0 ? "up" : "down"}>{num(t.net_pnl)}</td><td><Chg v={t.return_pct} /></td></tr>

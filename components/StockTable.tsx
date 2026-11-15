@@ -56,7 +56,9 @@ export default function StockTable({ rows, onChange, empty = "No stocks to show.
               <td><div className="sym"><Link href={`/stock?symbol=${r.symbol}`}>{r.symbol}</Link><span title={r.name}>{r.name}</span></div></td>
               <td className="l muted">{r.sector} <SourceTag source={r.source} /></td>
               <td><LiveLast symbol={r.symbol} last={r.last} /></td>
-              <td><LiveChg symbol={r.symbol} value={r.change_pct} /></td>
+              <td>{r.current === false
+                ? <span className="muted" title={`Did not trade in the latest session. Last traded ${r.as_of}.`}>last {String(r.as_of).slice(5)}</span>
+                : <LiveChg symbol={r.symbol} value={r.change_pct} />}</td>
               <td><Chg v={r.week_pct} /></td>
               <td><Chg v={r.month_pct} /></td>
               <td><LiveVolume symbol={r.symbol} value={r.volume} /></td>

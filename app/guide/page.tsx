@@ -69,6 +69,34 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <p>Use the <Link href="/journal">Journal</Link> to write down why you expect a strategy to work before you see the result.</p>
     </>
   ) },
+  { id: "automatic", title: "How automatic paper trading decides", body: (
+    <>
+      <p>A run follows one strategy with its own slice of the paper cash. It uses completed sessions only, with the same rules and arithmetic as the simulator: a signal read at a close is filled at the next open, with slippage and fees; stops and targets are checked against each day&apos;s low and high.</p>
+      <ul>
+        <li><strong>A session is handled when it is complete.</strong> The day&apos;s final bars are read once after the close. Until every stock a run follows has its final bar, the run waits, so a stop is never skipped because one price arrived late. A stock whose data stays several sessions behind is set aside with a note.</li>
+        <li><strong>The ledger is the record.</strong> Every fill is an ordinary entry in <Link href="/trades">Trades</Link>. If you sell a run&apos;s shares by hand they leave the run at what it paid for them. A run does not buy a stock the portfolio already holds outside that run, so one stock never has two owners.</li>
+        <li><strong>Capital is set aside.</strong> Cash promised to one run cannot be promised to another.</li>
+        <li><strong>Stopping is final.</strong> A stopped run keeps the result it had at that moment; its shares stay in the portfolio as ordinary holdings.</li>
+      </ul>
+    </>
+  ) },
+  { id: "limits", title: "What the simulation leaves out", body: (
+    <>
+      <p>Every paper result here is a simplification. Know these before trusting a number:</p>
+      <ul>
+        <li><strong>Corporate actions.</strong> Splits, bonus shares and dividends are not handled: a split looks like a crash and can trigger a stop; dividends are not credited.</li>
+        <li><strong>Closing price.</strong> The last traded price is used as the close. The official EGX close is a volume-weighted average and can differ slightly.</li>
+        <li><strong>Liquidity.</strong> Orders fill in full at the open or at the stop price. Real orders in thin stocks may fill partly, later, or not at all; price limits and trading halts are not modelled, and slippage is a flat percentage.</li>
+        <li><strong>Same-day exits.</strong> A stop or target can sell on the day of the purchase. On EGX that is allowed only for stocks approved for same-day trading.</li>
+        <li><strong>Which stocks.</strong> Tests run on the stocks listed today, about three years back. Companies that were delisted are missing, which flatters the past.</li>
+        <li><strong>When signals outnumber free positions,</strong> stocks are taken in alphabetical order.</li>
+        <li><strong>Calendar.</strong> Sunday to Thursday; public holidays are not marked.</li>
+        <li><strong>Benchmark.</strong> The data feed has no index history, so results are compared with holding the same stocks, not with EGX 30.</li>
+        <li><strong>Fees.</strong> The schedule in <Link href="/settings">Settings</Link> is a placeholder until you check it against your broker&apos;s tariff.</li>
+        <li><strong>Manual paper trades</strong> fill at the stock&apos;s latest price and are dated with the market&apos;s current session.</li>
+      </ul>
+    </>
+  ) },
 ];
 
 export default function Guide() {

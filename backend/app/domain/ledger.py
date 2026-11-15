@@ -74,8 +74,11 @@ def replay(transactions: list[dict]) -> LedgerState:
                 if qty > pos.qty:
                     raise LedgerError(f"ledger corrupt: sell of {qty} {tx['symbol']} exceeds holding {pos.qty}")
                 avg = pos.avg_price
-                cost_out = pos.cost * qty / pos.qty
-                buy_fees_out = pos.buy_fees * qty / pos.qty
+                if qty == pos.qty:  # closing the position releases exactly what is left
+                    cost_out, buy_fees_out = pos.cost, pos.buy_fees
+                else:  # rounded per sale, so the rows on screen add up to the totals
+                    cost_out = money(pos.cost * qty / pos.qty)
+                    buy_fees_out = money(pos.buy_fees * qty / pos.qty)
                 realized_gross = gross - cost_out
                 realized_net = realized_gross - buy_fees_out - fees
                 pos.qty -= qty

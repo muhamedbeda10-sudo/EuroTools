@@ -50,7 +50,9 @@ function HoldingRow({ h }: { h: any }) {
   return (
     <tr>
       <td><div className="sym"><Link href={`/stock?symbol=${h.symbol}`}>{h.symbol}</Link><span title={h.name}>{h.name}</span></div></td>
-      <td className="l muted">{h.sector} <SourceTag source={h.source} live={!!tick} /></td><td>{int(h.qty)}</td><td>{price(h.avg_price)}</td>
+      <td className="l muted">{h.sector} {h.priced === false
+        ? <span className="badge warn" title="No market price is available: the holding is carried at what was paid for it">at cost</span>
+        : <SourceTag source={h.source} live={!!tick} />}</td><td>{int(h.qty)}</td><td>{price(h.avg_price)}</td>
       <td><Flash value={last}>{price(last)}</Flash></td>
       <td>{egp(value)}</td><td>{num(h.weight_pct)}%</td>
       <td className={gross > 0 ? "up" : gross < 0 ? "down" : ""}>{egp(gross)}</td>

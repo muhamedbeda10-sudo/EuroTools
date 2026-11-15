@@ -1,11 +1,12 @@
 """Order-book ("price depth") parsing.
 
 The feed sends each side of the book as one text field whose layout is not
-documented. `parse_side` accepts JSON or delimited text and identifies, per
-level, which number is the price (the one near the last traded price), which is
-the size (the largest) and which is the number of orders (a small whole number).
-When a side cannot be read, the caller is given a short sample of the raw text
-so the layout can be recognised and handled properly.
+documented. `parse_side` accepts JSON or delimited text. Which column is the
+price, which the size and which the number of orders is decided ONCE for the
+whole side (a book is a table: every level has the same layout), not level by
+level, so a small size can never be mistaken for a price. When a side cannot
+be read, the caller is given a short sample of the raw text so the layout can
+be recognised and handled properly.
 """
 from __future__ import annotations
 
@@ -13,32 +14,69 @@ import json
 import re
 
 NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+GROUPED = re.compile(r"(?<![\d.,])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])")  # 1,200 or 12,500.5
+OTHER_SEPARATOR = re.compile(r"\d[^\d.,-]+-?\d")  # two numbers with something other than a comma between them
 RECORD_SEPARATORS = ["\n", "|", ";", "#", "~", "^"]
 MAX_LEVELS = 200
+MAX_DISTANCE = 0.6  # a book price further than this from the last trade is not a price
 
 
-def _level(numbers: list[float], near: float | None) -> dict | None:
-    numbers = [n for n in numbers if n > 0]
-    if len(numbers) < 2:
+def _tokens(part: str) -> list[str]:
+    """The numbers of one record, as written. "1,200" is one number when the fields are not comma-separated."""
+    if OTHER_SEPARATOR.search(part):
+        part = GROUPED.sub(lambda m: m.group(0).replace(",", ""), part)
+    return [t for t in NUMBER.findall(part) if float(t) > 0]
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def _roles(rows: list[list[str]], near: float | None) -> list[dict] | None:
+    """Read a side as a table: find the price, size and order-count columns once, for every level."""
+    width = len(rows[0]) if rows else 0
+    if width < 2 or any(len(r) != width for r in rows):
         return None
-    if near:
-        price = min(numbers, key=lambda n: abs(n - near) / near)
-        if abs(price - near) / near > 0.6:
-            return None
-    else:
-        price = min(numbers)
-    rest = list(numbers)
-    rest.remove(price)
-    size = max(rest)
-    rest.remove(size)
-    orders = next((int(n) for n in rest if n == int(n) and n < 100_000), None)
-    return {"price": price, "size": size, "orders": orders}
+    cols = [[float(r[j]) for r in rows] for j in range(width)]
+
+    def distance(j: int) -> float:
+        return _median([abs(v - near) / near for v in cols[j]]) if near else _median(cols[j])
+
+    candidates = [j for j in range(width)
+                  if not near or all(abs(v - near) / near <= MAX_DISTANCE for v in cols[j])]
+    if not candidates:
+        return None
+    # A price is written with decimals, differs on every level, and sits near the last trade: in that order.
+    price = max(candidates, key=lambda j: (sum("." in r[j] for r in rows) * 2 >= len(rows),
+                                           len(set(cols[j])) == len(rows), -distance(j)))
+    rest = [j for j in range(width) if j != price]
+    size = max(rest, key=lambda j: _median(cols[j]))
+    orders = next((j for j in rest if j != size and all(v == int(v) and v < 100_000 for v in cols[j])), None)
+    return [{"price": cols[price][i], "size": cols[size][i], "orders": int(cols[orders][i]) if orders is not None else None}
+            for i in range(len(rows))]
+
+
+def _level(tokens: list[str], near: float | None) -> dict | None:
+    """One level on its own, for a side whose records do not all have the same shape."""
+    levels = _roles([tokens], near) if len(tokens) >= 2 else None
+    return levels[0] if levels else None
+
+
+def _read(rows: list[list[str]], near: float | None) -> list[dict]:
+    rows = [r for r in rows if len(r) >= 2]
+    if not rows:
+        return []
+    table = _roles(rows, near)
+    if table is not None:
+        return table
+    return [lv for r in rows if (lv := _level(r, near))]
 
 
 def _from_json(value, near: float | None) -> list[dict]:
     if isinstance(value, dict):
         value = next((v for v in value.values() if isinstance(v, list)), [])
-    out = []
+    out, rows = [], []
     for item in value if isinstance(value, list) else []:
         if isinstance(item, dict):
             lowered = {str(k).lower(): v for k, v in item.items()}
@@ -58,16 +96,15 @@ def _from_json(value, near: float | None) -> list[dict]:
                 continue
             item = list(item.values())
         if isinstance(item, (list, tuple)):
-            numbers = []
+            tokens = []
             for v in item:
                 try:
-                    numbers.append(float(v))
+                    if float(v) > 0:
+                        tokens.append(repr(float(v)) if isinstance(v, float) else str(v).strip())
                 except (TypeError, ValueError):
                     pass
-            level = _level(numbers, near)
-            if level:
-                out.append(level)
-    return out
+            rows.append(tokens)
+    return out or _read(rows, near)
 
 
 def parse_side(text: str | None, near: float | None = None) -> list[dict]:
@@ -86,14 +123,14 @@ def parse_side(text: str | None, near: float | None = None) -> list[dict]:
     for sep in RECORD_SEPARATORS:
         if sep not in text:
             continue
-        levels = [lv for part in text.split(sep) if (lv := _level([float(n) for n in NUMBER.findall(part)], near))]
+        levels = _read([_tokens(part) for part in text.split(sep)], near)
         if len(levels) > len(best):
             best = levels
     if not best:  # a single level, or one flat run of numbers: read it in threes, then in pairs
-        numbers = [float(n) for n in NUMBER.findall(text)]
+        numbers = _tokens(text)
         for width in (3, 2):
             if len(numbers) >= width and len(numbers) % width == 0:
-                levels = [lv for i in range(0, len(numbers), width) if (lv := _level(numbers[i:i + width], near))]
+                levels = _read([numbers[i:i + width] for i in range(0, len(numbers), width)], near)
                 if len(levels) == len(numbers) // width:
                     best = levels
                     break

@@ -67,7 +67,7 @@ ALERT_KINDS = {
     "price_below": "Price falls to or below",
     "change_pct_above": "Day change is at or above (%)",
     "change_pct_below": "Day change is at or below (%)",
-    "volume_ratio_above": "Volume is at least this many times the 20-day average",
+    "volume_ratio_above": "Volume is at least this many times the average of the 20 sessions before",
     "rsi_above": "RSI (14) is at or above",
     "rsi_below": "RSI (14) is at or below",
     "strategy_signal": "A saved strategy gives a signal",
@@ -116,6 +116,10 @@ class Extras:
             raise NotFound(f"unknown symbol(s): {', '.join(unknown)}")
 
     def _save(self, coll: str, entity: str, body: dict, id: str | None) -> dict:
+        from .services import retry_conflict
+        return retry_conflict(self._save_once)(coll, entity, body, id)
+
+    def _save_once(self, coll: str, entity: str, body: dict, id: str | None) -> dict:
         from .services import NotFound, now_iso
         with self.store.transaction():
             before = self.store.get(coll, id) if id else None
@@ -187,8 +191,7 @@ class Extras:
         if body.strategy_id and self.store.get("strategies", body.strategy_id) is None:
             raise NotFound("strategy not found")
         doc = body.model_dump(mode="json")
-        if id is None:
-            doc["last_triggered_on"] = None
+        doc["last_triggered_on"] = None  # a new or edited alert is armed again straight away
         return self._save("alerts", "alert", doc, id)
 
     def delete_alert(self, id: str) -> None:
@@ -214,16 +217,19 @@ class Extras:
             seen = q["last"]
             hit = seen >= value if kind == "price_above" else seen <= value
             return hit, seen, f"{symbol} is at {seen:g}, {'at or above' if kind == 'price_above' else 'at or below'} {value:g}"
+        if kind in ("change_pct_above", "change_pct_below", "volume_ratio_above") and not q.get("current"):
+            return False, None, ""  # it did not trade in the latest session: an old bar is not "today"
         if kind in ("change_pct_above", "change_pct_below"):
             seen = q.get("change_pct")
-            if seen is None:
+            if seen is None or seen != seen:
                 return False, None, ""
             hit = seen >= value if kind == "change_pct_above" else seen <= value
             return hit, seen, f"{symbol} is {seen:+.2f}% today (level {value:+g}%)"
         if kind == "volume_ratio_above":
-            avg = q.get("avg_volume_20") or 0
-            seen = q["volume"] / avg if avg else None
-            return (seen is not None and seen >= value), seen, f"{symbol} volume is {seen or 0:.1f}x its 20-day average (level {value:g}x)"
+            avg = q.get("avg_volume_20")
+            seen = q["volume"] / avg if avg and avg == avg else None
+            return ((seen is not None and seen >= value), seen,
+                    f"{symbol} volume is {seen or 0:.1f}x the average of the 20 sessions before (level {value:g}x)")
         df = self.core.market.bars(symbol)
         if df is None or len(df) < 20:
             return False, None, ""
@@ -234,24 +240,32 @@ class Extras:
         return hit, seen, f"{symbol} RSI is {seen:.0f} ({'at or above' if kind == 'rsi_above' else 'at or below'} {value:g})"
 
     def check_alerts(self) -> dict:
-        """Evaluate every active alert. An alert fires at most once per session day."""
+        """Evaluate every active alert. An alert fires at most once per trading session.
+
+        "Once" is counted by the session the observed price belongs to, not by the
+        calendar: Thursday's move does not fire again on Friday, Saturday and Sunday morning.
+        """
         from .services import now_iso
         alerts = [a for a in self.store.list("alerts") if a["active"]]
         if not alerts:
             return {"triggered": [], "active": 0}
-        today = self.core.market.today.isoformat()
         table = self.core.quotes()
         quotes = {} if table.empty else {r["symbol"]: r for r in table.to_dict("records")}
         signals = self.core.active_signals() if any(a["kind"] == "strategy_signal" for a in alerts) else []
+        settled = self.core.market.latest_settled()
         fired = []
         with self.store.transaction():
             for alert in alerts:
-                if alert.get("last_triggered_on") == today:
+                if alert["kind"] == "strategy_signal":
+                    session = settled.strftime("%Y-%m-%d") if settled is not None else None
+                else:
+                    session = (quotes.get(alert["symbol"]) or {}).get("as_of")
+                if session is None or alert.get("last_triggered_on") == session:
                     continue
                 hit, seen, text = self._observe(alert, quotes, signals)
                 if not hit:
                     continue
-                alert["last_triggered_on"] = today
+                alert["last_triggered_on"] = session
                 self.store.put("alerts", alert["id"], alert)
                 fired.append(self.store.append("alert_events", {
                     "ts": now_iso(), "alert_id": alert["id"], "kind": alert["kind"], "symbol": alert["symbol"],

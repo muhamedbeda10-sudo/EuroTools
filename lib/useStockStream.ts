@@ -18,6 +18,7 @@ export function useStockStream(symbol: string, enabled: boolean) {
   const [state, setState] = useState<StreamState>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [at, setAt] = useState<Date | null>(null);
+  const [open, setOpen] = useState(true);   // is a session running, as the server sees it
 
   useEffect(() => {
     if (!enabled || !symbol) return;
@@ -62,7 +63,8 @@ export function useStockStream(symbol: string, enabled: boolean) {
                 setState("live");
                 setError(null);
               } else if (event === "hello") {
-                failures = 0;
+                // a greeting proves nothing about the feed: only real prices clear the failure count
+                setOpen(data?.market_open !== false);
               } else if (event === "failed") {
                 throw new Error(data?.detail ?? "The live stream failed.");
               } else if (event === "end") {
@@ -79,6 +81,7 @@ export function useStockStream(symbol: string, enabled: boolean) {
           }
         }
         if (failures >= 3) {
+          setTick(null);   // the last tick is not shown as if it were still arriving
           setState("failed");
           return;
         }
@@ -97,5 +100,5 @@ export function useStockStream(symbol: string, enabled: boolean) {
     };
   }, [symbol, enabled]);
 
-  return { tick, state, error, at };
+  return { tick, state, error, at, open };
 }

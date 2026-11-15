@@ -11,6 +11,7 @@ export const egp = (v?: number | null) => (missing(v) ? "—" : `EGP ${n2.format
 export const signed = (v?: number | null) => (missing(v) ? "—" : `${v > 0 ? "+" : ""}${n2.format(v)}`);
 export const pct = (v?: number | null) => (missing(v) ? "—" : `${v > 0 ? "+" : ""}${n2.format(v)}%`);
 export const tone = (v?: number | null) => (missing(v) || v === 0 ? "flat" : v > 0 ? "up" : "down");
-/** A share price: three decimals under EGP 10 (EGX quotes cheap stocks to the tenth of a piastre), two above. */
+/** A share price: three decimals under EGP 10 (EGX quotes cheap stocks to the tenth of a piastre), two above,
+ *  and a fourth only when the price really has one (a simulated fill after slippage). */
 export const price = (v?: number | null) =>
-  missing(v) ? "—" : v < 10 ? v.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : n2.format(v);
+  missing(v) ? "—" : v.toLocaleString("en-US", { minimumFractionDigits: v < 10 ? 3 : 2, maximumFractionDigits: 4 });

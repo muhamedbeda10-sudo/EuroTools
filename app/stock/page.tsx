@@ -76,7 +76,7 @@ function StockView() {
               <div className="tk">
                 <h1>{ins.symbol}</h1>
                 <span className="badge">{ins.sector}</span>
-                {t?.last ? <span className="pill live"><span className="dot" />Live</span> : <SourceTag source={q?.source} live={q?.live} />}
+                {t?.last && stream.open ? <span className="pill live"><span className="dot" />Live</span> : <SourceTag source={q?.source} live={q?.live} />}
               </div>
               <div className="co">{ins.name}</div>
               {data.has_data && (
@@ -85,7 +85,8 @@ function StockView() {
                   <span className="ccy">EGP</span>
                   <Delta v={changePct}>{change != null ? `${signed(change)} · ` : ""}{pct(changePct)}</Delta>
                   <span className="muted" style={{ fontSize: 12.5 }}>
-                    {t?.last ? `updated ${stream.at?.toLocaleTimeString() ?? ""}` : q.live ? `live as of ${q.as_of}` : `close of ${q.as_of}`}
+                    {t?.last ? (stream.open ? `updated ${stream.at?.toLocaleTimeString() ?? ""}` : "last price of the session")
+                      : q.live ? `live as of ${q.as_of}` : `close of ${q.as_of}`}
                   </span>
                 </div>
               )}

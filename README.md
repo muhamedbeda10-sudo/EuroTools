@@ -104,7 +104,33 @@ Signals are read at the close and filled at the next session's open, with slippa
 fee schedule applied. Stops and targets are checked against the day's low/high; if both are
 hit in one bar the stop is assumed first. Long-only, whole shares, daily bars.
 
+## Automatic paper trading
+
+- A run uses completed sessions only, with the same step-by-step logic and decimal arithmetic as the
+  backtester (`backend/app/paper.py` mirrors `backend/app/domain/backtest.py`; a test compares their fills).
+- A session's bars are final once history has been read after the close (15:00 Cairo). `MarketData.bars(settled=True)`
+  never returns a bar that is still forming; live snapshots are for display and manual paper trades only.
+- All active runs move through the sessions together, in date order, and only when the session is complete for
+  every stock they follow. A stock more than five sessions behind is set aside with a note.
+- The ledger is authoritative for holdings: run positions are reconciled against it on every pass. A run does not
+  buy a stock held outside it, and its capital is reserved when it starts.
+- Before a manual trade is recorded, pending sessions of the runs are processed, so their fills come first.
+
+## Concurrency
+
+- Firestore documents read in a request are written back with an `updateTime` precondition; a stale write is
+  refused (409) instead of silently overwriting. User actions retry once.
+- Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
+- The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and
+  resumes it, keeping what was already saved.
+
 ## Known limits
+
+- No corporate actions (splits, bonus shares, dividends); the close is the last trade, not the official VWAP close.
+- Fills are unlimited at the open / stop price: no partial fills, price limits or halts; flat slippage.
+- A stop or target may sell on the purchase day (EGX allows that only for approved stocks).
+- Backtests use today's listing (survivorship bias); no EGX index history, so no index benchmark with Younit.
+- When signals exceed free positions, stocks are taken alphabetically.
 
 - Accounts of the quality system and accounts created in Settings → Accounts can sign in; each one gets its own separate paper portfolio. Only an administrator sees the Accounts card.
 - The instrument list is a seed of 53 stocks; sector names should be checked against EGX.

@@ -24,8 +24,8 @@ def csv(closes, start="2025-01-01"):
     return "\n".join(rows) + "\n", [f"{d:%Y-%m-%d}" for d in days]
 
 
-def load(c, symbol, closes):
-    text, days = csv(closes)
+def load(c, symbol, closes, start="2025-01-01"):
+    text, days = csv(closes, start)
     r = c.post("/api/v1/data/bars/import", data={"symbol": symbol}, files={"file": ("x.csv", text, "text/csv")})
     assert r.status_code == 200, r.text
     return days
@@ -185,7 +185,15 @@ def test_alerts_fire_once_a_day_and_explain_themselves(c):
 
 
 def test_strategy_signal_alert(c):
-    load(c, "COMI", FLAT + UP[:1])            # the fast average crosses up on the last bar
+    from app.data.calendar import cairo_now, last_trading_days
+    # the fast average crosses up on the last bar, and that bar is the market's latest session
+    sessions = last_trading_days(cairo_now().date(), 31)
+    rows, prev = ["date,open,high,low,close,volume"], 10.0
+    for d, close in zip(sessions, FLAT + UP[:1], strict=True):
+        rows.append(f"{d},{prev},{max(prev, close) * 1.01:.4f},{min(prev, close) * 0.99:.4f},{close},1000")
+        prev = close
+    r = c.post("/api/v1/data/bars/import", data={"symbol": "COMI"}, files={"file": ("x.csv", "\n".join(rows) + "\n", "text/csv")})
+    assert r.status_code == 200, r.text
     st = c.post("/api/v1/strategies", json={"name": "Fast trend", "type": "sma_cross", "symbols": ["COMI"],
                                            "params": {"fast": 2, "slow": 5}}).json()
     c.post("/api/v1/alerts", json={"kind": "strategy_signal", "strategy_id": st["id"]})

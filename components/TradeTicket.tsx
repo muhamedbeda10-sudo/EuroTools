@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { egp, int, num } from "@/lib/format";
+import { egp, int, num, price } from "@/lib/format";
 
 /** Simulated order ticket. It writes to the paper ledger only; nothing is sent to a broker. */
 export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone?: () => void }) {
@@ -68,7 +68,10 @@ export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone
       </div>
       {preview && (
         <dl className="kv" style={{ marginBottom: 12 }}>
-          <dt>Fill price (close of {preview.trade_date})</dt><dd>{num(preview.price)}</dd>
+          <dt>Fill price (latest price, {preview.price_date})</dt><dd>{price(preview.price)}</dd>
+          {preview.price_date !== preview.trade_date && (
+            <><dt>Recorded in session</dt><dd>{preview.trade_date}</dd></>
+          )}
           <dt>Gross value</dt><dd>{egp(preview.gross)}</dd>
           {preview.fees.map((f: any) => (
             <div key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></div>

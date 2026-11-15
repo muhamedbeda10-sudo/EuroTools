@@ -14,13 +14,25 @@ def ema(s: pd.Series, n: int) -> pd.Series:
 
 
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
-    """Wilder's RSI."""
-    delta = close.diff()
-    gain = delta.clip(lower=0).ewm(alpha=1 / n, adjust=False, min_periods=n).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / n, adjust=False, min_periods=n).mean()
-    rs = gain / loss.replace(0, np.nan)
-    out = 100 - 100 / (1 + rs)
-    return out.where(loss != 0, 100.0).where(gain.notna())
+    """Wilder's RSI: the first value is the plain average of the first n changes, then his smoothing.
+
+    A series with no gains and no losses reads 50 (no momentum either way), not 100.
+    """
+    values = close.to_numpy(dtype=float)
+    out = np.full(len(values), np.nan)
+    if len(values) > n:
+        delta = np.diff(values)
+        gains, losses = np.clip(delta, 0, None), np.clip(-delta, 0, None)
+        gain, loss = gains[:n].mean(), losses[:n].mean()
+        for i in range(n, len(values)):
+            if i > n:
+                gain = (gain * (n - 1) + gains[i - 1]) / n
+                loss = (loss * (n - 1) + losses[i - 1]) / n
+            if loss == 0:
+                out[i] = 50.0 if gain == 0 else 100.0
+            else:
+                out[i] = 100 - 100 / (1 + gain / loss)
+    return pd.Series(out, index=close.index)
 
 
 def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
@@ -35,7 +47,17 @@ def resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
         return df
     rule = {"w": "W-THU", "m": "ME"}[timeframe]
     agg = df.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
-    return agg.dropna(subset=["close"])
+    # Each bar is dated with its last real session, never with a week or month end that has not come yet.
+    agg.index = df.index.to_series().resample(rule).max().reindex(agg.index)
+    agg = agg.dropna(subset=["close"])
+    agg.index.name = df.index.name
+    return agg
+
+
+def avg_volume(volume: pd.Series, n: int = 20) -> float | None:
+    """Average volume of the n sessions BEFORE the latest one, so a busy day is compared with what came before it."""
+    prior = volume.iloc[:-1].tail(n)
+    return float(prior.mean()) if len(prior) else None
 
 
 def support_resistance(df: pd.DataFrame, window: int = 60) -> dict:
@@ -84,7 +106,7 @@ def assess(df: pd.DataFrame) -> dict:
             notes.append(f"RSI {r:.0f}: neutral zone.")
     trend = "uptrend" if score >= 2 else "downtrend" if score <= -2 else "sideways"
 
-    avg_vol = vol.tail(20).mean()
+    avg_vol = avg_volume(vol)
     vol_ratio = float(vol.iloc[-1] / avg_vol) if avg_vol else None
     mom = {k: pct_change_over(close, n) for k, n in (("1w", 5), ("1m", 21), ("3m", 63), ("6m", 126))}
     hi = float(df["high"].tail(252).max())
@@ -100,7 +122,7 @@ def assess(df: pd.DataFrame) -> dict:
         mom_label = "insufficient history"
     mom_notes.append(f"{(last / hi - 1) * 100:.1f}% from the high of the last {min(len(df), 252)} sessions.")
     if vol_ratio is not None:
-        mom_notes.append(f"Latest volume is {vol_ratio:.1f}x the 20-day average.")
+        mom_notes.append(f"Latest volume is {vol_ratio:.1f}x the average of the 20 sessions before it.")
     return {
         "trend": trend,
         "technical_score": score,

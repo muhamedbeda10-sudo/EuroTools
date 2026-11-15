@@ -181,10 +181,13 @@ function RunRows({ r, open, onToggle, onChange, busy }: { r: any; open: boolean;
                     <tr key={p.symbol}><td><Link href={`/stock?symbol=${p.symbol}`}>{p.symbol}</Link></td><td>{int(p.qty)} @ {price(p.entry_price)}</td>
                       <td>{price(p.last)}</td><td className={p.gross_pnl >= 0 ? "up" : "down"}>{egp(p.gross_pnl)}</td></tr>
                   ))}</tbody></table>
+                ) : r.released?.length ? (
+                  <div className="muted">None. When it was stopped it held {r.released.map((p: any) => `${int(p.qty)} ${p.symbol}`).join(", ")}:
+                    these stay in the portfolio as ordinary holdings, and the run&apos;s result is fixed at that moment.</div>
                 ) : <div className="muted">None.</div>}
               </div>
               <div>
-                <strong>Orders it could not place</strong>
+                <strong>Notes from the run</strong>
                 {r.notes.length ? <ul style={{ margin: "4px 0", paddingLeft: 18 }} className="muted">{r.notes.map((n: string) => <li key={n}>{n}</li>)}</ul> : <div className="muted">None.</div>}
                 <p className="muted" style={{ fontSize: 12 }}>Every fill is in <Link href="/trades">Trades &amp; Transactions</Link>, marked “auto”.</p>
               </div>

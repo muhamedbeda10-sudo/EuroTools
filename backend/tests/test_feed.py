@@ -125,7 +125,7 @@ def test_refresh_then_everything_runs_on_feed_prices(env):
     c, fake = env
     r = c.post("/api/v1/data/refresh").json()
     assert r.pop("seconds") >= 0
-    assert r == {"updated": 3, "remaining": 0, "total": 3, "errors": [], "stalled": False}
+    assert r == {"updated": 3, "remaining": 0, "total": 3, "errors": [], "stalled": False, "rate_limited": False, "retry_after": None}
     s = c.get("/api/v1/status").json()
     assert s["data"]["mode"] == "younit" and s["data"]["sources"][0]["symbols"] == 3
     assert s["provider"]["refresh_due"] is False and s["provider"]["latest_bar_date"] == days(1)[0]
@@ -180,13 +180,18 @@ def test_batches_respect_the_time_budget_and_report_failures(tmp_path):
     assert feed.refresh(fake, today=date.today())["remaining"] == 0
 
 
-def test_feed_outage_is_reported_and_writes_nothing(env):
+def test_feed_outage_is_reported_and_writes_nothing(env, monkeypatch):
     c, fake = env
     c.post("/api/v1/data/refresh")
 
     def down():
         raise YounitError("cannot reach Younit (ConnectTimeout)")
     fake.snapshot = down
+    assert c.post("/api/v1/data/refresh").json()["updated"] == 0   # nothing is due: the feed is not even called
+    # a few days on, sessions have closed since the last read: the stocks are due, and the feed is down
+    import app.data.feed as feed_module
+    later = feed_module.cairo_now() + timedelta(days=4)
+    monkeypatch.setattr(feed_module, "cairo_now", lambda: later)
     r = c.post("/api/v1/data/refresh")
     assert r.status_code == 502 and "cannot reach Younit" in r.json()["detail"]
     assert len(c.get("/api/v1/stocks").json()) == 3   # yesterday's data still served
@@ -333,47 +338,74 @@ def test_a_request_reads_one_small_document_when_nothing_changed(tmp_path):
 
 # ---- live prices during the session ------------------------------------------
 def test_live_prices_sit_on_top_of_history_until_the_session_settles(tmp_path):
-    from datetime import datetime
+    from datetime import datetime, time
+
+    import pandas as pd
 
     from app.data.calendar import CAIRO
     from app.data.market import MarketData
     store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit(n=60)
     feed = Feed(StoreDocs(store))
     today = date.fromisoformat(days(1)[0])     # the latest session date in the fake history
-    feed.refresh(fake, today=today)
-    settled_close = feed.load()["frames"]["COMI"]["close"].iloc[-1]
+    stamp = pd.Timestamp(today)
 
-    def market(day=today):
-        return MarketData(store, {}, data_version=0, sample=False, today=day, feed=feed.load())
+    def at(hour, minute=0, day=today):
+        return datetime.combine(day, time(hour, minute), CAIRO)
 
-    assert market().instrument("NEWCO")["sector"] == "Unclassified"
-    fake.live_prices = {"COMI": settled_close + 5, "TMGH": 1.0}
-    t0 = datetime.combine(today, datetime.min.time(), CAIRO).replace(hour=11)
-    out = feed.poll_live(fake, now=t0)
+    def market(now):
+        return MarketData(store, {}, data_version=0, sample=False, feed=feed.load(), now=now)
+
+    # History read before the session closed: the feed already carries a candle dated today.
+    feed.refresh(fake, today=today, now=at(9))
+    history = feed.load()["frames"]["COMI"]["close"]
+    candle, previous = history.iloc[-1], history.iloc[-2]
+    m = market(at(9))
+    assert m.bars("COMI").index[-1] == stamp                          # shown on the chart ...
+    assert m.bars("COMI", settled=True).index[-1] < stamp             # ... but not a completed session
+    assert m.settled_until("COMI") < stamp and m.latest_settled() < stamp
+    assert m.instrument("NEWCO")["sector"] == "Unclassified"
+
+    fake.live_prices = {"COMI": candle + 5, "TMGH": 1.0}
+    out = feed.poll_live(fake, now=at(11))
     assert out["updated"] and out["available"] and out["stocks"] == 2 and out["indices"] == 1
-    m = market()
+    m = market(at(11))
     bars = m.bars("COMI")
     # the live price replaces today's close and widens the day's range; the bar count does not change
-    assert bars["close"].iloc[-1] == settled_close + 5 and bars["high"].iloc[-1] >= settled_close + 6
+    assert bars["close"].iloc[-1] == candle + 5 and bars["high"].iloc[-1] >= candle + 6
     assert len(bars) == 60 and m.is_live("COMI") and not m.is_live("NEWCO")
-    assert m.bars("COMI", settled=True)["close"].iloc[-1] == settled_close   # backtests never see the unfinished bar
+    settled = m.bars("COMI", settled=True)
+    assert len(settled) == 59 and settled["close"].iloc[-1] == previous   # backtests never see the unfinished bar
     assert m.status()["is_live"] and m.status()["live_symbols"] == 2
     assert m.instrument("NEWCO")["sector"] == "Real Estate" and m.instrument("COMI")["sector"] == "Banks"
     assert m.cache["indices"][0]["name"] == "EGX 30" and m.cache["indices"][0]["live"] is True
 
     # a poll 5 seconds later reuses the saved prices: the feed is not called again
-    again = feed.poll_live(fake, now=t0.replace(second=5))
+    again = feed.poll_live(fake, now=at(11).replace(second=5))
     assert again["updated"] is False and fake.live_calls == 1
-    # a minute later it is; a stock that stops answering just falls back to its settled bar
-    fake.live_prices = {"COMI": settled_close - 3}
+    # a minute later it is. A stock that does not answer this time keeps the price it had earlier today:
+    # it must not fall back to yesterday's close just because one answer was slow.
+    fake.live_prices = {"COMI": candle - 3}
     fake.sectors = {}
-    feed.poll_live(fake, now=t0.replace(minute=2))
-    m = market()
-    assert m.bars("COMI")["close"].iloc[-1] == settled_close - 3 and not m.is_live("TMGH")
+    feed.poll_live(fake, now=at(11, 2))
+    m = market(at(11, 2))
+    assert m.bars("COMI")["close"].iloc[-1] == candle - 3
+    assert m.is_live("TMGH") and m.bars("TMGH")["close"].iloc[-1] == 1.0
     assert m.instrument("NEWCO")["sector"] == "Real Estate"      # sectors seen earlier are kept
 
+    # After the close, until the final bars are read: the last snapshot is still shown, but not called live.
+    m = market(at(15, 30))
+    assert m.bars("COMI")["close"].iloc[-1] == candle - 3 and not m.is_live("COMI") and m.from_snapshot("COMI")
+    assert not m.status()["is_live"]
+    assert feed.summary(today, now=at(15, 30))["refresh_due"] is True     # the session closed since the last read
+    # Reading history after the close settles the session: the final bar replaces the old snapshot.
+    assert feed.refresh(fake, today=today, now=at(15, 30))["updated"] == 3
+    assert feed.summary(today, now=at(15, 31))["refresh_due"] is False
+    m = market(at(15, 31))
+    assert m.bars("COMI")["close"].iloc[-1] == candle and not m.from_snapshot("COMI")
+    assert m.bars("COMI", settled=True).index[-1] == stamp and m.latest_settled() == stamp
+
     # next morning yesterday's prices are ignored, but the sectors still apply
-    tomorrow = market(today + timedelta(days=1))
+    tomorrow = market(at(9, day=today + timedelta(days=1)))
     assert not tomorrow.is_live("COMI") and tomorrow.instrument("NEWCO")["sector"] == "Real Estate"
     assert tomorrow.cache["indices"][0]["live"] is False
 

@@ -17,7 +17,7 @@ from decimal import Decimal
 import pandas as pd
 
 from .fees import FeeSchedule, compute_fees
-from .money import ZERO, D, money
+from .money import ZERO, D, money, px
 from .strategies import StrategyConfig, signals
 
 MIN_TRADES_FOR_CONFIDENCE = 30
@@ -100,7 +100,7 @@ def run_backtest(
 
     def close_position(pos: _Open, date, raw_price: Decimal, reason: str) -> None:
         nonlocal cash, fees_total
-        price = money(raw_price * (1 - slip))
+        price = px(raw_price * (1 - slip))
         gross = money(price * pos.qty)
         fee = compute_fees(schedule, "sell", gross)["total"]
         cash += gross - fee
@@ -140,7 +140,7 @@ def run_backtest(
                 continue
             if len(open_pos) >= risk.max_open_positions:
                 continue
-            price = money(D(today[s][0]) * (1 + slip))
+            price = px(D(today[s][0]) * (1 + slip))
             budget = min(eq * D(risk.max_alloc_pct) / 100, cash - reserve)
             qty = int(budget // price) if price > 0 else 0
             while qty > 0:
@@ -223,7 +223,9 @@ def run_backtest(
                 "curve": [{"date": d.strftime("%Y-%m-%d"), "equity": round(float(v), 2)} for d, v in norm.items()],
             }
     closes = pd.DataFrame({s: w["close"] for s, w in window.items()}).reindex(idx).ffill()
-    hold = (closes / closes.bfill().iloc[0]).mean(axis=1)
+    # An equal slice per stock, each bought at that stock's first close in the period. Before a stock
+    # has a price its slice waits in cash (ratio 1), so a later listing does not make the curve jump.
+    hold = (closes / closes.bfill().iloc[0]).fillna(1.0).mean(axis=1)
     buy_hold = {
         "name": "Equal-weight buy & hold of the tested stocks (before fees)",
         "return_pct": float(hold.iloc[-1] - 1) * 100,

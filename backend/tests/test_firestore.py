@@ -340,3 +340,110 @@ def test_runs_research_journal_and_alerts_persist_in_firestore(api, user):
     for path in ("/api/v1/research", "/api/v1/journal", "/api/v1/paper-runs"):
         assert api.get(path, headers=ho).json() == []
     assert api.get("/api/v1/alerts", headers=ho).json()["alerts"] == []
+
+
+# ---- concurrent changes ---------------------------------------------------------
+def stores(monkeypatch, uid, n=2):
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    from app.store.firestore_store import FirestoreStore
+    return [FirestoreStore(PROJECT, token(uid), uid) for _ in range(n)]
+
+
+def test_a_stale_overwrite_is_refused_instead_of_silently_winning(monkeypatch, user):
+    """Pause pressed while the background job saves a fill for the same run: neither may undo the other."""
+    from app.services import retry_conflict
+    from app.store.errors import ConflictError
+    uid, _ = user
+    a, b = stores(monkeypatch, uid)
+    a.put("paper_runs", "r1", {"status": "active", "trades": 0})
+    job, button = stores(monkeypatch, uid)
+    filling = job.get("paper_runs", "r1")          # both requests read the run ...
+    pausing = button.get("paper_runs", "r1")
+    job.put("paper_runs", "r1", {**filling, "trades": 1})          # ... the job saves its fill first
+    with pytest.raises(ConflictError):
+        button.put("paper_runs", "r1", {**pausing, "status": "paused"})   # the stale copy must not erase it
+    # the second attempt starts from the current data and keeps both changes
+    def pause():
+        doc = button.get("paper_runs", "r1")
+        button.put("paper_runs", "r1", {**doc, "status": "paused"})
+    retry_conflict(pause)()
+    assert stores(monkeypatch, uid, 1)[0].get("paper_runs", "r1") == {"status": "paused", "trades": 1}
+    # a document read from a collection listing is protected in the same way
+    one, two = stores(monkeypatch, uid)
+    listed = one.list("paper_runs")[0]
+    two.put("paper_runs", "r1", {"status": "stopped", "trades": 1})
+    with pytest.raises(ConflictError):
+        one.put("paper_runs", "r1", {**listed, "trades": 2})
+    # and so is one that did not exist when this request looked
+    first, second = stores(monkeypatch, uid)
+    assert first.get("alerts", "x") is None and second.get("alerts", "x") is None
+    first.put("alerts", "x", {"v": 1})
+    with pytest.raises(ConflictError):
+        second.put("alerts", "x", {"v": 2})
+
+
+def test_writes_inside_one_request_do_not_trip_over_each_other(monkeypatch, user):
+    uid, _ = user
+    (s,) = stores(monkeypatch, uid, 1)
+    s.put("settings", "app", {"n": 1})              # never read: an ordinary write
+    assert s.get("settings", "app") == {"n": 1}
+    s.put("settings", "app", {"n": 2})              # written by this request a moment ago: still allowed
+    with s.transaction():                           # twice in one transaction: one write goes out
+        s.put("settings", "app", {"n": 3})
+        s.put("settings", "app", {"n": 4})
+        assert s.get("settings", "app") == {"n": 4}
+    with s.transaction():                           # an append made before the collection was read still shows in it
+        s.append("ledger_p", {"type": "DEPOSIT", "amount": "1"})
+        assert [d["seq"] for d in s.list("ledger_p")] == [1]
+        s.append("ledger_p", {"type": "BUY"})
+        assert [d["seq"] for d in s.list("ledger_p")] == [1, 2]
+    assert s.delete("settings", "app") is True and s.get("settings", "app") is None
+    s.put("settings", "app", {"n": 5})              # deleted by this request: can be written again
+    (fresh,) = stores(monkeypatch, uid, 1)
+    assert fresh.get("settings", "app") == {"n": 5} and [d["seq"] for d in fresh.list("ledger_p")] == [1, 2]
+
+
+def test_appending_to_a_long_log_does_not_download_it(monkeypatch, user):
+    from app.store.errors import ConflictError
+    uid, _ = user
+    (seed,) = stores(monkeypatch, uid, 1)
+    with seed.transaction():
+        for i in range(40):
+            seed.append("audit", {"action": f"a{i}"})
+    (s,) = stores(monkeypatch, uid, 1)
+    calls = []
+    original = s._request
+    monkeypatch.setattr(s, "_request", lambda method, url, **kw: (calls.append((method, url.rsplit("/", 1)[-1])), original(method, url, **kw))[1])
+    assert s.append("audit", {"action": "new"})["seq"] == 41
+    assert s.append("audit", {"action": "newer"})["seq"] == 42
+    # one small query for the newest entry, then the writes: the forty old entries are never listed
+    assert [c[0] for c in calls] == ["POST", "POST", "POST"] and not any(m == "GET" for m, _ in calls)
+    assert [d["action"] for d in s.recent("audit", 2)] == ["newer", "new"]
+    # two writers still cannot take the same number
+    a, b = stores(monkeypatch, uid)
+    a.append("audit", {"action": "a"})
+    b._next["audit"] = 43
+    with pytest.raises(ConflictError):
+        b.append("audit", {"action": "b"})
+
+
+def test_shared_market_documents_are_version_checked(monkeypatch, user):
+    from app.data.feed import FirestoreDocs
+    from app.store.errors import ConflictError
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    uid, _ = user
+    name = "chunk_t" + uuid.uuid4().hex[:6]
+    a, b = FirestoreDocs(PROJECT, token(uid)), FirestoreDocs(PROJECT, token(uid))
+    assert a.get(name) is None and b.get(name) is None
+    a.put(name, {"bars": {"X": [1]}}, guard=True)
+    with pytest.raises(ConflictError):               # b saw it missing; someone created it meanwhile
+        b.put(name, {"bars": {"Y": [1]}}, guard=True)
+    doc = b.get(name)
+    doc["bars"]["Y"] = [1]
+    b.put(name, doc, guard=True)                     # re-read, merged, written
+    a.get(name)
+    b.put(name, {"bars": {"X": [1], "Y": [1, 2]}}, guard=True)   # b's own latest version: allowed again
+    with pytest.raises(ConflictError):
+        a.put(name, {"bars": {}}, guard=True)
+    a.put(name, {"bars": {"X": [1], "Y": [1, 2], "Z": []}})     # unguarded documents (live prices) are last-writer-wins
+    assert FirestoreDocs(PROJECT, token(uid)).get(name)["bars"]["Z"] == []

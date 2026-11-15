@@ -36,9 +36,10 @@ class MovingYounit(FakeYounit):
 
 # The browser test must not depend on the hour it is run at.
 import app.data.feed as _feed  # noqa: E402
+import app.data.market as _market  # noqa: E402
 import app.main as _main  # noqa: E402
 import app.services as _services  # noqa: E402
 
-_feed.market_open = _services.market_open = _main.market_open = lambda *a, **k: True
+_feed.market_open = _services.market_open = _main.market_open = _market.market_open = lambda *a, **k: True
 
 app = create_app(Settings(), younit=MovingYounit())

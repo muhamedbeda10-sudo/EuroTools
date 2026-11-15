@@ -23,7 +23,7 @@ from .config import Settings, get_settings
 from .data.calendar import market_open
 from .data.feed import Feed, FirestoreDocs, StoreDocs
 from .data.market import DataError
-from .data.younit import YounitClient, YounitError
+from .data.younit import YounitClient, YounitError, YounitRateLimit
 from .domain.backtest import BacktestError
 from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
@@ -153,6 +153,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.exception_handler(YounitError)
     async def _feed_down(_: Request, exc: YounitError):
         return JSONResponse({"detail": str(exc)}, status_code=502)
+
+    @api.exception_handler(YounitRateLimit)
+    async def _feed_busy(_: Request, exc: YounitRateLimit):
+        return JSONResponse({"detail": str(exc), "retry_after": exc.retry_after}, status_code=429,
+                            headers={"Retry-After": str(exc.retry_after)})
 
     @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)

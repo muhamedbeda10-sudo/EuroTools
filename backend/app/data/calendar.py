@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 CAIRO = ZoneInfo("Africa/Cairo")
 # Continuous session plus the closing auction, with a few minutes either side.
 SESSION_OPEN, SESSION_CLOSE = time(9, 55), time(14, 45)
+# Daily history read after this time holds the session's final bar; earlier in the day it may still be forming.
+SETTLE_TIME = time(15, 0)
 
 
 def cairo_now() -> datetime:
@@ -18,6 +20,17 @@ def market_open(now: datetime | None = None) -> bool:
 
 def is_trading_day(d: date) -> bool:
     return d.weekday() in (6, 0, 1, 2, 3)  # Sun, Mon, Tue, Wed, Thu
+
+
+def last_settle(now: datetime) -> datetime:
+    """The most recent moment, at or before `now`, at which a session's bars became final."""
+    now = now.astimezone(CAIRO)
+    d = now.date()
+    if not (is_trading_day(d) and now.time() >= SETTLE_TIME):
+        d -= timedelta(days=1)
+        while not is_trading_day(d):
+            d -= timedelta(days=1)
+    return datetime.combine(d, SETTLE_TIME, CAIRO)
 
 
 def last_trading_days(end: date, count: int) -> list[date]:

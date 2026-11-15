@@ -1,6 +1,8 @@
 """Application services: glue between the store, market data and the domain rules."""
 from __future__ import annotations
 
+import functools
+import json
 import math
 import time
 import uuid
@@ -12,12 +14,12 @@ import pandas as pd
 
 from .config import Settings
 from .data.calendar import cairo_now, market_open
-from .data.market import MarketData
+from .data.market import BUILD_LOCK, MarketData
 from .domain import indicators as ind
 from .domain.backtest import run_backtest
 from .domain.fees import DEFAULT_FEE_SCHEDULE, FeeSchedule, compute_fees
 from .domain.ledger import LedgerError, build_trade, replay
-from .domain.money import ZERO, D, f, money
+from .domain.money import ZERO, D, f, money, px
 from .domain.strategies import StrategyConfig, signals
 from .store.errors import ConflictError
 
@@ -26,8 +28,27 @@ _DEPTH_CACHE: dict[str, tuple[float, dict]] = {}
 DEPTH_CACHE_SECONDS = 5.0
 
 
+MAX_STORED_TRADES = 400        # per saved backtest; the totals always cover every trade
+MAX_BACKTEST_BYTES = 800_000   # a stored document may not exceed 1 MiB
+
+
 class NotFound(LookupError):
     pass
+
+
+def retry_conflict(fn):
+    """Run a change once more if someone else changed the same data at the same moment.
+
+    The store forgets what it had read when a write is refused, so the second
+    attempt starts from the current data.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ConflictError:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def now_iso() -> str:
@@ -103,14 +124,19 @@ class App:
             return {"name": None, "configured": False}
         return {"name": "younit", "configured": True, "read_only": True, **self.feed.summary(self.market.today)}
 
+    def _feed_stock(self, symbol: str) -> dict:
+        stock = next((i for i in self.market.feed["instruments"]
+                      if i["symbol"] == symbol and i.get("listed", True)), None)
+        if stock is None:
+            raise NotFound(f"{symbol} is not in the live feed")
+        return stock
+
     def depth(self, symbol: str) -> dict:
         """Order book of one stock, straight from the feed. Nothing is stored."""
         symbol = symbol.upper()
         if self.feed is None or self.younit is None:
             raise NotFound("price depth needs the live market-data feed")
-        stock = next((i for i in self.market.feed["instruments"] if i["symbol"] == symbol), None)
-        if stock is None:
-            raise NotFound(f"{symbol} is not in the live feed")
+        stock = self._feed_stock(symbol)
         cached = _DEPTH_CACHE.get(symbol)
         if cached and time.monotonic() - cached[0] < DEPTH_CACHE_SECONDS:
             return cached[1]
@@ -126,9 +152,7 @@ class App:
         symbol = symbol.upper()
         if self.feed is None or self.younit is None:
             raise NotFound("live streaming needs the market-data feed")
-        stock = next((i for i in self.market.feed["instruments"] if i["symbol"] == symbol), None)
-        if stock is None:
-            raise NotFound(f"{symbol} is not in the live feed")
+        stock = self._feed_stock(symbol)
         return self.younit.follow_stock(stock["stock_id"], max_seconds=max_seconds)
 
     def follow_market(self, max_seconds: float):
@@ -136,7 +160,8 @@ class App:
         if self.feed is None or self.younit is None:
             raise NotFound("live streaming needs the market-data feed")
         state = self.market.feed
-        tracked = [i for i in state["instruments"] if i["symbol"] in state["frames"]] or state["instruments"]
+        current = [i for i in state["instruments"] if i.get("listed", True)]
+        tracked = [i for i in current if i["symbol"] in state["frames"]] or current
         indices = {i["id"]: i["name"] for i in (state.get("live") or {}).get("indices") or []}
         ticks = self.younit.follow_market(tracked, list(indices), max_seconds=max_seconds)
         return ticks, indices
@@ -153,7 +178,9 @@ class App:
         if self.feed is None or self.younit is None:
             raise NotFound("no market-data feed is configured")
         result = self.feed.refresh(self.younit, today=self.market.today)
-        self.audit("refresh", "market_data", {k: result[k] for k in ("updated", "remaining", "total")})
+        if result["updated"] and result["remaining"] == 0:
+            # one line per completed update, not one per batch of forty stocks
+            self.audit("refresh", "market_data", {"total": result["total"]})
         return result
 
     def bump_data_version(self) -> None:
@@ -206,6 +233,12 @@ class App:
         mcache = self.market.cache
         if "quotes" in mcache:
             return mcache["quotes"]
+        with BUILD_LOCK:  # requests arriving together compute the table once
+            return self._quotes(mcache)
+
+    def _quotes(self, mcache: dict) -> pd.DataFrame:
+        if "quotes" in mcache:
+            return mcache["quotes"]
         # An account with no imports of its own sees exactly the shared feed, so the
         # table is computed once per server instance instead of once per account.
         shared = self.market.feed.setdefault("_quotes", {}) if mcache.get("shared_only") else None
@@ -228,14 +261,21 @@ class App:
                 "week_pct": ind.pct_change_over(close, 5),
                 "month_pct": ind.pct_change_over(close, 21),
                 "volume": float(df["volume"].iloc[-1]),
-                "avg_volume_20": float(df["volume"].tail(20).mean()),
+                "avg_volume_20": ind.avg_volume(df["volume"]),  # the 20 sessions before this one
                 "turnover": last * float(df["volume"].iloc[-1]),
                 "as_of": df.index[-1].strftime("%Y-%m-%d"),
                 "source": self.market.source(insx["symbol"]),
                 "live": self.market.is_live(insx["symbol"]),
                 "spark": [round(float(v), 2) for v in close.tail(30)],
             })
-        mcache["quotes"] = pd.DataFrame(rows)
+        table = pd.DataFrame(rows)
+        if len(table):
+            # `current`: the row is from the market's latest session. A stock that did not trade in it
+            # (suspended, illiquid) keeps its last price but is left out of "today" figures and alerts.
+            stocks = table["type"] == "stock"
+            latest = table.loc[stocks, "as_of"].max() if stocks.any() else table["as_of"].max()
+            table["current"] = table["as_of"] == latest
+        mcache["quotes"] = table
         if shared is not None:
             shared.update(key=mcache["key"][1:], table=mcache["quotes"])
         return mcache["quotes"]
@@ -271,7 +311,7 @@ class App:
             return {"indices": [], "breadth": None, "gainers": [], "losers": [], "most_active": []}
         stocks = df[df["type"] == "stock"]
         latest = stocks["as_of"].max()
-        current = stocks[(stocks["as_of"] == latest) & stocks["change_pct"].notna()]
+        current = stocks[stocks["current"] & stocks["change_pct"].notna()]
         cols = ["symbol", "name", "sector", "last", "change_pct", "volume", "turnover"]
         return {
             "as_of": latest,
@@ -302,16 +342,18 @@ class App:
         market_month = stocks["month_pct"].mean()
         out = []
         for sector, g in stocks.groupby("sector"):
-            ranked = g.dropna(subset=["change_pct"]).sort_values("change_pct")
+            today = g[g["current"]]  # "day" figures use the latest session only, never an older last bar
+            ranked = today.dropna(subset=["change_pct"]).sort_values("change_pct")
             month = g["month_pct"].mean()
             out.append({
                 "sector": sector,
                 "stocks": int(len(g)),
-                "day_pct": g["change_pct"].mean(),
+                "traded": int(len(today)),
+                "day_pct": today["change_pct"].mean() if len(today) else None,
                 "week_pct": g["week_pct"].mean(),
                 "month_pct": month,
                 "avg_volume": g["avg_volume_20"].mean(),
-                "turnover_approx": g["turnover"].sum(),
+                "turnover_approx": today["turnover"].sum(),
                 "best": None if ranked.empty else {"symbol": ranked.iloc[-1]["symbol"], "change_pct": ranked.iloc[-1]["change_pct"]},
                 "worst": None if ranked.empty else {"symbol": ranked.iloc[0]["symbol"], "change_pct": ranked.iloc[0]["change_pct"]},
                 "relative_strength": month - market_month if pd.notna(month) and pd.notna(market_month) else None,
@@ -354,6 +396,8 @@ class App:
             "data_note": ("SAMPLE DATA - synthetic prices, not market quotes." if quote["source"] == "sample"
                           else f"Live price from Younit as of {str(self.market.cache['live_as_of'])[11:16]} Cairo time. "
                                "Today's bar is still forming." if quote.get("live")
+                          else f"Last price seen today at {str(self.market.cache['live_as_of'])[11:16]} Cairo time. "
+                               "The session's final bar replaces it at the next data update." if self.market.from_snapshot(symbol)
                           else "Daily prices from Younit, as of the date shown. Not a live quote." if quote["source"] == "younit"
                           else None),
         })
@@ -410,60 +454,91 @@ class App:
     def _ledger_coll(self) -> str:
         return f"ledger_{self.app_settings()['active_portfolio_id']}"
 
-    def _price_on(self, symbol: str, trade_date: str | None) -> tuple[Decimal, str]:
+    def _last_price(self, symbol: str) -> tuple[Decimal, str] | None:
+        """Latest known price of a stock and the day it is from, or None when there is no price at all."""
+        df = self.market.bars(symbol)
+        if df is None or len(df) == 0:
+            return None
+        return px(float(df["close"].iloc[-1])), df.index[-1].strftime("%Y-%m-%d")
+
+    def _fill(self, symbol: str, trade_date: str | None) -> tuple[Decimal, str, str]:
+        """Price of a paper order: (price, the day that price is from, the session the trade is dated with).
+
+        An order placed now belongs to the market's current session and is filled at the
+        stock's latest price, even if that stock has not traded yet today: every order of
+        a session carries the same date, so the ledger stays in order. A back-dated order
+        (API only) is filled at that day's close and must have a bar on that day.
+        """
         df = self.market.bars(symbol)
         if df is None or len(df) == 0:
             raise LedgerError(f"no price data for {symbol}")
         if trade_date is None:
-            return D(float(df["close"].iloc[-1])), df.index[-1].strftime("%Y-%m-%d")
+            price_day = df.index[-1]
+            latest = self.market.latest_date()
+            session = max(price_day, pd.Timestamp(latest)) if latest else price_day
+            return px(float(df["close"].iloc[-1])), price_day.strftime("%Y-%m-%d"), session.strftime("%Y-%m-%d")
         ts = pd.Timestamp(trade_date)
         if ts not in df.index:
             raise LedgerError(f"{symbol} has no bar on {trade_date} (not a session, or data missing)")
-        return D(float(df.loc[ts, "close"])), trade_date
+        return px(float(df.loc[ts, "close"])), trade_date, trade_date
+
+    @staticmethod
+    def _check_order(txs: list[dict], used_date: str) -> None:
+        dated = [t["trade_date"] for t in txs if t.get("trade_date")]
+        if dated and used_date < max(dated):
+            raise LedgerError(f"trade date {used_date} is before the last recorded trade ({max(dated)}); the ledger is chronological")
 
     def preview_trade(self, side: str, symbol: str, qty: int, trade_date: str | None) -> dict:
         symbol = symbol.upper()
         if self.market.instrument(symbol) is None or self.market.instrument(symbol)["type"] != "stock":
             raise NotFound(f"unknown stock {symbol}")
-        price, used_date = self._price_on(symbol, trade_date)
-        state = replay(self.store.list(self._ledger_coll()))
+        price, price_date, used_date = self._fill(symbol, trade_date)
+        txs = self.store.list(self._ledger_coll())
+        state = replay(txs)
         schedule = self.fee_schedule()
         gross = money(price * qty)
         fees = compute_fees(schedule, side.lower(), gross)
         error = None
-        try:
+        try:  # exactly the checks the order itself goes through, so the preview never promises what posting refuses
+            self._check_order(txs, used_date)
             build_trade(state, schedule, side=side, symbol=symbol, qty=qty, price=price)
         except LedgerError as exc:
             error = str(exc)
         held = state.positions[symbol].qty if symbol in state.positions else 0
         return clean({
-            "symbol": symbol, "side": side, "qty": qty, "price": price, "trade_date": used_date,
+            "symbol": symbol, "side": side, "qty": qty, "price": price, "trade_date": used_date, "price_date": price_date,
             "price_source": self.market.source(symbol), "gross": gross,
             "fees": fees["items"], "fees_total": fees["total"], "fees_verified": schedule.verified,
             "net_cash": -(gross + fees["total"]) if side == "BUY" else gross - fees["total"],
             "cash_available": money(state.cash), "held_qty": held, "error": error,
         })
 
+    @retry_conflict
     def post_trade(self, side: str, symbol: str, qty: int, trade_date: str | None, note: str,
                    client_order_id: str | None) -> dict:
+        from . import paper
         symbol = symbol.upper()
         insx = self.market.instrument(symbol)
         if insx is None or insx["type"] != "stock":
             raise NotFound(f"unknown stock {symbol}")
         with self.store.transaction():
             coll = self._ledger_coll()
-            txs = self.store.list(coll)
             if client_order_id:
-                for tx in txs:
+                for tx in self.store.list(coll):
                     if tx.get("client_order_id") == client_order_id:
                         return tx  # idempotent retry: already posted
-            price, used_date = self._price_on(symbol, trade_date)
-            dated = [t["trade_date"] for t in txs if t.get("trade_date")]
-            if dated and used_date < max(dated):
-                raise LedgerError(f"trade date {used_date} is before the last recorded trade ({max(dated)}); the ledger is chronological")
+            # Automatic runs first take every completed session they have not handled yet, so their
+            # fills are recorded before this order rather than squeezed in behind it later.
+            paper.process_runs(self)
+            txs = self.store.list(coll)
+            price, price_date, used_date = self._fill(symbol, trade_date)
+            self._check_order(txs, used_date)
+            latest = self.market.latest_date()
             tx = build_trade(replay(txs), self.fee_schedule(), side=side, symbol=symbol, qty=qty, price=price)
-            tx.update(ts=now_iso(), trade_date=used_date, price_source=self.market.source(symbol),
-                      note=note.strip(), origin="manual", mode="paper", client_order_id=client_order_id)
+            tx.update(ts=now_iso(), trade_date=used_date, price_date=price_date, price_source=self.market.source(symbol),
+                      note=note.strip(), origin="manual", mode="paper", client_order_id=client_order_id,
+                      # filled at a past day's close, with what happened since already known
+                      backdated=bool(trade_date and latest and used_date < latest.isoformat()))
             saved = self.store.append(coll, tx)
             self.audit("post", "paper_trade", {"seq": saved["seq"], "side": side, "symbol": symbol, "qty": qty,
                                               "price": tx["price"], "trade_date": used_date})
@@ -475,14 +550,14 @@ class App:
         for r in state.rows:
             rows.append(clean({
                 **{k: r.get(k) for k in ("seq", "ts", "type", "symbol", "qty", "trade_date", "note", "price_source",
-                                         "fees_verified", "remaining_qty", "origin")},
+                                         "fees_verified", "remaining_qty", "origin", "price_date", "backdated")},
                 "price": D(r["price"]) if "price" in r else None,
                 "gross": D(r["gross"]) if "gross" in r else D(r.get("amount", 0)),
                 "fees": [{**i, "amount": D(i["amount"])} for i in r.get("fees", [])],
                 "fees_total": D(r.get("fees_total", 0)),
                 "cash_delta": money(r["cash_delta"]),
                 "cash_after": r["cash_after"],
-                "avg_cost": money(r["avg_cost"]) if "avg_cost" in r else None,
+                "avg_cost": px(r["avg_cost"]) if "avg_cost" in r else None,
                 "realized_gross": r.get("realized_gross"),
                 "buy_fees_allocated": r.get("buy_fees_allocated"),
                 "realized_net": r.get("realized_net"),
@@ -504,12 +579,21 @@ class App:
         state = replay(txs)
         schedule = self.fee_schedule()
         sector_of = {i["symbol"]: i for i in self.market.instruments()}
-        holdings, by_sector = [], {}
+        holdings, by_sector, warnings = [], {}, []
         mv_total = unreal_gross = unreal_net = est_exit = ZERO
         for pos in state.positions.values():
             if pos.qty == 0:
                 continue
-            price, as_of = self._price_on(pos.symbol, None)
+            ins = sector_of.get(pos.symbol, {})
+            known = self._last_price(pos.symbol)
+            if known is None:
+                # A holding must never make the whole portfolio unreadable: carry it at what was paid.
+                price, as_of = px(pos.avg_price), None
+                warnings.append(f"{pos.symbol} has no price data any more: it is carried at its cost, not a market price.")
+            else:
+                price, as_of = known
+                if ins.get("listed") is False:
+                    warnings.append(f"{pos.symbol} is no longer in the market feed: it is valued at its last price, from {as_of}.")
             value = money(price * pos.qty)
             sell_fee = compute_fees(schedule, "sell", value)["total"]
             gross = value - pos.cost
@@ -518,12 +602,12 @@ class App:
             unreal_gross += gross
             unreal_net += net
             est_exit += sell_fee
-            sector = sector_of.get(pos.symbol, {}).get("sector", "Unknown")
+            sector = ins.get("sector", "Unknown")
             by_sector[sector] = by_sector.get(sector, ZERO) + value
             holdings.append({
-                "symbol": pos.symbol, "name": sector_of.get(pos.symbol, {}).get("name"), "sector": sector,
-                "qty": pos.qty, "avg_price": money(pos.avg_price), "last": price, "as_of": as_of,
-                "source": self.market.source(pos.symbol),
+                "symbol": pos.symbol, "name": ins.get("name"), "sector": sector,
+                "qty": pos.qty, "avg_price": px(pos.avg_price), "last": price, "as_of": as_of,
+                "source": self.market.source(pos.symbol), "priced": known is not None,
                 "cost": money(pos.cost), "market_value": value, "buy_fees": money(pos.buy_fees),
                 "est_sell_fees": sell_fee, "unrealized_gross": money(gross), "unrealized_net_est": money(net),
                 "unrealized_gross_pct": gross / pos.cost * 100 if pos.cost else None,
@@ -534,7 +618,6 @@ class App:
         net_total = state.realized_net + unreal_net
         max_stock = max((h["weight_pct"] for h in holdings), default=ZERO)
         max_sector = max((v / value_total * 100 for v in by_sector.values()), default=ZERO) if value_total else ZERO
-        warnings = []
         if max_stock > 25:
             warnings.append(f"Single-stock concentration: one holding is {max_stock:.1f}% of the portfolio.")
         if max_sector > 40:
@@ -561,26 +644,41 @@ class App:
                 key=lambda r: -r["market_value"]),
             "cash_weight_pct": state.cash / value_total * 100 if value_total else None,
             "warnings": warnings,
-            "history": self._portfolio_history(txs),
+            "history": self._portfolio_history(state.rows),
         })
 
-    def _portfolio_history(self, txs: list[dict]) -> dict:
-        dated = [t for t in txs if t.get("trade_date")]
+    def _portfolio_history(self, rows: list[dict]) -> dict:
+        """Portfolio value at each session's close since the first trade.
+
+        One pass over the trades in date order, carrying cash and share counts forward
+        (the ledger is not replayed for every charted day).
+        """
+        dated = sorted((r for r in rows if r.get("trade_date")), key=lambda r: (r["trade_date"], r["seq"]))
         if not dated:
             return {"curve": [], "benchmark": None}
-        symbols = sorted({t["symbol"] for t in dated})
-        closes = self.market.closes(symbols)
+        closes = self.market.closes(sorted({r["symbol"] for r in dated}))
+        if closes.empty:  # none of the traded stocks has a price history any more
+            return {"curve": [], "benchmark": None}
         closes = closes[closes.index >= pd.Timestamp(dated[0]["trade_date"])].ffill()
-        deposits = [t for t in txs if t["type"] == "DEPOSIT"]
+        cash = sum((D(r["cash_delta"]) for r in rows if not r.get("trade_date")), ZERO)  # the starting deposit
+        held: dict[str, int] = {}
+        paid: dict[str, Decimal] = {}  # last traded price, used on a day the stock has no close yet
         curve, i = [], 0
-        applied = list(deposits)
-        for ts, row in closes.iterrows():
+        columns = list(closes.columns)
+        for ts, row in zip(closes.index, closes.to_numpy(), strict=True):
             day = ts.strftime("%Y-%m-%d")
             while i < len(dated) and dated[i]["trade_date"] <= day:
-                applied.append(dated[i])
+                r = dated[i]
+                cash += D(r["cash_delta"])
+                held[r["symbol"]] = held.get(r["symbol"], 0) + (r["qty"] if r["type"] == "BUY" else -r["qty"])
+                paid[r["symbol"]] = D(r["price"])
                 i += 1
-            st = replay(applied)
-            value = st.cash + sum((D(float(row[p.symbol])) * p.qty for p in st.positions.values() if p.qty), ZERO)
+            price = dict(zip(columns, row, strict=True))
+            value = cash
+            for symbol, qty in held.items():
+                if qty:
+                    close = price.get(symbol)
+                    value += (D(float(close)) if close is not None and close == close else paid[symbol]) * qty
             curve.append({"date": day, "value": f(value)})
         bench = None
         bsym = self.app_settings()["benchmark"]
@@ -641,15 +739,41 @@ class App:
         sources = sorted({self.market.source(s) for s in result["symbols"]})
         if "sample" in sources:
             result["warnings"].insert(0, "Run on SAMPLE (synthetic) prices: results say nothing about real EGX stocks.")
-        doc = clean({
+        doc = self._fit(clean({
             "id": uuid.uuid4().hex[:12], "ts": now_iso(), "strategy_id": strategy_id,
             "strategy": cfg.model_dump(mode="json"), "fee_schedule": schedule.model_dump(mode="json"),
             "data_sources": sources, "mode": "backtest", **result,
-        })
+        }))
         with self.store.transaction():
             self.store.put("backtests", doc["id"], doc)
             self.audit("run", "backtest", {"id": doc["id"], "strategy": cfg.name, "symbols": len(result["symbols"]),
                                            "period": result["period"], "net_profit": doc["metrics"]["net_profit"]})
+        return doc
+
+    @staticmethod
+    def _fit(doc: dict) -> dict:
+        """Keep a backtest small enough to store: the latest trades in full, the curves thinned if needed.
+
+        The metrics always describe every trade; only the stored trade list is shortened.
+        """
+        total = len(doc["trades"])
+        doc["trades_total"] = total
+        if total > MAX_STORED_TRADES:
+            doc["trades"] = doc["trades"][-MAX_STORED_TRADES:]
+
+        def size() -> int:
+            return len(json.dumps(doc, separators=(",", ":")))
+
+        while size() > MAX_BACKTEST_BYTES and len(doc["trades"]) > 50:
+            doc["trades"] = doc["trades"][len(doc["trades"]) // 2:]
+        while size() > MAX_BACKTEST_BYTES and len(doc["equity_curve"]) > 120:
+            doc["equity_curve"] = doc["equity_curve"][::2] + doc["equity_curve"][-1:]
+            for key in ("benchmark", "buy_and_hold"):
+                if doc.get(key) and doc[key].get("curve"):
+                    doc[key]["curve"] = doc[key]["curve"][::2] + doc[key]["curve"][-1:]
+        if len(doc["trades"]) < total:
+            doc["warnings"] = [*doc["warnings"], f"The {len(doc['trades'])} most recent of {total} trades are listed; "
+                                                 "the results cover all of them."]
         return doc
 
     def compare(self, strategy_ids: list[str], *, symbols: list[str] | None, start: str | None, end: str | None,
@@ -678,13 +802,18 @@ class App:
                 | {"strategy_name": d["strategy"]["name"], "strategy_type": d["strategy"]["type"]} for d in docs]
 
     def active_signals(self) -> list[dict]:
-        """Entry/exit signals on the latest bar for every saved strategy. Informational only."""
+        """Entry/exit signals of the latest completed session for every saved strategy. Informational only.
+
+        A stock whose last bar is older than that session (suspended, or simply not traded)
+        gives no signal: a cross that happened months ago is not news today.
+        """
         out = []
+        latest = self.market.latest_settled()
         for doc in self.store.list("strategies"):
             cfg = StrategyConfig.model_validate({k: doc[k] for k in StrategyConfig.model_fields})
             for symbol in self.strategy_universe(cfg):
                 df = self.market.bars(symbol, settled=True)  # signals are read on completed sessions only
-                if df is None or len(df) < 30:
+                if df is None or len(df) < 30 or df.index[-1] != latest:
                     continue
                 last = signals(cfg, df).iloc[-1]
                 if last["entry"] or last["exit"]:

@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { request } from "./api";
+import { DATA_UPDATED } from "./useApi";
 
 /** Latest tick of a stock: [last price, day change %, volume today]. */
 export type Tick = [number, number | null, number | null];
@@ -14,6 +15,7 @@ type Store = {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const EMPTY = new Map<string, Tick>();
 const LiveContext = createContext<Store | null>(null);
 
 /** Keeps one streaming connection to the server while the market is open and the tab is visible,
@@ -38,6 +40,9 @@ export function LiveProvider({ enabled, children }: { enabled: boolean; children
       }, 200);
     };
     const setState = (s: Store["state"]) => { if (store.state !== s) { store.state = s; notify(); } };
+    // A tick is only worth showing while the stream that brought it is alive: when it stops, for
+    // whatever reason, every screen goes back to the server's figures instead of a frozen price.
+    const drop = (s: Store["state"]) => { store.quotes.clear(); store.indices.clear(); store.state = s; notify(); };
 
     const run = async () => {
       let failures = 0;
@@ -72,8 +77,16 @@ export function LiveProvider({ enabled, children }: { enabled: boolean; children
                 store.state = "live";
                 notify();
               } else if (event === "hello") {
-                failures = 0;
+                // A greeting proves nothing about the feed: only real prices clear the failure count.
                 for (const [id, name] of Object.entries(data?.indices ?? {})) names.set(id, name as string);
+                if (data?.market_open === false) {
+                  // The session is over: stop streaming and let every screen re-read the closing figures.
+                  stopped = true;
+                  current?.abort();
+                  drop("off");
+                  window.dispatchEvent(new Event(DATA_UPDATED));
+                  return;
+                }
               } else if (event === "failed") {
                 throw new Error(data?.detail ?? "stream failed");
               } else if (event === "end") {
@@ -86,7 +99,7 @@ export function LiveProvider({ enabled, children }: { enabled: boolean; children
           if (stopped) return;
           if (e?.name !== "AbortError") failures++;
         }
-        if (failures >= 3) { setState("failed"); return; } // the 15-second refresh carries on underneath
+        if (failures >= 3) { drop("failed"); return; } // the 15-second refresh carries on underneath
         await sleep(failures ? 1500 * failures : 150);
       }
     };
@@ -98,7 +111,7 @@ export function LiveProvider({ enabled, children }: { enabled: boolean; children
       stopped = true;
       current?.abort();
       document.removeEventListener("visibilitychange", onVisibility);
-      store.state = "off";
+      drop("off");
     };
   }, [enabled, store]);
 
@@ -115,14 +128,17 @@ function useStore<T>(read: (s: Store) => T, fallback: T): T {
 }
 
 /** The live tick of one stock, or undefined when nothing has streamed for it. Re-renders only when it changes. */
-export const useTick = (symbol: string): Tick | undefined => useStore((s) => s.quotes.get(symbol), undefined);
-export const useIndexTick = (name: string) => useStore((s) => s.indices.get(name), undefined);
+export const useTick = (symbol: string): Tick | undefined =>
+  useStore((s) => (s.state === "live" ? s.quotes.get(symbol) : undefined), undefined);
+export const useIndexTick = (name: string) => useStore((s) => (s.state === "live" ? s.indices.get(name) : undefined), undefined);
 /** Connection state and a counter that moves whenever any price moved (for lists that re-rank). */
 export const useLiveState = () => {
   const state = useStore((s) => s.state, "off" as Store["state"]);
   const version = useStore((s) => s.version, 0);
   const store = useContext(LiveContext);
-  return { state, version, quotes: store?.quotes ?? new Map<string, Tick>(), at: store?.at ?? 0 };
+  // Ticks are handed out only while the stream is live, so nothing ranks or colours from leftovers.
+  const quotes = state === "live" && store ? store.quotes : EMPTY;
+  return { state, version, quotes, at: store?.at ?? 0 };
 };
 
 /** A number that flashes green or red for a moment when it changes. */

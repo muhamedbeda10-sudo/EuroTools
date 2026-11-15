@@ -12,9 +12,11 @@ from __future__ import annotations
 import re
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 
 import httpx
+
+from .calendar import CAIRO
 
 BASE_URL = "https://tradingapis.efghermesone.com"
 HEADERS = {
@@ -44,6 +46,21 @@ class YounitError(RuntimeError):
     pass
 
 
+class YounitRateLimit(YounitError):
+    """The feed asked for fewer requests. Not a fault: stop, wait `retry_after` seconds, carry on."""
+
+    def __init__(self, retry_after: int = 60):
+        super().__init__("Younit rate limit reached; try again in a few minutes")
+        self.retry_after = retry_after
+
+
+def _retry_after(res: httpx.Response) -> int:
+    try:
+        return min(max(int(float(res.headers.get("retry-after", ""))), 5), 300)
+    except ValueError:
+        return 60
+
+
 def _first(d: dict, *keys):
     for k in keys:
         v = d.get(k)
@@ -57,6 +74,41 @@ def _num(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _untraded(row: dict) -> bool:
+    """True when the feed says outright that nothing has traded today.
+
+    Before the first trade the "last trade price" field may still hold the previous
+    session's price; a stated volume of zero means it must not be read as today's.
+    A row with no volume field at all is taken at face value.
+    """
+    raw = row.get("m_TradedVolume")
+    return raw not in (None, "") and _num(raw) <= 0
+
+
+def candle_date(raw) -> str | None:
+    """The Cairo calendar day of a history candle.
+
+    A plain date or a local timestamp is taken as written. A timestamp that carries a
+    time zone (e.g. Cairo midnight written in UTC) is converted first, so the bar is
+    not filed under the day before.
+    """
+    text = str(raw or "").strip()
+    if len(text) < 10:
+        return None
+    try:
+        if len(text) > 10:
+            stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if stamp.tzinfo is not None:
+                stamp = stamp.astimezone(CAIRO)
+            return stamp.date().isoformat()
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        try:
+            return date.fromisoformat(text[:10]).isoformat()
+        except ValueError:
+            return None
 
 
 def _unwrap(data, *list_keys):
@@ -80,7 +132,7 @@ def tick_quote(row: dict) -> dict:
     def signed(key):
         raw = row.get(key)
         return _num(raw) if raw not in (None, "") else None
-    last = pos("m_LastTradePrice")
+    last = None if _untraded(row) else pos("m_LastTradePrice")
     return {"last": last, "open": pos("m_OpenPrice"), "high": pos("m_DailyHighPrice"), "low": pos("m_DailyLowPrice"),
             "volume": pos("m_TradedVolume"), "value": pos("m_TradedValue"), "trades": pos("m_TradesCount"),
             "last_size": pos("m_LastTradeVolume"), "change": signed("m_Change"), "change_pct": signed("m_PercentChange"),
@@ -129,7 +181,7 @@ class YounitClient:
             if res.status_code in (400, 401, 403):
                 raise YounitError("Younit rejected the Trading ID / API key (check the values saved on the server)")
             if res.status_code == 429:
-                raise YounitError("Younit rate limit reached; try again in a few minutes")
+                raise YounitRateLimit(_retry_after(res))
             if res.status_code >= 400:
                 raise YounitError(f"Younit sign-in failed (HTTP {res.status_code})")
             try:
@@ -157,7 +209,7 @@ class YounitClient:
             if res.status_code == 401 and attempt == 0:
                 continue  # token expired early: sign in once more and retry
             if res.status_code == 429:
-                raise YounitError("Younit rate limit reached; try again in a few minutes")
+                raise YounitRateLimit(_retry_after(res))
             if res.status_code >= 400:
                 raise YounitError(f"Younit request failed (HTTP {res.status_code})")
             try:
@@ -239,7 +291,7 @@ class YounitClient:
                 if sector:
                     sectors[symbol] = sector[:60]
                 last = _num(row.get("m_LastTradePrice"))
-                if last <= 0:
+                if last <= 0 or _untraded(row):
                     continue  # no trade yet today: the settled history stands
                 opened = _num(row.get("m_OpenPrice")) or last
                 high = max(_num(row.get("m_DailyHighPrice")), last, opened)
@@ -311,7 +363,7 @@ class YounitClient:
                     row = change["row"]
                     if item in by_item:
                         last = _num(row.get("m_LastTradePrice"))
-                        if last > 0:
+                        if last > 0 and not _untraded(row):
                             pct = row.get("m_PercentChange")
                             quotes[by_item[item]] = [last, _num(pct) if pct not in (None, "") else None,
                                                      _num(row.get("m_TradedVolume")) or None]
@@ -335,13 +387,9 @@ class YounitClient:
         for c in candles:
             if not isinstance(c, dict):
                 continue
-            stamp = str(_first(c, "dateTime", "date", "Date") or "")[:10]
+            stamp = candle_date(_first(c, "dateTime", "date", "Date"))
             close = _num(_first(c, "price", "close", "closePrice"))
-            if len(stamp) != 10 or close <= 0:
-                continue
-            try:
-                date.fromisoformat(stamp)
-            except ValueError:
+            if stamp is None or close <= 0:
                 continue
             o = _num(_first(c, "openPrice", "open")) or close
             h = max(_num(_first(c, "highPrice", "high")), o, close)

@@ -107,20 +107,39 @@ let feedUpdateStarted = false; // once per page load, however many times the she
 
 /** Pulls the day's prices from the feed in short batches and says what it is doing. */
 export function useFeedUpdate() {
-  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean; changed?: number }>({ running: false });
+  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean; changed?: number; paused?: boolean }>({ running: false });
   const run = async () => {
     setState({ running: true });
     let failures = 0;
     let changed = 0;
-    for (let i = 0; i < 60; i++) {
+    let pauses = 0;
+    let seen: { left?: number; total?: number } = {};
+    // The feed limits how many requests it takes per minute. When it says so, wait as long as it
+    // asks and carry on from where the update stopped; what was already saved stays saved.
+    const pause = async (seconds?: number) => {
+      if (++pauses > 8) return false;
+      setState({ running: true, ...seen, paused: true });
+      await new Promise((r) => setTimeout(r, Math.min(Math.max(seconds ?? 60, 5), 120) * 1000));
+      return true;
+    };
+    for (let i = 0; i < 90; i++) {
       try {
         const r = await api("/api/v1/data/refresh", { method: "POST" });
         failures = 0;
         changed += r.updated;
+        seen = { left: r.remaining, total: r.total };
         if (r.remaining === 0) return setState({ running: false, done: true, total: r.total, changed });
+        if (r.rate_limited) {
+          if (await pause(r.retry_after)) continue;
+          return setState({ running: false, done: true, total: r.total, changed }); // the next scheduled check picks it up
+        }
         if (r.stalled) return setState({ running: false, error: r.errors?.[0] ?? "The data feed returned nothing." });
         setState({ running: true, left: r.remaining, total: r.total });
       } catch (e: any) {
+        if (e.status === 429 || /rate limit/i.test(e.message ?? "")) {
+          if (await pause()) continue;
+          return setState({ running: false, done: true, changed });
+        }
         // One slow batch is not a failure: whatever it saved is kept, so try the next one.
         const transient = [0, 502, 503, 504].includes(e.status) && !/rejected|rate limit|could not be read/i.test(e.message);
         if (!transient || ++failures >= 3) {
@@ -187,6 +206,13 @@ function FeedUpdater({ provider }: { provider: any }) {
     return () => clearTimeout(t);
   }, [state.done, state.changed]);
 
+  if (state.running && state.paused)
+    return (
+      <div className="banner" role="status">
+        <strong>The data feed asked for a short pause.</strong> The update continues by itself in about a minute
+        {state.total && state.left != null ? ` (${state.total - state.left} of ${state.total} stocks done)` : ""}. Prices already saved stay on screen.
+      </div>
+    );
   if (state.running && (first || (state.left ?? 0) > 0))
     return (
       <div className="banner" role="status">
