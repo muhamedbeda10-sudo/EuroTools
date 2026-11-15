@@ -275,11 +275,22 @@ export default function Settings() {
                 <dt>Last updated</dt><dd>{pv.updated_at ? `${pv.updated_at.slice(0, 16).replace("T", " ")} UTC` : "never"}</dd>
               </>
             )}
+            {pv?.configured && (
+              <>
+                <dt>Live prices</dt>
+                <dd>{pv.live?.stocks ? `${pv.live.stocks} stocks, last at ${String(pv.live.as_of).slice(0, 16).replace("T", " ")} Cairo` : pv.live ? "The feed's stock list carries no prices" : "No live snapshot yet"}{pv.market_open ? " · market open" : " · market closed"}</dd>
+              </>
+            )}
             <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
-            <dt>Live streaming quotes</dt><dd>Not connected</dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
           {status.data && <p className="muted" style={{ marginTop: 10 }}>{status.data.broker_note}</p>}
+          {pv?.fields?.length > 0 && (
+            <details style={{ margin: "8px 0 12px" }}>
+              <summary className="muted">Fields the feed sends for each stock (for troubleshooting)</summary>
+              <p className="muted" style={{ fontSize: 12, wordBreak: "break-word", marginTop: 6 }}>{pv.fields.join(", ")}</p>
+            </details>
+          )}
           {pv?.configured && (
             <>
               <button onClick={feed.run} disabled={feed.state.running}>

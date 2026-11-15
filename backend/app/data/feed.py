@@ -20,7 +20,7 @@ import httpx
 import pandas as pd
 
 from ..store.errors import AuthError
-from .calendar import is_trading_day
+from .calendar import cairo_now, is_trading_day, market_open
 from .younit import YounitClient, YounitError
 
 CHUNKS = 24
@@ -101,7 +101,8 @@ def _meta(index: dict) -> dict:
     dates = [d for d in index["last_dates"].values() if d]
     return {"version": index["version"], "updated_at": index.get("updated_at"),
             "symbols": len(index["instruments"]), "with_history": len(dates),
-            "latest_bar_date": max(dates) if dates else None, "errors": index.get("errors", [])[:5]}
+            "latest_bar_date": max(dates) if dates else None, "errors": index.get("errors", [])[:5],
+            "fields": index.get("fields", [])}
 
 
 class Feed:
@@ -112,7 +113,7 @@ class Feed:
     version changes, once per server instance rather than once per user.
     """
 
-    _state: dict = {"version": None, "meta": None, "instruments": [], "frames": {}}
+    _state: dict = {"version": None, "meta": None, "instruments": [], "frames": {}, "live": None, "live_ts": None}
 
     def __init__(self, docs: SharedDocs):
         self.docs = docs
@@ -125,6 +126,8 @@ class Feed:
         st = Feed._state
         if st["version"] == meta["version"] and st["meta"] is not None:
             st["meta"] = meta
+            if meta.get("live_ts") != st.get("live_ts"):
+                st["live"], st["live_ts"] = self.docs.get("live"), meta.get("live_ts")
             return st
         index = self.docs.get("index") or empty_index()
         frames: dict[str, pd.DataFrame] = {}
@@ -135,27 +138,71 @@ class Feed:
                     for symbol, rows in (doc or {}).get("bars", {}).items():
                         if rows:
                             frames[symbol] = _frame(rows)
-        Feed._state = {"version": meta["version"], "meta": meta, "instruments": index["instruments"], "frames": frames}
+        Feed._state = {"version": meta["version"], "meta": meta, "instruments": index["instruments"], "frames": frames,
+                       "live": self.docs.get("live") if meta.get("live_ts") else None, "live_ts": meta.get("live_ts")}
         return Feed._state
 
     @staticmethod
     def reset() -> None:
-        Feed._state = {"version": None, "meta": None, "instruments": [], "frames": {}}
+        Feed._state = {"version": None, "meta": None, "instruments": [], "frames": {}, "live": None, "live_ts": None}
+
+    def poll_live(self, client: YounitClient, *, now: datetime | None = None, min_age_seconds: float = 45.0) -> dict:
+        """Take the latest price of every stock, once, and keep today's running open/high/low.
+
+        Several open pages ask for this every minute; whoever arrives within
+        `min_age_seconds` of the last poll gets the saved prices and the feed is
+        not called again.
+        """
+        now = now or cairo_now()
+        today = now.date().isoformat()
+        current = self.docs.get("live")
+        if current and current.get("date") == today:
+            age = (now - datetime.fromisoformat(current["ts"])).total_seconds()
+            if age < min_age_seconds:
+                return {"updated": False, "ts": current["ts"], "available": bool(current["quotes"])}
+        snap = client.snapshot()
+        previous = current["quotes"] if current and current.get("date") == today else {}
+        quotes: dict[str, list] = {}
+        for s in snap["stocks"]:
+            last = s["last"]
+            if last is None:
+                continue
+            was = previous.get(s["symbol"])
+            opened = s["open"] or (was[1] if was else last)
+            high = max(v for v in (s["high"], was[2] if was else None, last, opened) if v)
+            low = min(v for v in (s["low"], was[3] if was else None, last, opened) if v)
+            quotes[s["symbol"]] = [last, opened, high, low, s["volume"] or (was[4] if was else 0.0)]
+        doc = {"date": today, "ts": now.isoformat(timespec="seconds"), "quotes": quotes, "fields": snap["fields"]}
+        self.docs.put("live", doc)
+        meta = self.docs.get("meta") or _meta(self.docs.get("index") or empty_index())
+        meta["live_ts"] = doc["ts"]
+        self.docs.put("meta", meta)
+        st = Feed._state
+        if st["meta"] is not None:
+            st["meta"], st["live"], st["live_ts"] = meta, doc, doc["ts"]
+        return {"updated": True, "ts": doc["ts"], "available": bool(quotes), "fields": snap["fields"]}
 
     def summary(self, today: date) -> dict:
         meta = self.load()["meta"]
         updated = meta.get("updated_at")
         fresh_today = bool(updated) and updated[:10] == _now().date().isoformat()
+        live = self._state.get("live")
         return {**{k: meta[k] for k in ("symbols", "with_history", "latest_bar_date", "updated_at", "errors")},
-                "refresh_due": not fresh_today or meta["with_history"] < meta["symbols"]}
+                "refresh_due": not fresh_today or meta["with_history"] < meta["symbols"],
+                "market_open": market_open(),
+                "fields": meta.get("fields", []),
+                "live": {"as_of": live["ts"], "date": live["date"], "stocks": len(live["quotes"]),
+                         "fields": live.get("fields", [])} if live else None}
 
     def refresh(self, client: YounitClient, *, today: date, budget_seconds: float = 18.0) -> dict:
         """Update as many symbols as fit in the time budget. Call again while `remaining` > 0."""
         started = time.monotonic()
         index = json.loads(json.dumps(self.docs.get("index") or empty_index()))
-        stocks = client.stocks()  # raises YounitError: nothing is written if the feed is down
+        snap = client.snapshot()  # raises YounitError: nothing is written if the feed is down
+        stocks = [{k: s[k] for k in ("symbol", "name", "stock_id")} for s in snap["stocks"]]
         if not stocks:
             raise YounitError("Younit returned an empty stock list")
+        index["fields"] = snap["fields"]
         index["instruments"] = stocks
         known = {s["symbol"] for s in stocks}
         now = _now()
@@ -231,7 +278,9 @@ class Feed:
         index["updated_at"] = stamp
         index["version"] = int(index.get("version", 0)) + 1
         self.docs.put("index", index)
-        self.docs.put("meta", _meta(index))  # last: readers switch to the new version only once it is all there
+        meta = _meta(index)
+        meta["live_ts"] = (self.docs.get("meta") or {}).get("live_ts")
+        self.docs.put("meta", meta)  # last: readers switch to the new version only once it is all there
         Feed.reset()
         remaining = sum(1 for s in stocks if due(s["symbol"]))
         return {"updated": done, "remaining": remaining, "total": len(stocks), "errors": errors[:5],

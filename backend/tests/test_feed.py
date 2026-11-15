@@ -35,6 +35,13 @@ class FakeYounit:
     def stocks(self):
         return self.listing
 
+    def snapshot(self):
+        self.snapshots = getattr(self, "snapshots", 0) + 1
+        live = getattr(self, "live", {})
+        return {"fields": ["price", "reuterCode", "stockId", "stockName"],
+                "stocks": [{**s, "last": live.get(s["symbol"]), "open": None, "high": None, "low": None, "volume": None}
+                           for s in self.listing]}
+
     def daily_history(self, stock_id, date_from, date_to):
         self.calls.append((stock_id, date_from, date_to))
         if stock_id in self.fail:
@@ -136,7 +143,7 @@ def test_feed_outage_is_reported_and_writes_nothing(env):
 
     def down():
         raise YounitError("cannot reach Younit (ConnectTimeout)")
-    fake.stocks = down
+    fake.snapshot = down
     r = c.post("/api/v1/data/refresh")
     assert r.status_code == 502 and "cannot reach Younit" in r.json()["detail"]
     assert len(c.get("/api/v1/stocks").json()) == 3   # yesterday's data still served
@@ -279,3 +286,61 @@ def test_a_request_reads_one_small_document_when_nothing_changed(tmp_path):
     store.delete("egxMarket", "meta")
     Feed.reset()
     assert len(feed.load()["frames"]) == 3
+
+
+# ---- live prices during the session ------------------------------------------
+def test_live_prices_sit_on_top_of_history_until_the_session_settles(tmp_path):
+    from datetime import datetime
+
+    from app.data.calendar import CAIRO
+    from app.data.market import MarketData
+    store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit(n=60)
+    feed = Feed(StoreDocs(store))
+    session = days(1)[0]                       # the latest session date in the fake history
+    today = date.fromisoformat(session)
+    feed.refresh(fake, today=today)
+    settled_close = feed.load()["frames"]["COMI"]["close"].iloc[-1]
+
+    def market(day=today):
+        return MarketData(store, {}, data_version=0, sample=False, today=day, feed=feed.load())
+
+    # same day as the last settled bar: the live price replaces its close, keeps the day's range honest
+    fake.live = {"COMI": settled_close + 5, "TMGH": 1.0}
+    t0 = datetime.combine(today, datetime.min.time(), CAIRO).replace(hour=11)
+    out = feed.poll_live(fake, now=t0)
+    assert out["updated"] and out["available"] and out["fields"]
+    m = market()
+    bars = m.bars("COMI")
+    assert bars["close"].iloc[-1] == settled_close + 5 and bars["high"].iloc[-1] >= settled_close + 5
+    assert len(bars) == 60 and m.is_live("COMI") and not m.is_live("NEWCO")
+    assert m.bars("COMI", settled=True)["close"].iloc[-1] == settled_close   # backtests never see the unfinished bar
+    assert m.status()["is_live"] and m.status()["live_symbols"] == 2
+
+    # a poll 20 seconds later reuses the saved prices: the feed is not called again
+    calls = fake.snapshots
+    again = feed.poll_live(fake, now=t0.replace(second=20))
+    assert again == {"updated": False, "ts": out["ts"], "available": True} and fake.snapshots == calls
+    # a minute later it is, and the day's high/low keep running
+    fake.live = {"COMI": settled_close - 3}
+    feed.poll_live(fake, now=t0.replace(minute=2))
+    q = store.get("egxMarket", "live")["quotes"]["COMI"]
+    assert q[0] == settled_close - 3 and q[2] == settled_close + 5 and q[3] == settled_close - 3
+
+    # next morning the saved prices belong to yesterday and are ignored
+    assert not market(today + timedelta(days=1)).is_live("COMI")
+
+
+def test_live_endpoint_only_polls_while_the_market_is_open(env, monkeypatch):
+    c, fake = env
+    c.post("/api/v1/data/refresh")
+    import app.services as services
+    before = fake.snapshots
+    monkeypatch.setattr(services, "market_open", lambda: False)
+    assert c.post("/api/v1/data/live").json() == {"updated": False, "market_open": False}
+    assert fake.snapshots == before   # market closed: the feed is not called
+    monkeypatch.setattr(services, "market_open", lambda: True)
+    fake.live = {"COMI": 99.0}
+    out = c.post("/api/v1/data/live").json()
+    assert out["updated"] and out["market_open"]
+    s = c.get("/api/v1/status").json()
+    assert s["provider"]["live"]["stocks"] == 1 and s["provider"]["live"]["fields"]

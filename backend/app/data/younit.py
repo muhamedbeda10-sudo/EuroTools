@@ -140,8 +140,12 @@ class YounitClient:
         raise YounitError("Younit rejected the request")
 
     # ---- market data -----------------------------------------------------
-    def stocks(self) -> list[dict]:
-        """All EGX stocks: [{symbol, name, stock_id}], sorted by symbol."""
+    def snapshot(self) -> dict:
+        """The whole market in one call: every stock with its latest price.
+
+        Returns {"stocks": [{symbol, name, stock_id, last, open, high, low, volume}], "fields": [...]}.
+        `last` and the other figures are None when the feed does not supply them.
+        """
         body = self._get(f"/api/stocks/market/{EGX_MARKET_ID}")
         raw_list = _unwrap(body, "stocks", "items", "result")
         out: dict[str, dict] = {}
@@ -161,11 +165,25 @@ class YounitClient:
             except (TypeError, ValueError):
                 continue
             name = str(_first(raw, "stockName", "securityName", "name", "shortName") or symbol).strip()
-            out[symbol] = {"symbol": symbol, "name": name[:120], "stock_id": stock_id}
+
+            def pos(*keys, raw=raw):
+                value = _num(_first(raw, *keys))
+                return value if value > 0 else None
+            out[symbol] = {
+                "symbol": symbol, "name": name[:120], "stock_id": stock_id,
+                "last": pos("price", "lastPrice", "last", "lastTradePrice", "currentPrice"),
+                "open": pos("openPrice", "open"), "high": pos("highPrice", "high"), "low": pos("lowPrice", "low"),
+                "volume": pos("volume", "totalVolume", "tradedVolume", "tradeVolume"),
+            }
         if not out:
             # Say what came back (field names only, never values) so the mismatch can be fixed.
             raise YounitError(f"Younit stock list could not be read: {_shape(body, raw_list)}")
-        return [out[s] for s in sorted(out)]
+        first = next((r for r in raw_list if isinstance(r, dict)), {})
+        return {"stocks": [out[s] for s in sorted(out)], "fields": sorted(str(k) for k in first)[:60]}
+
+    def stocks(self) -> list[dict]:
+        """All EGX stocks: [{symbol, name, stock_id}], sorted by symbol."""
+        return [{k: s[k] for k in ("symbol", "name", "stock_id")} for s in self.snapshot()["stocks"]]
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

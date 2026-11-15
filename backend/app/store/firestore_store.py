@@ -14,6 +14,7 @@ import base64
 import json
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import quote
@@ -184,6 +185,19 @@ class FirestoreStore:
         self._remember(coll, id, doc)
         self._write(coll, id, doc, must_not_exist=True)
         return doc
+
+    def warm(self, gets: list[tuple[str, str]] = (), lists: list[str] = ()) -> None:
+        """Fetch several documents and collections at the same time, ahead of the code that reads them.
+
+        Every read is a network round trip to the database; a screen that needs
+        four of them waits for one round trip instead of four.
+        """
+        jobs = [lambda g=g: self.get(*g) for g in gets if g not in self._docs]
+        jobs += [lambda c=c: self.list(c) for c in lists if c not in self._lists]
+        if len(jobs) > 1:
+            with ThreadPoolExecutor(len(jobs)) as pool:
+                for future in [pool.submit(job) for job in jobs]:
+                    future.result()
 
     def recent(self, coll: str, limit: int) -> list[dict[str, Any]]:
         """Newest `limit` appended documents, without reading the whole collection."""

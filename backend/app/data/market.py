@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import sample
-from .calendar import trading_days_between
+from .calendar import cairo_now, trading_days_between
 
 SEED_FILE = Path(__file__).resolve().parent.parent.parent / "seed" / "egx_instruments.csv"
 STALE_AFTER_TRADING_DAYS = 2
@@ -47,7 +47,7 @@ class MarketData:
         self.feed = feed  # Feed.load() state from the shared Younit cache, or None
         # Synthetic prices are never mixed with a real feed.
         self.sample = sample and feed is None
-        self.today = today or date.today()
+        self.today = today or cairo_now().date()
 
     # ---- instruments -----------------------------------------------------
     def instruments(self, include_indices: bool = False) -> list[dict]:
@@ -61,7 +61,8 @@ class MarketData:
 
     # ---- bars ------------------------------------------------------------
     def _load(self) -> None:
-        key = (self.data_version, self.today.isoformat(), self.sample, self.feed["version"] if self.feed else None)
+        key = (self.data_version, self.today.isoformat(), self.sample,
+               (self.feed["version"], self.feed.get("live_ts")) if self.feed else None)
         if self.cache.get("key") == key:
             return
         custom = self.store.list("instruments")
@@ -77,6 +78,8 @@ class MarketData:
         instruments = sorted(base + [c for c in custom if c["symbol"] not in listed], key=lambda i: i["symbol"])
         frames: dict[str, pd.DataFrame] = {}
         sources: dict[str, str] = {}
+        settled: dict[str, pd.DataFrame] = {}  # history without today's unfinished session
+        live_symbols: set[str] = set()
 
         def frame(rows) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
@@ -88,18 +91,46 @@ class MarketData:
             for symbol, rows in sample.generate([i for i in instruments if i["symbol"] not in imported], self.today).items():
                 frames[symbol], sources[symbol] = frame(rows), "sample"
         if self.feed is not None:
+            live = self.feed.get("live") or {}
+            live_quotes = live.get("quotes", {}) if live.get("date") == self.today.isoformat() else {}
+            stamp = pd.Timestamp(self.today)
             for symbol, df in self.feed["frames"].items():  # built once per server instance, shared by reference
-                if symbol not in imported:
-                    frames[symbol], sources[symbol] = df, "younit"
+                if symbol in imported:
+                    continue
+                settled[symbol] = df
+                q = live_quotes.get(symbol)
+                if q and len(df) and stamp >= df.index[-1]:
+                    # Today's session so far, as one bar on top of the settled history.
+                    last, opened, high, low, volume = q
+                    if stamp == df.index[-1]:
+                        row = df.iloc[-1]
+                        opened, high, low = row["open"], max(row["high"], high), min(row["low"], low)
+                        volume = max(row["volume"], volume)
+                        df = df.iloc[:-1]
+                    df = pd.concat([df, pd.DataFrame(
+                        {"open": opened, "high": high, "low": low, "close": last, "volume": volume}, index=[stamp])])
+                    df.index.name = "date"
+                    live_symbols.add(symbol)
+                frames[symbol], sources[symbol] = df, "younit"
         for symbol, rows in imported.items():
             frames[symbol], sources[symbol] = frame(rows), "csv"
         self.cache.clear()
+        live_doc = (self.feed or {}).get("live") or {}
         self.cache.update(key=key, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
-                          frames=frames, sources=sources)
+                          frames=frames, sources=sources, settled=settled, live_symbols=live_symbols,
+                          live_as_of=live_doc.get("ts") if live_symbols else None,
+                          shared_only=self.feed is not None and not imported and not custom)
 
-    def bars(self, symbol: str) -> pd.DataFrame | None:
+    def bars(self, symbol: str, *, settled: bool = False) -> pd.DataFrame | None:
+        """Price history. `settled=True` leaves out today's unfinished session (for backtests and signals)."""
         self._load()
+        if settled and symbol in self.cache["live_symbols"]:
+            return self.cache["settled"].get(symbol)
         return self.cache["frames"].get(symbol)
+
+    def is_live(self, symbol: str) -> bool:
+        self._load()
+        return symbol in self.cache["live_symbols"]
 
     def source(self, symbol: str) -> str | None:
         self._load()
@@ -179,7 +210,9 @@ class MarketData:
             "latest_bar_date": latest.isoformat() if latest else None,
             "trading_days_behind": age,
             "is_stale": bool(age is not None and age > STALE_AFTER_TRADING_DAYS),
-            "is_live": False,
+            "is_live": bool(self.cache["live_symbols"]),
+            "live_as_of": self.cache["live_as_of"],
+            "live_symbols": len(self.cache["live_symbols"]),
             "symbols_behind_latest": sorted(s for s, f in frames.items() if latest and f.index[-1].date() < latest),
             "symbols_without_data": sorted(i["symbol"] for i in self.cache["instruments"] if i["symbol"] not in frames),
         }

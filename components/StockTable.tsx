@@ -31,7 +31,7 @@ export default function StockTable({ rows, onChange, empty = "No stocks to show.
               <td><Chg v={r.month_pct} /></td>
               <td>{big(r.volume)}</td>
               <td><Spark data={r.spark} /></td>
-              <td>{r.as_of} <SourceTag source={r.source} /></td>
+              <td>{r.as_of} <SourceTag source={r.source} live={r.live} /></td>
               <td>
                 <button className={`small ${r.watched ? "on" : ""}`} onClick={() => toggle(r)} aria-pressed={r.watched}
                   aria-label={`${r.watched ? "Remove" : "Add"} ${r.symbol} ${r.watched ? "from" : "to"} watchlist`}>

@@ -43,7 +43,13 @@ export default function Dashboard() {
           <h1>Dashboard</h1>
           <p className="sub">What is happening in the market, and how is the paper portfolio performing?</p>
         </div>
-        {ov.data?.as_of && <span className="badge">Market data as of {ov.data.as_of} · end of day, not live</span>}
+        {ov.data?.as_of && (
+          <span className="badge">
+            {d?.is_live
+              ? `Live prices · ${String(d.live_as_of).slice(11, 16)} Cairo · updated every minute while the market is open`
+              : `Market data as of ${ov.data.as_of} · end of day, not live`}
+          </span>
+        )}
       </div>
 
       <State loading={ov.loading} error={ov.error}>
@@ -156,7 +162,7 @@ export default function Dashboard() {
               <dt>Price data</dt><dd>{d.mode === "sample" ? "Sample (synthetic)" : d.mode === "mixed" ? "Imported + sample" : d.mode === "imported" ? "Imported CSV" : d.mode === "younit" ? "Younit, daily bars" : "None"}</dd>
               <dt>Latest bar</dt><dd>{d.latest_bar_date ?? "—"}</dd>
               <dt>Sessions behind today</dt><dd>{d.trading_days_behind ?? "—"}</dd>
-              <dt>Live streaming quotes</dt><dd>Not connected</dd>
+              <dt>Live prices</dt><dd>{d.is_live ? `On, ${d.live_symbols} stocks, ${String(d.live_as_of).slice(11, 16)} Cairo` : st.data?.provider?.market_open ? "Waiting for the feed" : "Market closed"}</dd>
               <dt>Younit market data</dt><dd>{st.data?.provider?.configured ? "Connected, read-only" : "Not connected"}</dd>
               <dt>Live order execution</dt><dd>Disabled</dd>
               <dt>News feed</dt><dd>Later phase</dd>

@@ -160,6 +160,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     @api.get("/api/v1/status")
     def status(core: App = Depends(get_core)):
+        core.store.warm(gets=[("settings", "fees")], lists=["instruments", "bars"])
         return {
             "trading_mode": "paper",
             "live_trading_enabled": False,
@@ -324,6 +325,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         if doc is None:
             raise HTTPException(404, "backtest not found")
         return doc
+
+    @api.post("/api/v1/data/live")
+    def poll_live_prices(core: App = Depends(get_core)):
+        """Latest prices while the market is open. The page calls this once a minute."""
+        return core.poll_live()
 
     @api.post("/api/v1/data/refresh")
     def refresh_market_data(core: App = Depends(get_core)):

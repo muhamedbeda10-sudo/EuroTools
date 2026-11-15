@@ -54,7 +54,8 @@ export function Spark({ data, width = 90, height = 26 }: { data?: number[]; widt
   );
 }
 
-export function SourceTag({ source }: { source?: string | null }) {
+export function SourceTag({ source, live }: { source?: string | null; live?: boolean }) {
+  if (live) return <span className="badge ok" title="Price from the running session; today's bar is still forming">live</span>;
   if (source === "sample") return <span className="badge warn" title="Synthetic test data, not a market quote">sample</span>;
   if (source === "csv") return <span className="badge" title="Imported from CSV; not live">csv</span>;
   return null;

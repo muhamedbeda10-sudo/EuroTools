@@ -106,6 +106,7 @@ export function useFeedUpdate() {
 }
 
 const RECHECK_MS = 15 * 60 * 1000;
+const LIVE_MS = 60 * 1000;
 
 function FeedUpdater({ provider }: { provider: any }) {
   const { state, run } = useFeedUpdate();
@@ -126,6 +127,24 @@ function FeedUpdater({ provider }: { provider: any }) {
     }, RECHECK_MS);
     return () => clearInterval(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // While the market is open: the latest price of every stock, once a minute.
+  const open = useRef(false);
+  open.current = !!provider.market_open;
+  useEffect(() => {
+    const poll = async () => {
+      if (!open.current || document.visibilityState !== "visible") return;
+      try {
+        const r = await api("/api/v1/data/live", { method: "POST" });
+        if (r.updated) window.dispatchEvent(new Event(DATA_UPDATED));
+      } catch {
+        // a missed minute is not worth an error on screen; the next one will try again
+      }
+    };
+    poll();
+    const timer = setInterval(poll, LIVE_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   // New data saved: tell every screen to re-read it. No reload, nothing to click.
   useEffect(() => {
@@ -210,8 +229,8 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             </button>
             {d && (
               <span className={`badge ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`}>
-                Data: {d.mode === "sample" ? "sample (synthetic)" : d.mode === "mixed" ? "imported + sample" : d.mode === "imported" ? "imported CSV" : d.mode === "younit" ? "Younit, daily" : "none"}
-                {d.latest_bar_date ? ` · as of ${d.latest_bar_date}` : ""}
+                Data: {d.mode === "sample" ? "sample (synthetic)" : d.mode === "mixed" ? "imported + sample" : d.mode === "imported" ? "imported CSV" : d.mode === "younit" ? (d.is_live ? "Younit, live" : "Younit, daily") : "none"}
+                {d.is_live ? ` · ${String(d.live_as_of).slice(11, 16)} Cairo` : d.latest_bar_date ? ` · as of ${d.latest_bar_date}` : ""}
               </span>
             )}
             <span className="badge">{status?.provider?.configured ? "Younit: market data only · orders off" : "Broker: not connected"}</span>

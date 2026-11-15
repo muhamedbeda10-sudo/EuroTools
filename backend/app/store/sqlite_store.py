@@ -110,6 +110,9 @@ class Store:
             )
             return doc
 
+    def warm(self, gets=(), lists=()) -> None:
+        """Nothing to do locally; the Firestore store uses this to read in parallel."""
+
     def recent(self, coll: str, limit: int) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(

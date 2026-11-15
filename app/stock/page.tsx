@@ -44,7 +44,7 @@ function StockView() {
             <>
               {data.data_note && <div className="note">{data.data_note}</div>}
               <div className="grid cols-4">
-                <Kpi label={`Last close · ${q.as_of}`} value={num(q.last)} hint={<><span className={tone(q.change)}>{signed(q.change)} ({pct(q.change_pct)})</span> <SourceTag source={q.source} /></>} />
+                <Kpi label={q.live ? `Live price · ${q.as_of}` : `Last close · ${q.as_of}`} value={num(q.last)} hint={<><span className={tone(q.change)}>{signed(q.change)} ({pct(q.change_pct)})</span> <SourceTag source={q.source} live={q.live} /></>} />
                 <Kpi label="Volume" value={big(q.volume)} hint={`20-day average ${big(q.avg_volume_20)} · turnover ≈ EGP ${big(q.turnover)}`} />
                 <Kpi label="Trend" value={a.trend} hint={`Technical score ${a.technical_score > 0 ? "+" : ""}${a.technical_score} of ±3`} />
                 <Kpi label="Momentum" value={a.momentum} hint={<>1m <Chg v={a.returns_pct["1m"]} /> · 3m <Chg v={a.returns_pct["3m"]} /></>} />

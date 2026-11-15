@@ -10,6 +10,7 @@ from decimal import Decimal
 import pandas as pd
 
 from .config import Settings
+from .data.calendar import market_open
 from .data.market import MarketData
 from .domain import indicators as ind
 from .domain.backtest import run_backtest
@@ -97,6 +98,14 @@ class App:
             return {"name": None, "configured": False}
         return {"name": "younit", "configured": True, "read_only": True, **self.feed.summary(self.market.today)}
 
+    def poll_live(self) -> dict:
+        """Latest prices for the running session. Does nothing while the market is closed."""
+        if self.feed is None or self.younit is None:
+            raise NotFound("no market-data feed is configured")
+        if not market_open():
+            return {"updated": False, "market_open": False}
+        return {**self.feed.poll_live(self.younit), "market_open": True}
+
     def refresh_feed(self) -> dict:
         if self.feed is None or self.younit is None:
             raise NotFound("no market-data feed is configured")
@@ -154,6 +163,12 @@ class App:
         mcache = self.market.cache
         if "quotes" in mcache:
             return mcache["quotes"]
+        # An account with no imports of its own sees exactly the shared feed, so the
+        # table is computed once per server instance instead of once per account.
+        shared = self.market.feed.setdefault("_quotes", {}) if mcache.get("shared_only") else None
+        if shared is not None and shared.get("key") == mcache["key"][1:]:
+            mcache["quotes"] = shared["table"]
+            return mcache["quotes"]
         rows = []
         for insx in self.market.instruments(include_indices=True):
             df = self.market.bars(insx["symbol"])
@@ -174,15 +189,19 @@ class App:
                 "turnover": last * float(df["volume"].iloc[-1]),
                 "as_of": df.index[-1].strftime("%Y-%m-%d"),
                 "source": self.market.source(insx["symbol"]),
+                "live": self.market.is_live(insx["symbol"]),
                 "spark": [round(float(v), 2) for v in close.tail(30)],
             })
         mcache["quotes"] = pd.DataFrame(rows)
+        if shared is not None:
+            shared.update(key=mcache["key"][1:], table=mcache["quotes"])
         return mcache["quotes"]
 
     def _records(self, df: pd.DataFrame) -> list[dict]:
         return clean(df.astype(object).where(df.notna(), None).to_dict("records"))
 
     def stock_rows(self, sector: str | None = None, q: str | None = None, category: str | None = None) -> list[dict]:
+        self.store.warm(lists=["watchlist", "instruments", "bars"])
         df = self.quotes()
         if df.empty:
             return []
@@ -286,6 +305,8 @@ class App:
                 "reason": "No verified fundamental data source is connected yet (financial statements, EPS, P/E, dividends).",
             },
             "data_note": ("SAMPLE DATA - synthetic prices, not market quotes." if quote["source"] == "sample"
+                          else f"Live price from Younit as of {str(self.market.cache['live_as_of'])[11:16]} Cairo time. "
+                               "Today's bar is still forming." if quote.get("live")
                           else "Daily prices from Younit, as of the date shown. Not a live quote." if quote["source"] == "younit"
                           else None),
         })
@@ -429,6 +450,9 @@ class App:
         }
 
     def portfolio(self) -> dict:
+        pid = self.app_settings()["active_portfolio_id"]
+        self.store.warm(gets=[("settings", "fees"), ("portfolios", pid)],
+                        lists=[self._ledger_coll(), "instruments", "bars"])
         txs = self.store.list(self._ledger_coll())
         state = replay(txs)
         schedule = self.fee_schedule()
@@ -558,9 +582,9 @@ class App:
     def backtest(self, cfg: StrategyConfig, *, strategy_id: str | None, symbols: list[str] | None,
                  start: str | None, end: str | None, capital: Decimal | None) -> dict:
         universe = self.strategy_universe(cfg, symbols)
-        frames = {s: df for s in universe if (df := self.market.bars(s)) is not None and len(df) > 1}
+        frames = {s: df for s in universe if (df := self.market.bars(s, settled=True)) is not None and len(df) > 1}
         bsym = self.app_settings()["benchmark"]
-        bdf = self.market.bars(bsym)
+        bdf = self.market.bars(bsym, settled=True)
         schedule = self.fee_schedule()
         result = run_backtest(
             cfg, frames, schedule, start=start, end=end,
@@ -592,7 +616,7 @@ class App:
         for doc in self.store.list("strategies"):
             cfg = StrategyConfig.model_validate({k: doc[k] for k in StrategyConfig.model_fields})
             for symbol in self.strategy_universe(cfg):
-                df = self.market.bars(symbol)
+                df = self.market.bars(symbol, settled=True)  # signals are read on completed sessions only
                 if df is None or len(df) < 30:
                     continue
                 last = signals(cfg, df).iloc[-1]

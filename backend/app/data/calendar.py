@@ -1,5 +1,19 @@
 """EGX trading calendar: Sunday to Thursday. Public holidays are not modelled yet."""
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+CAIRO = ZoneInfo("Africa/Cairo")
+# Continuous session plus the closing auction, with a few minutes either side.
+SESSION_OPEN, SESSION_CLOSE = time(9, 55), time(14, 45)
+
+
+def cairo_now() -> datetime:
+    return datetime.now(CAIRO)
+
+
+def market_open(now: datetime | None = None) -> bool:
+    now = now or cairo_now()
+    return is_trading_day(now.date()) and SESSION_OPEN <= now.time() <= SESSION_CLOSE
 
 
 def is_trading_day(d: date) -> bool:
