@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { big, num, pct, signed, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { MacdChart, PriceChart, RsiChart, SMA_COLORS } from "@/components/Charts";
+import PriceDepth from "@/components/PriceDepth";
 import TradeTicket from "@/components/TradeTicket";
 import { Chg, Kpi, SourceTag, State } from "@/components/ui";
 
@@ -100,6 +101,13 @@ function StockView() {
               </div>
               <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>Assessments are rule-based descriptions of the price history. They are not investment advice.</p>
 
+              {q.source === "younit" && (
+                <div className="card section">
+                  <h2>Price depth</h2>
+                  <PriceDepth symbol={symbol} />
+                </div>
+              )}
+
               <div className="grid cols-2 section">
                 <div className="card">
                   <h2>Simulated order — {symbol}</h2>
@@ -108,7 +116,7 @@ function StockView() {
                 <div className="card">
                   <h2>Not available yet</h2>
                   <ul style={{ margin: 0, paddingLeft: 18 }} className="muted">
-                    <li>Bid / ask, market cap and shares outstanding (need the broker data feed).</li>
+                    <li>Market cap and shares outstanding.</li>
                     <li>Corporate actions: splits, bonus shares, dividends. Imported prices are used as-is, unadjusted.</li>
                     <li>AI-generated explanation with cited sources (later phase).</li>
                   </ul>

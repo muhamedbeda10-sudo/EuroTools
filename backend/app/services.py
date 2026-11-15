@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -10,7 +11,7 @@ from decimal import Decimal
 import pandas as pd
 
 from .config import Settings
-from .data.calendar import market_open
+from .data.calendar import cairo_now, market_open
 from .data.market import MarketData
 from .domain import indicators as ind
 from .domain.backtest import run_backtest
@@ -19,6 +20,10 @@ from .domain.ledger import LedgerError, build_trade, replay
 from .domain.money import ZERO, D, f, money
 from .domain.strategies import StrategyConfig, signals
 from .store.errors import ConflictError
+
+# Several people looking at the same stock share one feed call for a few seconds.
+_DEPTH_CACHE: dict[str, tuple[float, dict]] = {}
+DEPTH_CACHE_SECONDS = 5.0
 
 
 class NotFound(LookupError):
@@ -97,6 +102,24 @@ class App:
         if self.feed is None:
             return {"name": None, "configured": False}
         return {"name": "younit", "configured": True, "read_only": True, **self.feed.summary(self.market.today)}
+
+    def depth(self, symbol: str) -> dict:
+        """Order book of one stock, straight from the feed. Nothing is stored."""
+        symbol = symbol.upper()
+        if self.feed is None or self.younit is None:
+            raise NotFound("price depth needs the live market-data feed")
+        stock = next((i for i in self.market.feed["instruments"] if i["symbol"] == symbol), None)
+        if stock is None:
+            raise NotFound(f"{symbol} is not in the live feed")
+        cached = _DEPTH_CACHE.get(symbol)
+        if cached and time.monotonic() - cached[0] < DEPTH_CACHE_SECONDS:
+            return cached[1]
+        book = {"symbol": symbol, "as_of": cairo_now().isoformat(timespec="seconds"), "market_open": market_open(),
+                **self.younit.depth(stock["stock_id"])}
+        _DEPTH_CACHE[symbol] = (time.monotonic(), book)
+        while len(_DEPTH_CACHE) > 50:
+            _DEPTH_CACHE.pop(next(iter(_DEPTH_CACHE)))
+        return book
 
     def poll_live(self) -> dict:
         """Latest prices for the running session. Does nothing while the market is closed."""

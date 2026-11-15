@@ -31,6 +31,8 @@ STREAM_ADAPTER = "PROXY_MarketBeat"  # market data only; the orders adapter is n
 STREAM_CHUNK = 40
 INDEX_PROBE = 25
 QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
+DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m_AskPrice", "m_AskVol",
+                "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
 INDEX_FIELDS = ["m_IndexName", "m_EnglishName", "m_IndexValue", "m_IndexClose", "m_PrecentChange"]
 SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
 
@@ -233,6 +235,19 @@ class YounitClient:
                                     "change_pct": _num(row.get("m_PrecentChange")) if row.get("m_PrecentChange") else None})
         return {"quotes": quotes, "sectors": sectors, "indices": sorted(indices, key=lambda i: i["id"]),
                 "errors": got["errors"], "answered": len(got["values"])}
+
+    def depth(self, stock_id: int, *, timeout: float = 6.0) -> dict:
+        """The order book of one stock right now (bids and asks by price level)."""
+        from . import depth, stream
+        token = self._authorization().split(" ", 1)[-1]
+        item = f"sy{int(stock_id)}"
+        try:
+            got = stream.snapshot(STREAM_URL, STREAM_ADAPTER,
+                                  [{"items": [item], "fields": DEPTH_FIELDS, "data_adapter": STREAM_ADAPTER}],
+                                  user=self._trading_id, password=token, timeout=timeout, grace=0.2)
+        except stream.StreamError as exc:
+            raise YounitError(f"Younit price depth: {exc}") from None
+        return depth.build(got["values"].get(item, {}))
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

@@ -187,6 +187,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
                category: str | None = None):
         return core.stock_rows(sector, q, category)
 
+    @api.get("/api/v1/stocks/{symbol}/depth")
+    def stock_depth(core: App = Depends(get_core), *, symbol: str):
+        return core.depth(symbol)
+
     @api.get("/api/v1/stocks/{symbol}")
     def stock(core: App = Depends(get_core), *, symbol: str, timeframe: Literal["d", "w", "m"] = "d"):
         return core.stock_detail(symbol, timeframe)

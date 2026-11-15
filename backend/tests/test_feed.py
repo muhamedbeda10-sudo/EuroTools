@@ -44,6 +44,17 @@ class FakeYounit:
                 "indices": getattr(self, "indices", [{"id": 1, "name": "EGX 30", "value": 31000.0, "prev_close": 30000.0, "change_pct": 3.33}]),
                 "errors": [], "answered": len(stocks)}
 
+    def depth(self, stock_id, timeout=6.0):
+        from app.data.depth import build
+        bids = [(0.827, 107879, 4), (0.825, 45000, 2), (0.824, 5971, 1), (0.823, 329008, 2), (0.822, 2968690, 5),
+                (0.821, 90774, 2), (0.82, 208848, 5), (0.819, 34500, 3)]
+        asks = [(0.828, 155401, 1), (0.829, 401808, 3), (0.83, 162073, 12), (0.832, 290061, 3), (0.833, 415746, 1),
+                (0.834, 270000, 2), (0.835, 450007, 10), (0.837, 500000, 2)]
+        return build({"m_LastTradePrice": "0.827", "m_BidPrice": "0.827", "m_AskPrice": "0.828",
+                      "m_BidBook": "|".join(f"{p},{s},{n}" for p, s, n in bids),
+                      "m_AskBook": "|".join(f"{p},{s},{n}" for p, s, n in asks),
+                      "m_TotalBids": "19225841", "m_TotalAsks": "18831655"})
+
     def snapshot(self):
         self.snapshots = getattr(self, "snapshots", 0) + 1
         return {"fields": ["id", "name", "reuterCode"],   # like the real list: no prices in it
@@ -367,3 +378,12 @@ def test_live_endpoint_only_polls_while_the_market_is_open(env, monkeypatch):
     monkeypatch.setattr(feed_module, "cairo_now", lambda: __import__("datetime").datetime.now(feed_module.CAIRO) + timedelta(minutes=5))
     r = c.post("/api/v1/data/live")
     assert r.status_code == 502 and "live prices" in r.json()["detail"]
+
+
+def test_depth_endpoint_serves_the_book_and_refuses_unknown_stocks(env):
+    c, _ = env
+    c.post("/api/v1/data/refresh")
+    b = c.get("/api/v1/stocks/comi/depth").json()
+    assert b["symbol"] == "COMI" and b["best_bid"] == 0.827 and b["best_ask"] == 0.828
+    assert len(b["bids"]) == 8 and b["bids"][0]["orders"] == 4 and b["unread"] is None and "as_of" in b
+    assert c.get("/api/v1/stocks/NOPE/depth").status_code == 404

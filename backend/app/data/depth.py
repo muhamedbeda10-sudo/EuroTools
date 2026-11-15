@@ -1,0 +1,139 @@
+"""Order-book ("price depth") parsing.
+
+The feed sends each side of the book as one text field whose layout is not
+documented. `parse_side` accepts JSON or delimited text and identifies, per
+level, which number is the price (the one near the last traded price), which is
+the size (the largest) and which is the number of orders (a small whole number).
+When a side cannot be read, the caller is given a short sample of the raw text
+so the layout can be recognised and handled properly.
+"""
+from __future__ import annotations
+
+import json
+import re
+
+NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+RECORD_SEPARATORS = ["\n", "|", ";", "#", "~", "^"]
+MAX_LEVELS = 200
+
+
+def _level(numbers: list[float], near: float | None) -> dict | None:
+    numbers = [n for n in numbers if n > 0]
+    if len(numbers) < 2:
+        return None
+    if near:
+        price = min(numbers, key=lambda n: abs(n - near) / near)
+        if abs(price - near) / near > 0.6:
+            return None
+    else:
+        price = min(numbers)
+    rest = list(numbers)
+    rest.remove(price)
+    size = max(rest)
+    rest.remove(size)
+    orders = next((int(n) for n in rest if n == int(n) and n < 100_000), None)
+    return {"price": price, "size": size, "orders": orders}
+
+
+def _from_json(value, near: float | None) -> list[dict]:
+    if isinstance(value, dict):
+        value = next((v for v in value.values() if isinstance(v, list)), [])
+    out = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, dict):
+            lowered = {str(k).lower(): v for k, v in item.items()}
+
+            def pick(*hints, lowered=lowered):
+                for key, v in lowered.items():
+                    if any(h in key for h in hints):
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            continue
+                return None
+            price, size = pick("price", "prc"), pick("vol", "qty", "quantity", "size")
+            count = pick("count", "orders", "num", "no")
+            if price and size and price > 0 and size > 0:
+                out.append({"price": price, "size": size, "orders": int(count) if count else None})
+                continue
+            item = list(item.values())
+        if isinstance(item, (list, tuple)):
+            numbers = []
+            for v in item:
+                try:
+                    numbers.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+            level = _level(numbers, near)
+            if level:
+                out.append(level)
+    return out
+
+
+def parse_side(text: str | None, near: float | None = None) -> list[dict]:
+    """Levels [{price, size, orders}] of one side of the book, in the order the feed sent them."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if text[0] in "[{":
+        try:
+            levels = _from_json(json.loads(text), near)
+            if levels:
+                return levels[:MAX_LEVELS]
+        except ValueError:
+            pass
+    best: list[dict] = []
+    for sep in RECORD_SEPARATORS:
+        if sep not in text:
+            continue
+        levels = [lv for part in text.split(sep) if (lv := _level([float(n) for n in NUMBER.findall(part)], near))]
+        if len(levels) > len(best):
+            best = levels
+    if not best:  # a single level, or one flat run of numbers: read it in threes, then in pairs
+        numbers = [float(n) for n in NUMBER.findall(text)]
+        for width in (3, 2):
+            if len(numbers) >= width and len(numbers) % width == 0:
+                levels = [lv for i in range(0, len(numbers), width) if (lv := _level(numbers[i:i + width], near))]
+                if len(levels) == len(numbers) // width:
+                    best = levels
+                    break
+    return best[:MAX_LEVELS]
+
+
+def build(row: dict) -> dict:
+    """Turn one streaming row into the depth view the page shows."""
+    def num(key):
+        try:
+            v = float(row.get(key) or 0)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    last = num("m_LastTradePrice") or num("m_ClosePrice")
+    best_bid, best_ask = num("m_BidPrice"), num("m_AskPrice")
+    near = last or best_bid or best_ask
+    bids = sorted(parse_side(row.get("m_BidBook"), near), key=lambda lv: -lv["price"])
+    asks = sorted(parse_side(row.get("m_AskBook"), near), key=lambda lv: lv["price"])
+    if not bids and best_bid and num("m_BidVol"):
+        bids = [{"price": best_bid, "size": num("m_BidVol"), "orders": None}]
+    if not asks and best_ask and num("m_AskVol"):
+        asks = [{"price": best_ask, "size": num("m_AskVol"), "orders": None}]
+    best_bid = best_bid or (bids[0]["price"] if bids else None)
+    best_ask = best_ask or (asks[0]["price"] if asks else None)
+    total_bids = num("m_TotalBids") or sum(lv["size"] for lv in bids) or None
+    total_asks = num("m_TotalAsks") or sum(lv["size"] for lv in asks) or None
+    both = (total_bids or 0) + (total_asks or 0)
+    spread = best_ask - best_bid if best_bid and best_ask else None
+    unread = {side: str(row.get(key) or "")[:400] for side, key, levels in
+              (("bids", "m_BidBook", bids), ("asks", "m_AskBook", asks))
+              if str(row.get(key) or "").strip() and len(levels) <= 1}
+    return {
+        "last": last, "best_bid": best_bid, "best_ask": best_ask,
+        "best_bid_size": bids[0]["size"] if bids else None, "best_ask_size": asks[0]["size"] if asks else None,
+        "spread": spread, "spread_pct": spread / best_bid * 100 if spread is not None and best_bid else None,
+        "total_bids": total_bids, "total_asks": total_asks,
+        "bid_share_pct": total_bids / both * 100 if both and total_bids else None,
+        "bids": bids, "asks": asks,
+        # Present only when the book text could not be read into levels: a short sample of it.
+        "unread": unread or None,
+    }
