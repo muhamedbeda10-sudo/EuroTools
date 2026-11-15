@@ -9,6 +9,7 @@ YOUNIT_API_KEY). They are never sent to the browser, logged, or stored.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from datetime import date
@@ -25,6 +26,7 @@ HEADERS = {
 }
 REFRESH_BEFORE_EXPIRY = 300
 EGX_MARKET_ID = 1
+SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
 
 
 class YounitError(RuntimeError):
@@ -56,6 +58,23 @@ def _unwrap(data, *list_keys):
             if isinstance(data.get(k), list):
                 return data[k]
     return data if isinstance(data, list) else []
+
+
+def _shape(body, items) -> str:
+    """Describe a response by its structure: key names and types only, no values."""
+    def keys(d):
+        return ", ".join(sorted(str(k) for k in d)[:25])
+    if items and isinstance(items[0], dict):
+        return f"{len(items)} entries with fields [{keys(items[0])}]"
+    if items:
+        return f"{len(items)} entries of type {type(items[0]).__name__}"
+    if isinstance(body, list):
+        return "the list is empty"
+    path, node = [], body
+    while isinstance(node, dict) and len(path) < 4:
+        path.append("{" + keys(node) + "}")
+        node = node.get("data")
+    return "no list found; response is " + (" > ".join(path) if path else type(body).__name__)
 
 
 class YounitClient:
@@ -121,16 +140,29 @@ class YounitClient:
     # ---- market data -----------------------------------------------------
     def stocks(self) -> list[dict]:
         """All EGX stocks: [{symbol, name, stock_id}], sorted by symbol."""
+        body = self._get(f"/api/stocks/market/{EGX_MARKET_ID}")
+        raw_list = _unwrap(body, "stocks", "items", "result")
         out: dict[str, dict] = {}
-        for raw in _unwrap(self._get(f"/api/stocks/market/{EGX_MARKET_ID}")):
+        for raw in raw_list:
             if not isinstance(raw, dict):
                 continue
-            symbol = str(_first(raw, "symbol", "Symbol") or "").strip().upper()
-            stock_id = _first(raw, "stockId", "securityID", "securityId", "id")
-            if not symbol or not symbol.isalnum() or len(symbol) > 12 or stock_id is None:
+            symbol = _first(raw, "symbol", "Symbol", "ticker")
+            if not symbol:
+                # the live API identifies a stock by its Reuters code, e.g. "COMI.CA"
+                symbol = str(_first(raw, "reuterCode", "reuterID", "reutersCode", "ric") or "").split(".")[0]
+            symbol = str(symbol or "").strip().upper()
+            stock_id = _first(raw, "stockId", "securityID", "securityId", "stockID", "id")
+            if not symbol or not SYMBOL.fullmatch(symbol) or stock_id is None:
+                continue
+            try:
+                stock_id = int(stock_id)
+            except (TypeError, ValueError):
                 continue
             name = str(_first(raw, "stockName", "securityName", "name", "shortName") or symbol).strip()
-            out[symbol] = {"symbol": symbol, "name": name[:120], "stock_id": int(stock_id)}
+            out[symbol] = {"symbol": symbol, "name": name[:120], "stock_id": stock_id}
+        if not out:
+            # Say what came back (field names only, never values) so the mismatch can be fixed.
+            raise YounitError(f"Younit stock list could not be read: {_shape(body, raw_list)}")
         return [out[s] for s in sorted(out)]
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
@@ -139,7 +171,8 @@ class YounitClient:
                          {"SecurityID": stock_id, "Period": "Day",
                           "DateFrom": date_from.isoformat(), "DateTo": date_to.isoformat()})
         rows: dict[str, list] = {}
-        for c in _unwrap(data, "chartingDataViewModel"):
+        candles = _unwrap(data, "chartingDataViewModel", "candles", "items")
+        for c in candles:
             if not isinstance(c, dict):
                 continue
             stamp = str(_first(c, "dateTime", "date", "Date") or "")[:10]
@@ -156,4 +189,6 @@ class YounitClient:
             low = min(v for v in (low_raw, o, close) if v > 0)
             rows[stamp] = [stamp, round(o, 4), round(h, 4), round(low, 4), round(close, 4),
                            max(_num(_first(c, "volume", "Volume")), 0.0)]
+        if candles and not rows:
+            raise YounitError(f"Younit price history could not be read: {_shape(data, candles)}")
         return [rows[k] for k in sorted(rows)]

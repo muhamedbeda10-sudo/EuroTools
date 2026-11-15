@@ -195,7 +195,9 @@ def test_client_reauthenticates_once_on_401_and_explains_failures():
         state["calls"] += 1
         return httpx.Response(401) if req.headers["authorization"] == "Bearer t1" else httpx.Response(200, json=[])
     c = make_client(handler)
-    assert c.stocks() == [] and state == {"token": 2, "calls": 2}
+    with pytest.raises(YounitError, match="the list is empty"):
+        c.stocks()
+    assert state == {"token": 2, "calls": 2}
 
     with pytest.raises(YounitError, match="rejected the Trading ID"):
         make_client(lambda r: httpx.Response(401)).stocks()
@@ -208,3 +210,33 @@ def test_client_reauthenticates_once_on_401_and_explains_failures():
     with pytest.raises(YounitError, match="cannot reach Younit") as info:
         make_client(boom).stocks()
     assert "key-1" not in str(info.value) and "tid-1" not in str(info.value)
+
+
+def test_stock_list_uses_reuters_code_when_there_is_no_symbol_and_explains_unknown_shapes():
+    tok = httpx.Response(200, json={"accessToken": "t", "expiresIn": 3600, "tokenType": "Bearer"})
+
+    def live_shape(req):
+        if "token" in req.url.path:
+            return tok
+        return httpx.Response(200, json={"data": [
+            {"stockId": 101, "reuterCode": "COMI.CA", "stockName": "CIB", "price": 80.5},
+            {"stockId": "102", "reuterCode": "HRHO.CA", "shortName": "EFG"},
+            {"stockId": 103, "reuterCode": ""}, {"stockId": "x", "reuterCode": "BAD.CA"}]})
+    assert make_client(live_shape).stocks() == [{"symbol": "COMI", "name": "CIB", "stock_id": 101},
+                                                {"symbol": "HRHO", "name": "EFG", "stock_id": 102}]
+
+    def odd_fields(req):
+        return tok if "token" in req.url.path else httpx.Response(200, json={"data": [{"code": "COMI", "secret_value": "80.5"}]})
+    with pytest.raises(YounitError) as info:
+        make_client(odd_fields).stocks()
+    assert "fields [code, secret_value]" in str(info.value) and "80.5" not in str(info.value)
+
+    def no_list(req):
+        return tok if "token" in req.url.path else httpx.Response(200, json={"messages": ["x"], "data": {"errorCode": 5, "data": None}})
+    with pytest.raises(YounitError, match=r"no list found; response is \{data, messages\} > \{data, errorCode\}"):
+        make_client(no_list).stocks()
+
+    def odd_candles(req):
+        return tok if "token" in req.url.path else httpx.Response(200, json={"data": {"data": {"chartingDataViewModel": [{"t": 1, "c": 2}]}}})
+    with pytest.raises(YounitError, match=r"price history could not be read: 1 entries with fields \[c, t\]"):
+        make_client(odd_candles).daily_history(1, date(2026, 1, 1), date(2026, 1, 2))
