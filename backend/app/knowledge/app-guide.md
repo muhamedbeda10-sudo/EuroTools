@@ -5,7 +5,8 @@ A screen-by-screen description of the app, the rules behind its numbers and the 
 EGX Intelligence is a personal workspace for following the Egyptian Exchange and practising with a paper
 portfolio. The connection to Younit (EFG Hermes) reads market prices for everyone. For the owner of the
 brokerage account it also reads that account, and carries a real order when the owner approved that one
-order. Nothing else in the app reaches a broker.
+order, or approved in advance what fits a box they set (automatic orders). Nothing else in the app reaches a
+broker.
 
 ## Screens
 - **Dashboard**: paper portfolio value and net profit, indices, market breadth, top gainers, losers and most
@@ -25,7 +26,9 @@ order. Nothing else in the app reaches a broker.
   as its owner (the page is not in anyone else's menu). Total value, cash, each holding with its quantity,
   the shares free to sell, unsettled shares, average cost, the broker's price next to the app's own price,
   value, weight and unrealized profit, and the checks made on the reading. Also on this page: real orders
-  (see "Real orders" below), with the proposals waiting for the owner's approval at the top.
+  (see "Real orders" below), with the proposals waiting for the owner's approval at the top, and, when the
+  owner uses them, automatic orders: whether they are running, the budget, the shares the automation holds
+  with their stop-losses, and the "Stop automatic orders" button.
 - **Trades**: the ledger. Every paper trade with its price, each fee line, cash movement and realized profit.
   The ledger is append-only: entries are never edited or deleted. It can be exported as CSV.
 - **Strategies**: saved rule sets. Types: moving-average crossover, RSI mean reversion, MACD signal
@@ -57,7 +60,8 @@ order. Nothing else in the app reaches a broker.
 - The paper portfolio is the simulation: every trade, protective order, automatic run, backtest and profit
   figure in the app belongs to it.
 - The real account is read from the broker when its page opens or is refreshed. No paper trade, stop-loss or
-  automatic run changes the real account; only a real order the owner approved does.
+  automatic run changes the real account; only a real order does, approved by the owner one at a time or,
+  with automatic orders on, in advance.
 - Figures on the Real account page (cost, price, value, profit) are the broker's, before selling fees. The
   "app price" beside them is the latest price in the app's own market data.
 - "Free to sell" is what can be sold now. Shares bought settle two sessions later (T+2) and show as unsettled
@@ -74,7 +78,8 @@ order. Nothing else in the app reaches a broker.
   or written by the assistant. A proposal moves nothing and can be declined.
 - It is sent to the broker only when the owner presses "Review and send" on it, reads the last look and
   presses "Send". Nobody and nothing else can send one: not the assistant, not a strategy, not an automatic
-  run, not a stop-loss order (those are all paper).
+  run, not a stop-loss order (those are all paper). The one exception is automatic orders, below, which the
+  owner switches on themselves.
 - Real orders are off until switched on in two places: on the server, and by the owner in Settings, Real
   trading, where the limits must be written first: most for one order, most orders and most value in a day,
   and how far the price may be past the market. Optionally, the only stocks allowed.
@@ -92,6 +97,41 @@ order. Nothing else in the app reaches a broker.
   Until then no other order for the same stock and side can be approved.
 - The day's limits count orders that were sent, filled or not.
 - Fees shown before sending are an estimate from the fee schedule in Settings.
+
+## Automatic real orders
+- Off by default, and locked: the switch in Settings, Real trading, Automatic orders opens only after three
+  real orders the owner approved themselves were accepted by the broker and at least one of them filled.
+- With it on, a real order the assistant proposes is sent without waiting for the owner, if it fits the box
+  the owner set: one of the named stocks; worth no more than the limit for one automatic order; within what is
+  free of the budget and the number of automatic buys for the day; and, for a buy, carrying a stop-loss no
+  further under its price than the owner allows. Everything else waits for the owner as before, and the page
+  says why next to each waiting proposal.
+- Only the assistant's proposals go out by themselves, and only those written after the switch was turned on.
+  An order the owner prepares always waits for the owner. The assistant can also mark a proposal to wait.
+- The budget is the most the automation may have in the market at once, at cost, counting its open buy
+  orders. What it has lost so far comes off the budget, so the budget is also the most it can lose. A profit
+  does not widen it. Raising the budget in Settings adds more.
+- It runs only while the app is open during the session: the open app asks for a look twice a minute. With the
+  app closed, the phone locked or no connection, nothing is sent and no stop-loss is watched. The Real account
+  page shows when the last look was. A phone can be told to keep its screen on while it runs.
+- The automation keeps its own list of what it bought. It sells only those shares, never anything else in the
+  account. An order the owner approved by hand is the owner's and is not on that list.
+- Stop-loss and take-profit: watched by the app, not left at the broker. When the live price reaches the
+  level, the app sends a sale priced a few levels into the bids so that it fills. If it does not fill it is
+  cancelled and priced again. Shares the broker does not show as free to sell yet cannot be sold; the app
+  waits. On EGX shares usually settle two sessions after the purchase (T+2), so the stop on a fresh purchase
+  may not be able to act for up to two sessions. After six attempts in a day it stops and tells the owner to
+  sell by hand.
+- A stock the app sold at its stop-loss or take-profit is not bought again by the automation the same day.
+- The owner can move the stop-loss and take-profit of a position ("Move levels"). A later automatic buy of the
+  same stock can raise the stop, never lower it.
+- When the automation is down by more than the owner allows (today's sales plus what it holds against cost),
+  it stops buying for the rest of the day. It still sells.
+- "Stop automatic orders" on the Real account page stops it at once: no further automatic order, its open buy
+  orders are cancelled, and nothing is watched any more. The shares it bought stay in the account for the
+  owner to manage. Switching real orders off in Settings stops it too.
+- The top bar shows "Automatic real orders on" (on a phone, "Auto on") on every screen while it is on.
+- Figures of the automation are before the broker's fees.
 
 ## Accounting rules
 - Average cost excludes fees; fees are tracked separately.

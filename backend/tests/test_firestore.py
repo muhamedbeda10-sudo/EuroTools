@@ -560,7 +560,7 @@ def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out
         tmgh = round(c.get("/api/v1/stocks/TMGH", headers=ho).json()["quote"]["last"], 3)
 
         # another administrator is not the owner: nothing of real orders is theirs to see or to do
-        assert c.get("/api/v1/status", headers=ha).json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0}
+        assert c.get("/api/v1/status", headers=ha).json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0, "auto": False}
         for method, path, body in (("get", "/api/v1/real-orders", None), ("put", "/api/v1/real-orders/settings", limits),
                                    ("post", "/api/v1/real-orders", {"symbol": "COMI", "side": "BUY", "qty": 1, "price": comi})):
             assert c.request(method, path, json=body, headers=ha).status_code == 403
@@ -569,7 +569,7 @@ def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out
         assert c.put("/api/v1/real-orders/settings", json=limits, headers=ho).json()["ready"] is True
         a = c.post("/api/v1/real-orders", json={"symbol": "COMI", "side": "BUY", "qty": 10, "price": comi}, headers=ho).json()
         b = c.post("/api/v1/real-orders", json={"symbol": "TMGH", "side": "BUY", "qty": 5, "price": tmgh}, headers=ho).json()
-        assert c.get("/api/v1/status", headers=ho).json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 2}
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 2, "auto": False}
         assert c.post(f"/api/v1/real-orders/{a['id']}/approve", headers=ha,     # not theirs to approve either
                       json={k: a[k] for k in ("symbol", "side", "qty", "price")}).status_code == 403
 
@@ -625,6 +625,130 @@ def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out
         assert c.get("/api/v1/portfolio", headers=ho).json()["holdings"] == []
         assert not [e for e in c.get("/api/v1/audit", headers=ha).json() if e["entity"].startswith("real_")]
         assert [e["action"] for e in c.get("/api/v1/audit", headers=ho).json() if e["entity"] == "real_order"][:2] == ["send", "approve"]
+    Feed.reset()
+    broker.reset()
+    real_orders.reset()
+
+
+def test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order(monkeypatch):
+    """Two open windows ask for a look at the same moment, on two servers: the database lets one of them act."""
+    import contextlib
+    from datetime import datetime
+    from decimal import Decimal
+
+    from app import broker, real_auto, real_orders
+    from app.config import Settings
+    from app.data.calendar import CAIRO
+    from app.data.feed import Feed, FirestoreDocs
+    from app.main import create_app
+    from app.services import App
+    from app.store.errors import ConflictError
+    from app.store.firestore_store import FirestoreStore
+    from tests.test_broker import FakeBroker
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    for module in (real_orders, real_auto):
+        monkeypatch.setattr(module, "cairo_now", lambda: datetime(2026, 11, 15, 11, 0, tzinfo=CAIRO))   # a Sunday, mid-session
+    monkeypatch.setattr(real_orders, "_approving", contextlib.nullcontext())   # the second server is played inside this process
+    Feed.reset()
+    broker.reset()
+    real_orders.reset()
+    owner, admin = ("u-" + uuid.uuid4().hex[:10] for _ in range(2))
+    provision(owner)
+    provision(admin)
+    ho, ha = ({"Authorization": f"Bearer {token(u)}"} for u in (owner, admin))
+    fake = FakeBroker()
+    fake.listing = [s for s in fake.listing if s["symbol"] != "EAST"]   # market data is shared: leave it as the other tests expect it
+    limits = {"enabled": True, "max_order_value": 5000, "max_day_value": 90000, "max_day_orders": 30, "price_band_pct": 5, "symbols": []}
+    box = {"enabled": True, "budget": 3000, "max_order_value": 1000, "max_day_buys": 5, "max_loss": 300, "max_stop_pct": 8,
+           "symbols": ["COMI", "TMGH"]}
+    cfg = Settings(store_backend="firestore", firebase_project_id=PROJECT, broker_account_uids=owner, live_trading_enabled=True)
+
+    def server():
+        """A second server for the same owner: its own store, none of this one's locks or memory."""
+        other = App(FirestoreStore(PROJECT, token(owner), owner), cfg, {}, Feed(FirestoreDocs(PROJECT, token(owner))), fake).bootstrap()
+        other.real_account_allowed = True
+        return other
+
+    with TestClient(create_app(cfg, younit=fake)) as c:
+        while c.post("/api/v1/data/refresh", headers=ho).json()["remaining"]:
+            pass
+        comi = round(c.get("/api/v1/stocks/COMI", headers=ho).json()["quote"]["last"], 3)
+        tmgh = round(c.get("/api/v1/stocks/TMGH", headers=ho).json()["quote"]["last"], 3)
+
+        # not the owner, and signed out
+        for method, path, body in (("get", "/api/v1/real-orders/auto", None), ("put", "/api/v1/real-orders/auto", box),
+                                   ("post", "/api/v1/real-orders/auto/tick", None), ("post", "/api/v1/real-orders/auto/stop", None)):
+            assert c.request(method, path, json=body, headers=ha).status_code == 403, path
+            assert c.request(method, path, json=body).status_code == 401, path
+
+        # locked until three orders approved by hand were accepted and one of them filled
+        assert c.put("/api/v1/real-orders/settings", json=limits, headers=ho).json()["ready"] is True
+        assert c.put("/api/v1/real-orders/auto", json=box, headers=ho).status_code == 422
+        for n in range(3):
+            made = c.post("/api/v1/real-orders", json={"symbol": "TMGH", "side": "BUY", "qty": 1, "price": round(tmgh - n / 10, 1)},
+                          headers=ho).json()
+            assert c.post(f"/api/v1/real-orders/{made['id']}/approve", headers=ho,
+                          json={k: made[k] for k in ("symbol", "side", "qty", "price")}).json()["status"] == "sent"
+        fake.book[0].update(status="Executed", executed_qty=1, average=tmgh)
+        real_orders.reset()
+        c.get("/api/v1/real-orders", headers=ho)
+        now_on = c.put("/api/v1/real-orders/auto", json=box, headers=ho)
+        assert now_on.status_code == 200 and now_on.json()["on"] and now_on.json()["proof"]["proven"]
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"]["auto"] is True
+        assert c.get("/api/v1/status", headers=ha).json()["real_orders"]["auto"] is False
+        fake.sent.clear()
+
+        def suggest(**order):
+            body = {"symbol": "COMI", "side": "BUY", "qty": 10, "price": Decimal(str(comi)), "stop_price": Decimal(str(round(comi * 0.95, 2))),
+                    "reason": "Broke out on volume; wrong if it falls back under the breakout.", **order}
+            return real_orders.propose(server(), real_orders.OrderIn(**body), "assistant")
+
+        # while this server's look is asking the broker, the look of a second window goes all the way through elsewhere
+        one = suggest()
+        asked, inner = fake.buying_power, {}
+
+        def slow(stock_id):
+            if not inner:
+                inner["started"] = True
+                inner["res"] = real_auto._tick(server())
+            return asked(stock_id)
+        fake.buying_power = slow
+        outer = c.post("/api/v1/real-orders/auto/tick", headers=ho).json()
+        fake.buying_power = asked
+        assert [o["id"] for o in inner["res"]["sent"]] == [one["id"]] and inner["res"]["sent"][0]["approved_by"] == "auto"
+        assert outer["ran"] is False and "Another window" in outer["why"]         # the database refused the stale look
+        assert fake.sent == [{"profile_id": 4242, "stock_id": 1, "side": "BUY", "qty": 10, "price": comi}]
+        assert c.post("/api/v1/real-orders/auto/tick", headers=ho).json()["sent"] == [] and len(fake.sent) == 1
+
+        # the fill is counted into the automation's book once, whichever server sees it
+        fake.book[-1].update(status="Executed", executed_qty=10, average=comi)
+        real_orders.reset()
+        first, second = server(), server()
+        books = [real_auto._book(s) for s in (first, second)]
+        seen = [real_orders._records(s, real_orders.cairo_now()) for s in (first, second)]
+        for s, rows in zip((first, second), seen, strict=True):
+            real_orders._sync(s, rows, real_orders.cairo_now())
+        real_auto._apply_fills(first, seen[0], books[0], "2026-11-15")
+        with pytest.raises((real_auto._Busy, ConflictError)):
+            real_auto._apply_fills(second, seen[1], books[1], "2026-11-15")
+        view = c.get("/api/v1/real-orders/auto", headers=ho).json()
+        assert [(p["symbol"], p["qty"]) for p in view["positions"]] == [("COMI", 10)]
+        assert view["budget"]["used"] == pytest.approx(10 * comi) and view["today"]["buys"] == 1
+
+        # two looks claim the same way out at the same moment: one of them holds it
+        first, second = server(), server()
+        books = [real_auto._book(s) for s in (first, second)]
+        for bk in books:
+            bk["positions"]["COMI"]["exit"] = {"at": "2026-11-15T09:00:00+00:00", "order": None}
+        real_auto._keep(first, books[0])
+        with pytest.raises((real_auto._Busy, ConflictError)):
+            real_auto._keep(second, books[1])
+
+        # the one-tap stop is the owner's, and it holds on every server
+        assert c.post("/api/v1/real-orders/auto/stop", headers=ho).json()["on"] is False
+        suggest(symbol="TMGH", price=Decimal(str(tmgh)), stop_price=Decimal(str(round(tmgh * 0.95, 2))), qty=5)
+        assert real_auto._tick(server())["ran"] is False and len(fake.sent) == 1
+        assert not [e for e in c.get("/api/v1/audit", headers=ha).json() if e["entity"].startswith("real_")]
     Feed.reset()
     broker.reset()
     real_orders.reset()

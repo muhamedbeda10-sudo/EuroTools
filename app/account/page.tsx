@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { egp, int, num, price, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import RealAuto from "@/components/RealAuto";
 import RealOrders from "@/components/RealOrders";
 import { Chg, Empty, Kpi, State } from "@/components/ui";
 
@@ -70,6 +71,8 @@ export default function RealAccount() {
   const [start, setStart] = useState<{ symbol: string; side?: string } | undefined>(undefined);
   const { data, loading, error, status, reload } = useApi(path);
   const refresh = () => (path === PATH ? setPath(`${PATH}?fresh=true`) : reload());
+  // The automatic box and what it holds: read with the account, and again whenever the automation took a look.
+  const { data: auto, reload: reloadAuto } = useApi(status === 403 || status === 404 ? null : "/api/v1/real-orders/auto");
 
   // While the market is open and the tab is in view, read the account again once a minute.
   const open = useRef(false);
@@ -89,7 +92,9 @@ export default function RealAccount() {
       <div className="page-head">
         <div>
           <h1>Real account <span className="badge warn" style={{ verticalAlign: "middle" }}>real money</span></h1>
-          <p className="sub">Your brokerage account at EFG Hermes, as the broker reports it. An order leaves the app only when you approve that order here.</p>
+          <p className="sub">Your brokerage account at EFG Hermes, as the broker reports it. {auto?.on
+            ? "Automatic orders are on: what fits your box leaves the app by itself while it is open; everything else waits for your approval here."
+            : "An order leaves the app only when you approve that order here."}</p>
         </div>
         {data && (
           <div className="actions">
@@ -118,7 +123,8 @@ export default function RealAccount() {
                   hint={s.realized == null ? "before selling fees" : `Realized, per the broker: ${egp(s.realized)}`} />
               </div>
 
-              <RealOrders key={start?.symbol ?? "orders"} holdings={data.holdings} start={start} onChanged={refresh} />
+              <RealAuto auto={auto} reload={reloadAuto} onChanged={refresh} />
+              <RealOrders key={start?.symbol ?? "orders"} holdings={data.holdings} start={start} auto={auto} onChanged={() => { refresh(); reloadAuto(); }} />
 
               <div className="card flush section">
                 <div className="card-head"><h2>Holdings<span className="count">{data.holdings.length} position{data.holdings.length === 1 ? "" : "s"}</span></h2></div>

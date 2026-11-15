@@ -95,6 +95,10 @@ class OrderIn(BaseModel):
     qty: int = Field(gt=0, le=100_000_000)
     price: Decimal = Field(gt=0, le=Decimal("10000000"))
     reason: str = Field(default="", max_length=600)
+    # For a buy only. They are not sent to the broker: they are what the app watches the position by
+    # when the order was sent automatically (see real_auto.py), and what the owner reads otherwise.
+    stop_price: Decimal | None = Field(default=None, gt=0, le=Decimal("10000000"))
+    target_price: Decimal | None = Field(default=None, gt=0, le=Decimal("10000000"))
 
 
 def _price(order: OrderIn) -> Decimal:
@@ -215,6 +219,10 @@ def _put(core: App, rec: dict) -> None:
 def _summary(rec: dict) -> dict:
     """What the activity log keeps about an order."""
     out = {k: rec.get(k) for k in ("id", "symbol", "side", "qty", "price", "origin", "status")}
+    if rec.get("approved_by"):
+        out["approved_by"] = rec["approved_by"]
+    if rec.get("stop"):
+        out["stop"] = rec["stop"]
     if rec.get("broker", {}).get("order_id"):
         out["broker_order_id"] = rec["broker"]["order_id"]
     if rec.get("status_note"):
@@ -250,10 +258,13 @@ def _used_today(records: list[dict], today: str, *, apart_from: str | None = Non
 
 
 def examine(core: App, order: OrderIn, records: list[dict], now: datetime, *, sending: bool,
-            apart_from: str | None = None) -> dict:
+            apart_from: str | None = None, protective: bool = False) -> dict:
     """Every check on one order. `problems` stop it; `notes` are for the reader; `facts` are what was read.
 
     With `sending`, this is the last look before the request goes out: the session must be running.
+    `protective` marks a sale that gets the automation out of a position it holds (a stop-loss or a
+    take-profit): the owner's limits on size and number, which exist to bound what is put at stake, do not
+    hold it back. The switches, the broker's own facts and the price band still do.
     """
     problems: list[str] = []
     notes: list[str] = []
@@ -273,6 +284,13 @@ def examine(core: App, order: OrderIn, records: list[dict], now: datetime, *, se
     price = _price(order)
     if abs(order.price - price) > Decimal("0.000000001"):   # a finer price than the exchange quotes; rounding noise is let through
         problems.append("A price has at most three decimals.")
+    if order.side == "BUY":
+        if order.stop_price is not None and order.stop_price >= price:
+            problems.append("A stop-loss must be under the buying price.")
+        if order.target_price is not None and order.target_price <= price:
+            problems.append("A take-profit must be above the buying price.")
+    elif order.stop_price is not None or order.target_price is not None:
+        problems.append("A stop-loss or a take-profit goes with a buy, not with a sale.")
     value = money(price * order.qty)
     fees = compute_fees(core.fee_schedule(), "buy" if order.side == "BUY" else "sell", value)["total"]
     facts.update(symbol=symbol, name=ins.get("name"), stock_id=listing["stock_id"], side=order.side, qty=order.qty,
@@ -281,17 +299,19 @@ def examine(core: App, order: OrderIn, records: list[dict], now: datetime, *, se
     if not core.fee_schedule().verified:
         notes.append("Fees are an estimate from the placeholder schedule in Settings; the broker's own charges apply.")
 
-    # the owner's limits
-    if chosen["symbols"] and symbol not in chosen["symbols"]:
+    # the owner's limits (they bound what is put at stake: a way out of a position is not held back by them)
+    if not protective and chosen["symbols"] and symbol not in chosen["symbols"]:
         problems.append(f"{symbol} is not among the stocks allowed for real orders in Settings.")
     count, used = _used_today(records, now.date().isoformat(), apart_from=apart_from)
     facts.update(limits={k: chosen[k] for k in ("max_order_value", "max_day_value", "max_day_orders", "price_band_pct")},
                  day={"orders": count, "value": money(used)})
-    if chosen["max_order_value"] is not None and value > D(chosen["max_order_value"]):
+    if protective:
+        pass   # a way out of a position is not held back by limits on what may be put in
+    elif chosen["max_order_value"] is not None and value > D(chosen["max_order_value"]):
         problems.append(f"The order is worth {value:,.2f}; your limit per order is {D(chosen['max_order_value']):,.2f}.")
-    if chosen["max_day_orders"] is not None and count + 1 > chosen["max_day_orders"]:
+    if not protective and chosen["max_day_orders"] is not None and count + 1 > chosen["max_day_orders"]:
         problems.append(f"{count} real orders were already sent today; your limit is {chosen['max_day_orders']} a day.")
-    if chosen["max_day_value"] is not None and used + value > D(chosen["max_day_value"]):
+    if not protective and chosen["max_day_value"] is not None and used + value > D(chosen["max_day_value"]):
         problems.append(f"With this order, today's real orders would total {used + value:,.2f}; "
                         f"your limit per day is {D(chosen['max_day_value']):,.2f}.")
     doubt = next((r for r in records if r["status"] in ("unknown", "sending") and r["symbol"] == symbol
@@ -368,17 +388,24 @@ def check_waiting(core: App, id: str) -> dict:
 
 def _as_order(rec: dict) -> OrderIn:
     return OrderIn(symbol=rec["symbol"], side=rec["side"], qty=rec["qty"], price=Decimal(str(rec["price"])),
-                   reason=rec.get("reason") or "")
+                   reason=rec.get("reason") or "",
+                   stop_price=Decimal(str(rec["stop"])) if rec.get("stop") else None,
+                   target_price=Decimal(str(rec["target"])) if rec.get("target") else None)
 
 
 # ---- proposals --------------------------------------------------------------------------
-def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant"] = "manual", chat: str | None = None) -> dict:
-    """Write a proposal down. Nothing is sent: it waits for the owner on the Real account page."""
+def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant", "automation"] = "manual",
+            chat: str | None = None, *, protective: bool = False, hold: bool = False) -> dict:
+    """Write a proposal down. Nothing is sent by this: it waits, for the owner or for the automation's next look.
+
+    `automation` is the app's own way out of a position it holds (a stop-loss or a take-profit reached);
+    such a proposal is written only by real_auto.py, which sends it at once.
+    """
     _owner(core)
     now = cairo_now()
     records = _records(core, now)
     waiting = [r for r in records if r["status"] == "proposed" and not _over(r["session"], now)]
-    if len(waiting) >= MAX_WAITING:
+    if origin != "automation" and len([r for r in waiting if r["origin"] != "automation"]) >= MAX_WAITING:
         raise OrderError(f"{MAX_WAITING} proposals are already waiting for a decision. Decide on those first.")
     today = now.date().isoformat()
     if origin == "assistant":
@@ -386,7 +413,7 @@ def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant"] = 
             raise OrderError(f"The assistant has already written {MAX_ASSISTANT_PER_DAY} proposals today, which is its limit.")
         if len(order.reason.strip()) < 15:
             raise OrderError("Say why: a proposal from the assistant needs its reasoning in a sentence or two.")
-    result = examine(core, order, records, now, sending=False)
+    result = examine(core, order, records, now, sending=False, protective=protective)
     if not result["ok"]:
         raise OrderError(" ".join(result["problems"]))
     facts = result["facts"]
@@ -400,6 +427,9 @@ def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant"] = 
         "origin": origin, "chat": chat, "symbol": facts["symbol"], "name": facts["name"], "stock_id": facts["stock_id"],
         "side": order.side, "qty": order.qty, "price": str(_price(order)), "value": str(money(_price(order) * order.qty)),
         "reason": order.reason.strip(), "status": "proposed", "status_note": None,
+        "stop": str(px(order.stop_price)) if order.stop_price is not None else None,
+        "target": str(px(order.target_price)) if order.target_price is not None else None,
+        "protective": protective, "hold": hold,   # hold: written to wait for the owner, whatever the automatic box allows
         "checked": {"at": now_iso(), "notes": result["notes"],
                     "facts": {k: facts.get(k) for k in ("reference_price", "distance_pct", "est_fees", "buying_power", "held",
                                                         "min_price", "max_price")}},
@@ -424,6 +454,22 @@ def _close(core: App, id: str, status: str, action: str, *, only_origin: str | N
     now = cairo_now()
     _note_state(core, _records(core, now))
     return _public(rec)
+
+
+def discard(core: App, rec: dict, why: str) -> None:
+    """Close a proposal the automation wrote for itself and did not send. Nothing went to the broker."""
+    if rec["status"] != "proposed" or rec["origin"] != "automation":
+        return
+    rec.update(status="failed", status_note=why, decided_at=now_iso())
+    with core.store.transaction():
+        _put(core, rec)
+        core.audit("drop", "real_order", _summary(rec))
+
+
+def note_auto(core: App, rec: dict, why: str) -> None:
+    """Write on a waiting proposal that the automation tried to send it and why it could not. It still waits."""
+    rec["auto"] = {"at": now_iso(), "n": int((rec.get("auto") or {}).get("n") or 0) + 1, "why": why[:400]}
+    _put(core, rec)
 
 
 def decline(core: App, id: str) -> dict:
@@ -455,7 +501,19 @@ def approve(core: App, id: str, seen: ApproveIn) -> dict:
         return _approve(core, id, seen)
 
 
-def _approve(core: App, id: str, seen: ApproveIn) -> dict:
+def send_waiting(core: App, id: str, gate) -> dict:
+    """Send a waiting proposal on the owner's standing approval instead of their yes to this one.
+
+    Called from real_auto.py only, and only for what the owner's automatic box allows: `gate` is that box,
+    asked once more at the last moment with the records as they are now. Everything the owner's own yes goes
+    through applies here too: the same checks, the same day lock, the same single request to the broker.
+    """
+    _owner(core)
+    with _approving:
+        return _approve(core, id, None, by="auto", gate=gate)
+
+
+def _approve(core: App, id: str, seen: ApproveIn | None, *, by: str = "owner", gate=None) -> dict:
     now = cairo_now()
     today = now.date().isoformat()
     # Read first, write last: the day's lock and the records are read before any check is made, and the
@@ -467,14 +525,19 @@ def _approve(core: App, id: str, seen: ApproveIn) -> dict:
         raise OrderError("This proposal is no longer waiting for a decision.")
     if _over(rec["session"], now):
         raise OrderError("This proposal was for a session that has ended. Prepare it again with today's price.")
-    try:
-        same = (seen.symbol.strip().upper(), seen.side, seen.qty, px(seen.price)) == \
-               (rec["symbol"], rec["side"], rec["qty"], px(Decimal(str(rec["price"]))))
-    except InvalidOperation:
-        same = False
-    if not same:
-        raise ConflictError("this proposal is not the one that was on screen; look at it again")
-    result = examine(core, _as_order(rec), records, now, sending=True, apart_from=id)
+    if seen is not None:   # a person approved it: it must be what they were looking at
+        try:
+            same = (seen.symbol.strip().upper(), seen.side, seen.qty, px(seen.price)) == \
+                   (rec["symbol"], rec["side"], rec["qty"], px(Decimal(str(rec["price"]))))
+        except InvalidOperation:
+            same = False
+        if not same:
+            raise ConflictError("this proposal is not the one that was on screen; look at it again")
+    if gate is not None:   # no person approved it: the owner's automatic box must allow it, as things stand now
+        refused = gate(rec, records)
+        if refused:
+            raise OrderError(" ".join(refused))
+    result = examine(core, _as_order(rec), records, now, sending=True, apart_from=id, protective=bool(rec.get("protective")))
     if not result["ok"]:
         raise OrderError(" ".join(result["problems"]))
     profile_id = result["facts"]["profile_id"]
@@ -489,7 +552,7 @@ def _approve(core: App, id: str, seen: ApproveIn) -> dict:
     # The yes is recorded before the request goes out, together with the day's lock: of two approvals at
     # the same moment, the database lets one through and refuses the other. Nothing has been sent yet,
     # so a refusal here (409) truly means "nothing was sent".
-    rec.update(status="sending", approved_at=now_iso(), sent_day=today, decided_at=now_iso(),
+    rec.update(status="sending", approved_at=now_iso(), sent_day=today, decided_at=now_iso(), approved_by=by,
                broker={"profile_id": profile_id, "order_id": None, "status": None, "state": None, "executed_qty": 0,
                        "average": None, "seen_at": None, "before": before})
     with core.store.transaction():
@@ -732,7 +795,10 @@ def _sync(core: App, records: list[dict], now: datetime) -> str | None:
 def _public(rec: dict) -> dict:
     out = {k: rec.get(k) for k in ("id", "created_at", "session", "origin", "chat", "symbol", "name", "side", "qty", "reason",
                                    "status", "status_note", "sent_at", "decided_at", "checked", "cancel")}
-    out.update(price=float(rec["price"]), value=float(rec["value"]))
+    out.update(price=float(rec["price"]), value=float(rec["value"]),
+               stop=float(rec["stop"]) if rec.get("stop") else None, target=float(rec["target"]) if rec.get("target") else None,
+               approved_by=rec.get("approved_by"), protective=bool(rec.get("protective")), hold=bool(rec.get("hold")),
+               auto=rec.get("auto"))
     b = rec.get("broker") or {}
     out["broker"] = {k: b.get(k) for k in ("order_id", "status", "state", "executed_qty", "average", "seen_at")} if b else None
     out["can_cancel"] = rec["status"] == "sent" and b.get("state") in OPEN_STATES

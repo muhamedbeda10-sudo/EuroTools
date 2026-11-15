@@ -13,6 +13,11 @@ const QUIET_MS = 20 * 1000;        // the least time between two re-reads set of
 
 const sideWord = (side: string) => (side === "BUY" ? "Buy" : "Sell");
 const SideBadge = ({ side }: { side: string }) => <span className={`badge ${side === "BUY" ? "ok" : "bad"}`}>{side}</span>;
+/** Who wrote an order down, and whether it went out on the owner's yes or by itself. */
+const from = (o: any) => (o.origin === "automation" ? "the app, at a stop or target" : o.origin === "assistant" ? "assistant" : "you")
+  + (o.approved_by === "auto" && o.origin !== "automation" ? ", sent automatically" : "");
+const levels = (o: any) => (o.stop == null && o.target == null ? null
+  : <span className="muted"> · stop-loss {o.stop == null ? "none" : price(o.stop)}{o.target == null ? "" : ` · take-profit ${price(o.target)}`}</span>);
 const clock = (stamp?: string | null) => (stamp ? new Date(stamp).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" }) : "—");
 
 /** What became of an order, in a few words: the app's own state first, then the broker's. */
@@ -78,7 +83,7 @@ function Review({ id, onClose }: { id: string; onClose: (changed: boolean) => vo
       {o && (
         <>
           <p className="order-line"><SideBadge side={o.side} /> {int(o.qty)} {o.symbol} <span className="muted">at</span> {price(o.price)}</p>
-          <p className="muted" dir="auto">{o.name}{o.origin === "assistant" ? " · proposed by the assistant" : ""}</p>
+          <p className="muted" dir="auto">{o.name}{o.origin === "assistant" ? " · proposed by the assistant" : ""}{levels(o)}</p>
           {o.reason && <p className="why" dir="auto">{o.reason}</p>}
         </>
       )}
@@ -206,7 +211,9 @@ function Ticket({ start, holdings, onMade }: { start?: { symbol?: string; side?:
 }
 
 /** Real orders on the Real account page: what waits for the owner's decision, a ticket to prepare one, and what was sent. */
-export default function RealOrders({ holdings, start, onChanged }: { holdings: any[]; start?: { symbol?: string; side?: string }; onChanged: () => void }) {
+export default function RealOrders({ holdings, start, onChanged, auto }: {
+  holdings: any[]; start?: { symbol?: string; side?: string }; onChanged: () => void; auto?: any;   // auto: GET /real-orders/auto, when it is on screen
+}) {
   const { data, error, reload } = useApi("/api/v1/real-orders");
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [ticket, setTicket] = useState(!!start?.symbol);
@@ -239,7 +246,7 @@ export default function RealOrders({ holdings, start, onChanged }: { holdings: a
     <div className="card section">
       <div className="card-head">
         <h2>Real orders{data.waiting.length > 0 && <span className="count">{data.waiting.length} waiting for you</span>}</h2>
-        <span className={`badge ${data.ready ? "warn" : ""}`}>{data.ready ? "on · each one needs your approval" : "off"}</span>
+        <span className={`badge ${data.ready ? "warn" : ""}`}>{!data.ready ? "off" : auto?.on ? "on · automatic inside your box, the rest on your approval" : "on · each one needs your approval"}</span>
       </div>
       {data.ready ? (
         <p className="muted num" style={{ marginTop: 0, fontSize: 12.5 }}>
@@ -260,7 +267,11 @@ export default function RealOrders({ holdings, start, onChanged }: { holdings: a
               <div>
                 <div className="what"><SideBadge side={o.side} /> {int(o.qty)} {o.symbol} <span className="muted">at</span> {price(o.price)} <span className="muted">· {egp(o.value)}</span></div>
                 {o.reason && <div className="why" dir="auto">{o.reason}</div>}
-                <div className="meta">{o.origin === "assistant" ? "Proposed by the assistant" : "Prepared by you"} · {clock(o.created_at)} · for the session of {o.session}</div>
+                <div className="meta">{o.origin === "assistant" ? "Proposed by the assistant" : o.origin === "automation" ? "Written by the app" : "Prepared by you"} · {clock(o.created_at)} · for the session of {o.session}{levels(o)}</div>
+                {auto?.on && auto.waiting?.[o.id] && (auto.waiting[o.id].automatic
+                  ? <div className="meta auto-note will" role="status"><strong>Fits your automatic box:</strong> it will be sent without asking you at the app&apos;s next look, within about a minute while the market is open. Decline it to stop that.</div>
+                  : o.origin === "assistant" && <div className="meta auto-note">Not sent automatically: {auto.waiting[o.id].why_not.join(" ")}</div>)}
+                {o.auto && <div className="meta auto-note">The app tried to send it at {clock(o.auto.at)} and could not: {o.auto.why}</div>}
               </div>
               <div className="acts">
                 <button type="button" className="primary" onClick={() => setReviewing(o.id)}><ClipboardCheck size={14} aria-hidden="true" /> Review and send</button>
@@ -285,12 +296,14 @@ export default function RealOrders({ holdings, start, onChanged }: { holdings: a
               {data.orders.map((o: any) => (
                 <tr key={o.id}>
                   <td>{clock(o.sent_at ?? o.decided_at ?? o.created_at)}</td>
-                  <td className="l"><SideBadge side={o.side} /> {int(o.qty)} <Link href={`/stock?symbol=${o.symbol}`}>{o.symbol}</Link></td>
+                  <td className="l"><SideBadge side={o.side} /> {int(o.qty)} <Link href={`/stock?symbol=${o.symbol}`}>{o.symbol}</Link>
+                    {o.approved_by === "auto" && <small className="sub2" title="Sent on your standing approval, without asking you about this order">
+                      {o.origin === "automation" ? "automatic · stop or target" : "automatic"}</small>}</td>
                   <td>{price(o.price)}</td>
                   <td className="l wrap"><Outcome o={o} />{o.status_note && <small className="sub2" dir="auto">{o.status_note}</small>}
                     {o.cancel && o.can_cancel && <small className="sub2">Cancel asked: {o.cancel.outcome}</small>}</td>
                   <td>{o.broker?.order_id ? <div className="cell2"><span>{int(o.broker.executed_qty)} / {int(o.qty)}</span>{o.broker.average ? <small className="muted">avg {price(o.broker.average)}</small> : null}</div> : "—"}</td>
-                  <td className="l col-wide muted">{o.origin === "assistant" ? "assistant" : "you"}</td>
+                  <td className="l col-wide muted wrap">{from(o)}</td>
                   <td className="actions">
                     {o.can_cancel && <button type="button" className="small danger" onClick={() => act(`/api/v1/real-orders/${o.id}/cancel`, `Ask the broker to cancel the ${sideWord(o.side).toLowerCase()} order for ${o.qty} ${o.symbol}?`)}>Cancel</button>}
                     {o.status === "unknown" && <button type="button" className="small" onClick={() => act(`/api/v1/real-orders/${o.id}/not-placed`, `Have you checked in the EFG Hermes ONE app that this order for ${o.qty} ${o.symbol} is NOT there?`)}>It was not placed</button>}
@@ -302,12 +315,15 @@ export default function RealOrders({ holdings, start, onChanged }: { holdings: a
         </div>
       ) : (
         <Empty left icon={data.ready ? CircleCheck : TriangleAlert} title="No real orders yet">
-          {data.ready ? "An order you prepare, or one the assistant proposes, waits here for your approval. Nothing is sent without it." : "Real orders are off."}
+          {!data.ready ? "Real orders are off." : auto?.on ? "An order you prepare waits here for your approval. One the assistant proposes inside your automatic box is sent by itself; the rest wait for you."
+            : "An order you prepare, or one the assistant proposes, waits here for your approval. Nothing is sent without it."}
         </Empty>
       )}
       <p className="foot-note">
-        Limit orders for the day only. An order goes to the broker when you approve it and at no other time; the assistant can propose one but cannot send,
-        change or cancel it. The paper portfolio is not involved.
+        Limit orders for the day only. {auto?.on
+          ? "An order goes to the broker when you approve it, or by itself when it fits the automatic box you set: the assistant's proposals inside it, and the app's own sales at a stop-loss or take-profit."
+          : "An order goes to the broker when you approve it and at no other time; the assistant can propose one but cannot send, change or cancel it."}{" "}
+        The paper portfolio is not involved.{!auto?.box?.enabled && data.ready ? <> Automatic orders are off · <Link href="/settings?tab=real">set up</Link>.</> : null}
       </p>
       {reviewing && <Review id={reviewing} onClose={(changed) => { setReviewing(null); refresh(); if (changed) onChanged(); }} />}
     </div>
