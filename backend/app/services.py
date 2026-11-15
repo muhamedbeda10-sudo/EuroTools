@@ -232,7 +232,11 @@ class App:
         cols = ["symbol", "name", "sector", "last", "change_pct", "volume", "turnover"]
         return {
             "as_of": latest,
-            "indices": self._records(df[df["type"] == "index"][["symbol", "name", "last", "change", "change_pct", "as_of", "source", "spark"]]),
+            "indices": self._records(df[df["type"] == "index"][["symbol", "name", "last", "change", "change_pct", "as_of", "source", "spark"]])
+            + [{"symbol": i["name"], "name": i["name"], "last": i["value"], "change_pct": i["change_pct"],
+                "change": i["value"] - i["prev_close"] if i["prev_close"] else None,
+                "as_of": str(i["as_of"])[:16].replace("T", " "), "source": "younit", "live": i["live"], "spark": []}
+               for i in self.market.cache.get("indices", [])],
             "breadth": {
                 "covered": int(len(stocks)),
                 "advancers": int((current["change_pct"] > 0).sum()),

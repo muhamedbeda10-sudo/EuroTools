@@ -111,6 +111,7 @@ const LIVE_MS = 60 * 1000;
 function FeedUpdater({ provider }: { provider: any }) {
   const { state, run } = useFeedUpdate();
   const [notice, setNotice] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
   const first = provider.with_history === 0;
   const running = useRef(false);
   running.current = state.running;
@@ -136,9 +137,11 @@ function FeedUpdater({ provider }: { provider: any }) {
       if (!open.current || document.visibilityState !== "visible") return;
       try {
         const r = await api("/api/v1/data/live", { method: "POST" });
+        setLiveError(null);
         if (r.updated) window.dispatchEvent(new Event(DATA_UPDATED));
-      } catch {
-        // a missed minute is not worth an error on screen; the next one will try again
+      } catch (e: any) {
+        // One missed minute is not worth an alarm; say so only when the feed itself reports a problem.
+        setLiveError(e.status === 502 ? e.message : null);
       }
     };
     poll();
@@ -166,6 +169,7 @@ function FeedUpdater({ provider }: { provider: any }) {
   if (state.error)
     return <div className="banner danger" role="alert"><strong>Market data was not updated.</strong> {state.error}</div>;
   if (notice) return <div className="banner" role="status">Market data updated.</div>;
+  if (liveError) return <div className="banner" role="status"><strong>Live prices are not coming through.</strong> {liveError} Showing the last saved prices.</div>;
   return null;
 }
 

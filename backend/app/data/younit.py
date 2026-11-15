@@ -26,6 +26,12 @@ HEADERS = {
 }
 REFRESH_BEFORE_EXPIRY = 300
 EGX_MARKET_ID = 1
+STREAM_URL = "https://iengine138.hermesonline.com/"
+STREAM_ADAPTER = "PROXY_MarketBeat"  # market data only; the orders adapter is never used
+STREAM_CHUNK = 40
+INDEX_PROBE = 25
+QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
+INDEX_FIELDS = ["m_IndexName", "m_EnglishName", "m_IndexValue", "m_IndexClose", "m_PrecentChange"]
 SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
 
 
@@ -184,6 +190,49 @@ class YounitClient:
     def stocks(self) -> list[dict]:
         """All EGX stocks: [{symbol, name, stock_id}], sorted by symbol."""
         return [{k: s[k] for k in ("symbol", "name", "stock_id")} for s in self.snapshot()["stocks"]]
+
+    def live(self, stocks: list[dict], *, timeout: float = 8.0) -> dict:
+        """Current session figures for the given stocks, plus sectors and index levels.
+
+        Returns {"quotes": {symbol: [last, open, high, low, volume]}, "sectors": {symbol: name},
+                 "indices": [{id, name, value, prev_close, change_pct}], "errors": [...]}.
+        """
+        from . import stream
+        by_item = {f"sy{s['stock_id']}": s["symbol"] for s in stocks}
+        items = sorted(by_item)
+        groups = [{"items": items[i:i + STREAM_CHUNK], "fields": QUOTE_FIELDS, "data_adapter": STREAM_ADAPTER}
+                  for i in range(0, len(items), STREAM_CHUNK)]
+        # Index ids are not documented: ask for a range, one subscription each, and keep whatever exists.
+        groups += [{"items": [f"ix{i}"], "fields": INDEX_FIELDS, "data_adapter": STREAM_ADAPTER, "required": False}
+                   for i in range(1, INDEX_PROBE + 1)]
+        token = self._authorization().split(" ", 1)[-1]
+        try:
+            got = stream.snapshot(STREAM_URL, STREAM_ADAPTER, groups, user=self._trading_id, password=token, timeout=timeout)
+        except stream.StreamError as exc:
+            raise YounitError(f"Younit live prices: {exc}") from None
+        quotes, sectors, indices = {}, {}, []
+        for item, row in got["values"].items():
+            if item in by_item:
+                symbol = by_item[item]
+                sector = str(row.get("m_SectorName") or "").strip()
+                if sector:
+                    sectors[symbol] = sector[:60]
+                last = _num(row.get("m_LastTradePrice"))
+                if last <= 0:
+                    continue  # no trade yet today: the settled history stands
+                opened = _num(row.get("m_OpenPrice")) or last
+                high = max(_num(row.get("m_DailyHighPrice")), last, opened)
+                low = min(v for v in (_num(row.get("m_DailyLowPrice")), last, opened) if v > 0)
+                quotes[symbol] = [last, opened, high, low, max(_num(row.get("m_TradedVolume")), 0.0)]
+            elif item.startswith("ix"):
+                value = _num(row.get("m_IndexValue"))
+                name = str(row.get("m_EnglishName") or row.get("m_IndexName") or "").strip()
+                if value > 0 and name:
+                    indices.append({"id": int(item[2:]), "name": name[:60], "value": value,
+                                    "prev_close": _num(row.get("m_IndexClose")) or None,
+                                    "change_pct": _num(row.get("m_PrecentChange")) if row.get("m_PrecentChange") else None})
+        return {"quotes": quotes, "sectors": sectors, "indices": sorted(indices, key=lambda i: i["id"]),
+                "errors": got["errors"], "answered": len(got["values"])}
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

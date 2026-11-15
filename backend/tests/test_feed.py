@@ -35,12 +35,19 @@ class FakeYounit:
     def stocks(self):
         return self.listing
 
+    def live(self, stocks, timeout=8.0):
+        self.live_calls = getattr(self, "live_calls", 0) + 1
+        prices = getattr(self, "live_prices", {})
+        return {"quotes": {s["symbol"]: [prices[s["symbol"]], prices[s["symbol"]], prices[s["symbol"]] + 1, prices[s["symbol"]] - 1, 500.0]
+                           for s in stocks if s["symbol"] in prices},
+                "sectors": getattr(self, "sectors", {"NEWCO": "Real Estate"}),
+                "indices": getattr(self, "indices", [{"id": 1, "name": "EGX 30", "value": 31000.0, "prev_close": 30000.0, "change_pct": 3.33}]),
+                "errors": [], "answered": len(stocks)}
+
     def snapshot(self):
         self.snapshots = getattr(self, "snapshots", 0) + 1
-        live = getattr(self, "live", {})
-        return {"fields": ["price", "reuterCode", "stockId", "stockName"],
-                "stocks": [{**s, "last": live.get(s["symbol"]), "open": None, "high": None, "low": None, "volume": None}
-                           for s in self.listing]}
+        return {"fields": ["id", "name", "reuterCode"],   # like the real list: no prices in it
+                "stocks": [{**s, "last": None, "open": None, "high": None, "low": None, "volume": None} for s in self.listing]}
 
     def daily_history(self, stock_id, date_from, date_to):
         self.calls.append((stock_id, date_from, date_to))
@@ -296,51 +303,67 @@ def test_live_prices_sit_on_top_of_history_until_the_session_settles(tmp_path):
     from app.data.market import MarketData
     store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit(n=60)
     feed = Feed(StoreDocs(store))
-    session = days(1)[0]                       # the latest session date in the fake history
-    today = date.fromisoformat(session)
+    today = date.fromisoformat(days(1)[0])     # the latest session date in the fake history
     feed.refresh(fake, today=today)
     settled_close = feed.load()["frames"]["COMI"]["close"].iloc[-1]
 
     def market(day=today):
         return MarketData(store, {}, data_version=0, sample=False, today=day, feed=feed.load())
 
-    # same day as the last settled bar: the live price replaces its close, keeps the day's range honest
-    fake.live = {"COMI": settled_close + 5, "TMGH": 1.0}
+    assert market().instrument("NEWCO")["sector"] == "Unclassified"
+    fake.live_prices = {"COMI": settled_close + 5, "TMGH": 1.0}
     t0 = datetime.combine(today, datetime.min.time(), CAIRO).replace(hour=11)
     out = feed.poll_live(fake, now=t0)
-    assert out["updated"] and out["available"] and out["fields"]
+    assert out["updated"] and out["available"] and out["stocks"] == 2 and out["indices"] == 1
     m = market()
     bars = m.bars("COMI")
-    assert bars["close"].iloc[-1] == settled_close + 5 and bars["high"].iloc[-1] >= settled_close + 5
+    # the live price replaces today's close and widens the day's range; the bar count does not change
+    assert bars["close"].iloc[-1] == settled_close + 5 and bars["high"].iloc[-1] >= settled_close + 6
     assert len(bars) == 60 and m.is_live("COMI") and not m.is_live("NEWCO")
     assert m.bars("COMI", settled=True)["close"].iloc[-1] == settled_close   # backtests never see the unfinished bar
     assert m.status()["is_live"] and m.status()["live_symbols"] == 2
+    assert m.instrument("NEWCO")["sector"] == "Real Estate" and m.instrument("COMI")["sector"] == "Banks"
+    assert m.cache["indices"][0]["name"] == "EGX 30" and m.cache["indices"][0]["live"] is True
 
     # a poll 20 seconds later reuses the saved prices: the feed is not called again
-    calls = fake.snapshots
     again = feed.poll_live(fake, now=t0.replace(second=20))
-    assert again == {"updated": False, "ts": out["ts"], "available": True} and fake.snapshots == calls
-    # a minute later it is, and the day's high/low keep running
-    fake.live = {"COMI": settled_close - 3}
+    assert again["updated"] is False and fake.live_calls == 1
+    # a minute later it is; a stock that stops answering just falls back to its settled bar
+    fake.live_prices = {"COMI": settled_close - 3}
+    fake.sectors = {}
     feed.poll_live(fake, now=t0.replace(minute=2))
-    q = store.get("egxMarket", "live")["quotes"]["COMI"]
-    assert q[0] == settled_close - 3 and q[2] == settled_close + 5 and q[3] == settled_close - 3
+    m = market()
+    assert m.bars("COMI")["close"].iloc[-1] == settled_close - 3 and not m.is_live("TMGH")
+    assert m.instrument("NEWCO")["sector"] == "Real Estate"      # sectors seen earlier are kept
 
-    # next morning the saved prices belong to yesterday and are ignored
-    assert not market(today + timedelta(days=1)).is_live("COMI")
+    # next morning yesterday's prices are ignored, but the sectors still apply
+    tomorrow = market(today + timedelta(days=1))
+    assert not tomorrow.is_live("COMI") and tomorrow.instrument("NEWCO")["sector"] == "Real Estate"
+    assert tomorrow.cache["indices"][0]["live"] is False
 
 
 def test_live_endpoint_only_polls_while_the_market_is_open(env, monkeypatch):
     c, fake = env
     c.post("/api/v1/data/refresh")
     import app.services as services
-    before = fake.snapshots
     monkeypatch.setattr(services, "market_open", lambda: False)
     assert c.post("/api/v1/data/live").json() == {"updated": False, "market_open": False}
-    assert fake.snapshots == before   # market closed: the feed is not called
+    assert getattr(fake, "live_calls", 0) == 0   # market closed: the feed is not called
     monkeypatch.setattr(services, "market_open", lambda: True)
-    fake.live = {"COMI": 99.0}
+    fake.live_prices = {"COMI": 99.0}
     out = c.post("/api/v1/data/live").json()
-    assert out["updated"] and out["market_open"]
+    assert out["updated"] and out["market_open"] and out["stocks"] == 1
     s = c.get("/api/v1/status").json()
-    assert s["provider"]["live"]["stocks"] == 1 and s["provider"]["live"]["fields"]
+    assert s["provider"]["live"]["stocks"] == 1 and s["provider"]["live"]["sectors"] == 1
+    assert c.get("/api/v1/market/overview").json()["indices"][0]["name"] == "EGX 30"
+
+    def down(stocks, timeout=8.0):
+        raise YounitError("Younit live prices: the streaming server sent no prices (connection: never connected)")
+    fake.live = down
+    from app.data.feed import Feed as F
+    doc = c.app.state  # noqa: F841 - keep the client alive
+    F.reset()
+    import app.data.feed as feed_module
+    monkeypatch.setattr(feed_module, "cairo_now", lambda: __import__("datetime").datetime.now(feed_module.CAIRO) + timedelta(minutes=5))
+    r = c.post("/api/v1/data/live")
+    assert r.status_code == 502 and "live prices" in r.json()["detail"]

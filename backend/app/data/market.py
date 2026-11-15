@@ -70,6 +70,7 @@ class MarketData:
             # The feed defines which stocks exist. It carries no sector, so the seed
             # list's classification is used where the symbol is known.
             sector = {i["symbol"]: i["sector"] for i in _SEED if i["type"] == "stock"}
+            sector.update(((self.feed.get("live") or {}).get("sectors")) or {})  # the exchange's own, when the feed sent it
             base = [{"symbol": i["symbol"], "name": i["name"], "type": "stock",
                      "sector": sector.get(i["symbol"], UNCLASSIFIED)} for i in self.feed["instruments"]]
         else:
@@ -119,7 +120,9 @@ class MarketData:
         self.cache.update(key=key, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
                           frames=frames, sources=sources, settled=settled, live_symbols=live_symbols,
                           live_as_of=live_doc.get("ts") if live_symbols else None,
-                          shared_only=self.feed is not None and not imported and not custom)
+                          shared_only=self.feed is not None and not imported and not custom,
+                          indices=[{**i, "as_of": live_doc.get("ts"), "live": live_doc.get("date") == self.today.isoformat()}
+                                   for i in live_doc.get("indices") or []])
 
     def bars(self, symbol: str, *, settled: bool = False) -> pd.DataFrame | None:
         """Price history. `settled=True` leaves out today's unfinished session (for backtests and signals)."""

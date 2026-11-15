@@ -64,7 +64,7 @@ export default function Dashboard() {
               )}
               {ov.data.indices.map((i: any) => (
                 <div className="card kpi" key={i.symbol}>
-                  <div className="label">{i.symbol}{i.source === "sample" ? " · sample" : ""}</div>
+                  <div className="label">{i.symbol}{i.source === "sample" ? " · sample" : i.source === "younit" ? (i.live ? " · live" : ` · ${i.as_of}`) : ""}</div>
                   <div className="value">{num(i.last)}</div>
                   <div className="hint"><Chg v={i.change_pct} /> <Spark data={i.spark} /></div>
                 </div>

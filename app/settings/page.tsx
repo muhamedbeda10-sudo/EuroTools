@@ -278,13 +278,24 @@ export default function Settings() {
             {pv?.configured && (
               <>
                 <dt>Live prices</dt>
-                <dd>{pv.live?.stocks ? `${pv.live.stocks} stocks, last at ${String(pv.live.as_of).slice(0, 16).replace("T", " ")} Cairo` : pv.live ? "The feed's stock list carries no prices" : "No live snapshot yet"}{pv.market_open ? " · market open" : " · market closed"}</dd>
+                <dd>
+                  {pv.live?.stocks
+                    ? `${pv.live.stocks} stocks trading, as of ${String(pv.live.as_of).slice(0, 16).replace("T", " ")} Cairo`
+                    : pv.live ? `No trades reported yet (${pv.live.answered ?? 0} of ${pv.live.asked ?? 0} stocks answered)` : "No live snapshot yet"}
+                  {pv.market_open ? " · market open" : " · market closed"}
+                </dd>
+              </>
+            )}
+            {pv?.live && (
+              <>
+                <dt>Sectors / indices from the feed</dt><dd>{pv.live.sectors} stocks classified · {pv.live.indices} indices</dd>
               </>
             )}
             <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
           {status.data && <p className="muted" style={{ marginTop: 10 }}>{status.data.broker_note}</p>}
+          {pv?.live?.errors?.length > 0 && <div className="note" style={{ marginTop: 8 }}>Live feed notes: {pv.live.errors.join("; ")}</div>}
           {pv?.fields?.length > 0 && (
             <details style={{ margin: "8px 0 12px" }}>
               <summary className="muted">Fields the feed sends for each stock (for troubleshooting)</summary>

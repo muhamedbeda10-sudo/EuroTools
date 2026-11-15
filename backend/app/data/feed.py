@@ -20,7 +20,7 @@ import httpx
 import pandas as pd
 
 from ..store.errors import AuthError
-from .calendar import cairo_now, is_trading_day, market_open
+from .calendar import CAIRO, cairo_now, is_trading_day, market_open  # noqa: F401 - CAIRO re-exported for tests
 from .younit import YounitClient, YounitError
 
 CHUNKS = 24
@@ -160,19 +160,16 @@ class Feed:
             age = (now - datetime.fromisoformat(current["ts"])).total_seconds()
             if age < min_age_seconds:
                 return {"updated": False, "ts": current["ts"], "available": bool(current["quotes"])}
-        snap = client.snapshot()
-        previous = current["quotes"] if current and current.get("date") == today else {}
-        quotes: dict[str, list] = {}
-        for s in snap["stocks"]:
-            last = s["last"]
-            if last is None:
-                continue
-            was = previous.get(s["symbol"])
-            opened = s["open"] or (was[1] if was else last)
-            high = max(v for v in (s["high"], was[2] if was else None, last, opened) if v)
-            low = min(v for v in (s["low"], was[3] if was else None, last, opened) if v)
-            quotes[s["symbol"]] = [last, opened, high, low, s["volume"] or (was[4] if was else 0.0)]
-        doc = {"date": today, "ts": now.isoformat(timespec="seconds"), "quotes": quotes, "fields": snap["fields"]}
+        index = self.docs.get("index") or empty_index()
+        tracked = [i for i in index["instruments"] if index["last_dates"].get(i["symbol"])] or index["instruments"]
+        if not tracked:
+            return {"updated": False, "ts": None, "available": False}
+        got = client.live(tracked)
+        # A stock with no trade yet today is simply absent; sectors and indices are kept from earlier polls.
+        sectors = {**((current or {}).get("sectors") or {}), **got["sectors"]}
+        indices = got["indices"] or ((current or {}).get("indices") if current and current.get("date") == today else []) or []
+        doc = {"date": today, "ts": now.isoformat(timespec="seconds"), "quotes": got["quotes"], "sectors": sectors,
+               "indices": indices, "errors": got["errors"], "answered": got["answered"], "asked": len(tracked)}
         self.docs.put("live", doc)
         meta = self.docs.get("meta") or _meta(self.docs.get("index") or empty_index())
         meta["live_ts"] = doc["ts"]
@@ -180,7 +177,8 @@ class Feed:
         st = Feed._state
         if st["meta"] is not None:
             st["meta"], st["live"], st["live_ts"] = meta, doc, doc["ts"]
-        return {"updated": True, "ts": doc["ts"], "available": bool(quotes), "fields": snap["fields"]}
+        return {"updated": True, "ts": doc["ts"], "available": bool(doc["quotes"]), "stocks": len(doc["quotes"]),
+                "indices": len(indices), "errors": got["errors"]}
 
     def summary(self, today: date) -> dict:
         meta = self.load()["meta"]
@@ -192,7 +190,9 @@ class Feed:
                 "market_open": market_open(),
                 "fields": meta.get("fields", []),
                 "live": {"as_of": live["ts"], "date": live["date"], "stocks": len(live["quotes"]),
-                         "fields": live.get("fields", [])} if live else None}
+                         "asked": live.get("asked"), "answered": live.get("answered"),
+                         "sectors": len(live.get("sectors") or {}), "indices": len(live.get("indices") or []),
+                         "errors": live.get("errors", [])} if live else None}
 
     def refresh(self, client: YounitClient, *, today: date, budget_seconds: float = 18.0) -> dict:
         """Update as many symbols as fit in the time budget. Call again while `remaining` > 0."""
