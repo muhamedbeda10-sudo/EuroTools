@@ -3,8 +3,9 @@ A screen-by-screen description of the app, the rules behind its numbers and the 
 
 ## Purpose
 EGX Intelligence is a personal workspace for following the Egyptian Exchange and practising with a paper
-portfolio. Nothing in it can send an order to a broker. The connection to Younit (EFG Hermes) only reads:
-market prices for everyone, and the real brokerage account for its owner.
+portfolio. The connection to Younit (EFG Hermes) reads market prices for everyone. For the owner of the
+brokerage account it also reads that account, and carries a real order when the owner approved that one
+order. Nothing else in the app reaches a broker.
 
 ## Screens
 - **Dashboard**: paper portfolio value and net profit, indices, market breadth, top gainers, losers and most
@@ -20,10 +21,11 @@ market prices for everyone, and the real brokerage account for its owner.
 - **Watchlist**: watched stocks and custom lists.
 - **Portfolio**: holdings, cost, market value, gross profit, estimated net profit after fees, allocation by
   sector, concentration warnings (one stock above 25%, one sector above 40%) and the value history.
-- **Real account**: the owner's brokerage account at EFG Hermes, read-only, shown only to the sign-in the
-  server names as its owner (the page is not in anyone else's menu). Total value, cash, each holding with its
-  quantity, the shares free to sell, unsettled shares, average cost, the broker's price next to the app's own
-  price, value, weight and unrealized profit, and the checks made on the reading. Nothing on it is stored.
+- **Real account**: the owner's brokerage account at EFG Hermes, shown only to the sign-in the server names
+  as its owner (the page is not in anyone else's menu). Total value, cash, each holding with its quantity,
+  the shares free to sell, unsettled shares, average cost, the broker's price next to the app's own price,
+  value, weight and unrealized profit, and the checks made on the reading. Also on this page: real orders
+  (see "Real orders" below), with the proposals waiting for the owner's approval at the top.
 - **Trades**: the ledger. Every paper trade with its price, each fee line, cash movement and realized profit.
   The ledger is append-only: entries are never edited or deleted. It can be exported as CSV.
 - **Strategies**: saved rule sets. Types: moving-average crossover, RSI mean reversion, MACD signal
@@ -54,8 +56,8 @@ market prices for everyone, and the real brokerage account for its owner.
 - They are two separate things and their figures are never mixed or added together.
 - The paper portfolio is the simulation: every trade, protective order, automatic run, backtest and profit
   figure in the app belongs to it.
-- The real account is read from the broker when its page opens or is refreshed. The app cannot place, change
-  or cancel a real order, and no paper trade changes the real account.
+- The real account is read from the broker when its page opens or is refreshed. No paper trade, stop-loss or
+  automatic run changes the real account; only a real order the owner approved does.
 - Figures on the Real account page (cost, price, value, profit) are the broker's, before selling fees. The
   "app price" beside them is the latest price in the app's own market data.
 - "Free to sell" is what can be sold now. Shares bought settle two sessions later (T+2) and show as unsettled
@@ -66,6 +68,30 @@ market prices for everyone, and the real brokerage account for its owner.
 - Holdings the app does not follow (funds, for example) are listed at the broker's price, without analysis.
 - Who may look is set on the server (BROKER_ACCOUNT_UIDS). Settings, Market data, Connections shows whether
   the current sign-in may, and its user ID.
+
+## Real orders
+- A real order starts as a proposal: prepared by the owner on the Real account page ("Prepare a real order"),
+  or written by the assistant. A proposal moves nothing and can be declined.
+- It is sent to the broker only when the owner presses "Review and send" on it, reads the last look and
+  presses "Send". Nobody and nothing else can send one: not the assistant, not a strategy, not an automatic
+  run, not a stop-loss order (those are all paper).
+- Real orders are off until switched on in two places: on the server, and by the owner in Settings, Real
+  trading, where the limits must be written first: most for one order, most orders and most value in a day,
+  and how far the price may be past the market. Optionally, the only stocks allowed.
+- Every order is a limit order for the day. No market orders. It ends unfilled at the close.
+- "Past the market": a buy may be priced at most that percentage above the market price, a sell at most that
+  far below. A buy priced under the market, or a sell above it, simply waits.
+- Before sending, the app asks the broker what can be spent (for a buy), how many shares are free to sell
+  (for a sale) and what prices the exchange accepts today. The session must be running. A proposal written
+  after the close is for the next session and is judged again then.
+- After sending: "Open at the broker", "Partly filled", "Filled", "Cancelled" and so on, with the broker's own
+  word beside it. An open order can be cancelled from the same page. An order cannot be changed: cancel it and
+  prepare another.
+- "In doubt" means the order was sent and no clear answer came back. It is never sent again. The app looks
+  for it in the broker's list; the owner should look in the EFG Hermes ONE app, and can mark it "not placed".
+  Until then no other order for the same stock and side can be approved.
+- The day's limits count orders that were sent, filled or not.
+- Fees shown before sending are an estimate from the fee schedule in Settings.
 
 ## Accounting rules
 - Average cost excludes fees; fees are tracked separately.

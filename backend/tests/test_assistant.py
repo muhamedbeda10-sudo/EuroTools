@@ -121,7 +121,7 @@ def test_it_looks_things_up_and_answers(tmp_path):
         assert second["messages"][:1] == first["messages"] and second["system"] == first["system"] and second["tools"] == first["tools"]
         assert second["messages"][1]["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig1"}   # reasoning replayed as given
         assert all(t["eager_input_streaming"] is True and "input_schema" in t for t in first["tools"])
-        assert "Paper trading only" in first["system"] and "<context>" not in first["system"]    # nothing that varies in the instructions
+        assert "Trading in the app is on paper" in first["system"] and "<context>" not in first["system"]    # nothing that varies in the instructions
 
         view = c.get(f"/api/v1/assistant/chats/{chat}").json()
         assert [i["role"] for i in view["items"]] == ["user", "assistant", "assistant"]

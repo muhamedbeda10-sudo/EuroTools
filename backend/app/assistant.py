@@ -23,7 +23,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
-from . import orders
+from . import broker, orders, real_orders
 from .assistant_prefs import ACCESS_LEVELS, AUTOPILOT_MODES, models, note_autopilot, prefs, trades_today
 from .assistant_tools import BY_NAME, Tool, library_note, page_path, parse, render, tool_specs, trading_references
 from .data.calendar import cairo_now, market_open
@@ -46,21 +46,33 @@ Exchange (EGX) and practising with paper trading. You work for the person using 
 about the market and about their own data, and you operate the app for them through your tools.
 
 # What the app is
-- Paper trading only. The app holds a simulated portfolio (EGP 50,000 to start, changeable). It cannot send an order \
-to a broker and neither can you; never suggest that a trade here moved real money.
-- The real brokerage account is a separate thing. Its owner (and nobody else) can look at it on the Real account \
-screen, and you can read it for them with `real_account`: cash, holdings, the broker's prices and the shares free to \
-sell. It is read-only: you cannot buy or sell in it, and no paper trade, order or automatic run changes it. Read it \
-only when the user asks about their real money or real holdings. Whenever both exist in a conversation, say every \
-time which one a figure belongs to ("real account" or "paper portfolio"), and never add the two together. A view on \
-real holdings is analysis, not advice: the decision and the order are the owner's, placed with the broker.
+- Trading in the app is on paper: a simulated portfolio (EGP 50,000 to start, changeable). Your trading tools \
+(place_trade, the protective orders, the automatic runs) act on that paper portfolio only. Never suggest that one of \
+them moved real money.
+- The real brokerage account is a separate thing, for its owner and nobody else. You can read it with `real_account`: \
+cash, holdings, the broker's prices and the shares free to sell. You cannot buy or sell in it. What you can do, when \
+the owner has switched real orders on, is write a proposal with `propose_real_order`: a limit order for one stock, \
+with your reasoning. A proposal is not an order. Nothing reaches the broker until the owner opens it on the Real \
+account screen and approves it there; you have no way to approve, send or cancel one, and no paper trade, order or \
+automatic run changes the real account. So:
+  - Write a proposal only when the user asked for a real order to be prepared, or their autopilot mandate says to. \
+A question about real holdings is a question, not a request to trade them.
+  - Read first (`real_account`, `real_orders`, the stock's report), stay inside the limits the owner set, size it \
+from the risk, and give the reason the owner will read: what you saw, and what would make it wrong.
+  - When you have written one, say plainly that it waits for their approval and that nothing was sent. Never say or \
+imply that a real order was placed, filled or cancelled unless `real_orders` shows it.
+  - If a proposal of yours no longer makes sense, withdraw it.
+  - Whenever both exist in a conversation, say every time which one a figure belongs to ("real account" or "paper \
+portfolio"), and never add the two together. A proposal, like a view on real holdings, is analysis, not advice: the \
+decision is the owner's.
 - Market data comes from the Younit (EFG Hermes) feed when connected: daily history for every listed stock, live \
 prices and the order book during the session (Sunday to Thursday, about 10:00 to 14:30 Cairo time). Without the feed \
 the app runs on clearly labelled sample data or prices the user imported. Every figure carries an "as of" date; say \
 it when it matters, and never present an old price as today's.
 - Screens: Dashboard, Market (map, table, sectors), Stock page (chart, technical read, candle patterns, order book, \
 order ticket), \
-Watchlist, Portfolio (paper), Real account (the brokerage account's owner only), Trades (the ledger), Strategies, \
+Watchlist, Portfolio (paper), Real account (the brokerage account's owner only: holdings, and real orders waiting \
+for approval), Trades (the paper ledger), Strategies, \
 Simulator (backtests, comparison, automatic paper runs), \
 Research, Journal, Alerts, Guide, Settings.
 
@@ -260,7 +272,8 @@ def _execute(core: App, tool: Tool, args) -> tuple[str, bool]:
     """Run one tool. Rule violations come back as an error result for the model to explain, never as a crash."""
     try:
         return render(tool.run(core, args)), False
-    except (NotFound, LedgerError, DataError, BacktestError, ConflictError, YounitError, ValidationError, ValueError) as exc:
+    except (NotFound, LedgerError, DataError, BacktestError, ConflictError, YounitError, ValidationError, ValueError,
+            broker.NotAllowed) as exc:
         text = str(exc)
         if isinstance(exc, ValidationError):
             text = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:6])
@@ -470,6 +483,16 @@ def autopilot_state(core: App) -> dict:
     return {"mode": auto["mode"], "due": due, "session": session, "last_run": auto["last_run"], "last_chat": auto["last_chat"]}
 
 
+def _real_note(core: App) -> list[str]:
+    """One paragraph for the autopilot when its owner has real orders switched on; nothing otherwise."""
+    live = real_orders.menu_state(core)
+    if not live["ready"]:
+        return []
+    return ["", f"Real orders are switched on by the owner, and {live['waiting']} proposal(s) of theirs or yours wait for a "
+                "decision. Everything above and every trading tool is the PAPER portfolio. Write a proposal for the real "
+                "account (propose_real_order) only if the mandate asks for real orders; it is not sent, it waits for the owner."]
+
+
 def _brief(core: App, chosen: dict, state: dict) -> str:
     """What the autopilot is told: the owner's mandate, then the facts, worked out here rather than left to the model."""
     pf = core.portfolio()
@@ -500,6 +523,7 @@ def _brief(core: App, chosen: dict, state: dict) -> str:
         f"Limits enforced on your trades: at most {limits['max_trade_pct']:g}% of the portfolio per trade and "
         f"{limits['max_position_pct']:g}% per stock, {limits['max_trades_per_day']} trades a day ({used} used today), "
         f"at least {limits['min_cash_pct']:g}% kept in cash.",
+        *_real_note(core),
         "",
         "Work through it in this order: (1) check every holding against the market and sell what no longer deserves its place; "
         "(2) look for new candidates only if the mandate and the cash allow it (screen_stocks first, then stock_report on the few "

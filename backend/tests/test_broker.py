@@ -109,17 +109,11 @@ def test_client_tells_an_empty_account_from_an_unreadable_answer():
     assert "31337" not in str(info.value)
 
 
-def test_nothing_in_the_application_can_send_an_order():
-    """A tripwire for this release: the account is looked at, never traded."""
+def test_the_look_at_the_account_only_reads():
+    """Phase one's promise still holds for this module: showing the account sends nothing to the broker."""
     app_dir = Path(__file__).resolve().parent.parent / "app"
-    source = {p.name: p.read_text() for p in app_dir.rglob("*.py")}
-    younit = source["younit.py"]
-    assert younit.count("self._http.post(") == 1 and "/api/public-keys/token" in younit  # signing in is the only POST
-    assert not re.search(r"\.(put|patch|delete)\(", younit)
-    for name, text in source.items():
-        for path in ("/orders/normal", "/orders/fund", "order-history", "MarketBeatTrading", "buying-power"):
-            assert path not in text, f"{name} refers to the broker's trading API ({path})"
-    assert not [n for n in dir(YounitClient) if re.search(r"order|buy|sell|cancel|amend|transfer|withdraw", n, re.I)]
+    looking = (app_dir / "broker.py").read_text()
+    assert not re.search(r"place_limit_order|cancel_order|_change\(|\.post\(", looking)
     assert next(t for t in TOOLS if t.name == "real_account").kind == "read"
 
 
@@ -149,6 +143,42 @@ class FakeBroker(FakeYounit):
         self.summary = {"cash": 5000.25, "stocks": 0.0, "total": 0.0, "realized": 12.5, "unrealized": None,
                         "unrealized_pct": None, "currency": "EGP"}
         self.positions = []
+        # orders: what was sent, what the broker lists, and how it is told to answer
+        self.power, self.profile, self.limits = 20000.0, 4242, {}
+        self.sent, self.cancels, self.book, self.past = [], [], [], []
+        self.order_error = self.cancel_error = None
+        self.next_order = 54250949
+
+    def buying_power(self, stock_id):
+        self.reads.append("power")
+        return {"profile_id": self.profile, "buying_power": self.power, "held": 0}
+
+    def trading_limits(self, stock_id):
+        self.reads.append("limits")
+        return {"last": None, "min_price": None, "max_price": None, **self.limits.get(stock_id, {})}
+
+    def place_limit_order(self, *, profile_id, stock_id, side, qty, price):
+        self.sent.append({"profile_id": profile_id, "stock_id": stock_id, "side": side, "qty": qty, "price": price})
+        if self.order_error is not None:
+            raise self.order_error
+        order_id, self.next_order = self.next_order, self.next_order + 1
+        self.book.append({"order_id": order_id, "stock_id": stock_id, "symbol": None, "side": side, "qty": qty, "price": price,
+                          "status": "Accepted", "executed_qty": 0, "average": None})
+        return order_id
+
+    def cancel_order(self, order_id, profile_id):
+        self.cancels.append((order_id, profile_id))
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        next(o for o in self.book if o["order_id"] == order_id)["status"] = "Cancelled"
+
+    def orders(self, profile_id):
+        self.reads.append("orders")
+        return [dict(o) for o in self.book]
+
+    def order_history(self, profile_id):
+        self.reads.append("history")
+        return [dict(o) for o in self.past]
 
     def hold(self, *rows):
         """Rows of (stock_id, code, name, qty, available, avg_cost, price)."""

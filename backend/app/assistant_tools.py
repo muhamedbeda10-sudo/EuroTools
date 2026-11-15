@@ -3,9 +3,12 @@
 Each tool is a thin, bounded wrapper over the same service methods the screens
 use, so the assistant follows exactly the rules a person does: the same fee
 schedule, the same ledger checks, the same paper-only limits. There is no tool
-for real orders, because no such code exists in this application, and none for
-sign-in accounts or passwords, which stay a manual, administrator-only task.
-One tool looks at the owner's real brokerage account; it reads, for the owner only.
+for sign-in accounts or passwords, which stay a manual, administrator-only task.
+
+The real brokerage account, for its owner only: the assistant can read it, and it
+can write a proposal for a real order. It has no tool that approves, sends or
+cancels one. Sending takes the owner's own approval on the Real account page
+(`real_orders.approve`), which is not reachable from here, and a test keeps it so.
 
 `kind` decides how a call is treated under each access level:
   read    - looks only
@@ -28,7 +31,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import broker, orders, paper
+from . import broker, orders, paper, real_orders
 from .assistant_prefs import check_trade, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
@@ -315,6 +318,47 @@ def _real_account(core: App, a: NoArgs) -> dict:
             "checks": v["checks"], "notes": v["notes"],
             "fields": "avg_cost, cost, price, value and unrealized are the broker's figures; app_price is the app's own latest "
                       "price for the same stock; available = shares free to sell now; unsettled = bought but not settled yet."}
+
+
+NOT_SENT = ("This is a proposal, not an order. Nothing was sent to the broker. It waits on the Real account page, where only "
+            "the owner can approve it; you cannot approve, send or cancel it.")
+REAL_ORDER = ("id", "created_at", "session", "origin", "symbol", "side", "qty", "price", "value", "reason", "status",
+              "status_note", "broker")
+
+
+def _real_orders(core: App, a: NoArgs) -> dict:
+    if not broker.access(core)["allowed"]:
+        return {"available": False, "reason": "Real orders exist only for the owner of the brokerage account, on their own sign-in."}
+    v = real_orders.view(core)
+    return {"available": True, "can_propose_now": v["ready"], "why_not": v["why_not"], "market_open_now": v["market_open"],
+            "next_session": v["session"], "limits_set_by_the_owner": v["limits"], "sent_today": v["today"],
+            "waiting_for_the_owner": [pick(o, *REAL_ORDER) for o in v["waiting"]],
+            "earlier": [pick(o, *REAL_ORDER) for o in v["orders"][:20]], "note": v["sync_problem"],
+            "rules": "Limit orders for one day only. You can propose; only the owner can approve, on the Real account page. "
+                     "broker.status is the broker's own word for a sent order; broker.state is how the app reads it."}
+
+
+class ProposeRealOrder(Args):
+    symbol: str = Field(min_length=1, max_length=12)
+    side: Literal["BUY", "SELL"]
+    qty: int = Field(gt=0, le=100_000_000, description="Whole shares")
+    limit_price: Decimal = Field(gt=0, le=Decimal("10000000"), description="The limit price in EGP, at most three decimals")
+    reason: str = Field(min_length=15, max_length=600, description="Why, in a sentence or two the owner will read before deciding: "
+                        "what you saw, and what would make it wrong")
+
+
+def _propose_real_order(core: App, a: ProposeRealOrder) -> dict:
+    made = real_orders.propose(core, real_orders.OrderIn(symbol=a.symbol, side=a.side, qty=a.qty, price=a.limit_price,
+                                                         reason=a.reason), "assistant")
+    return {"proposal": pick(made, *REAL_ORDER), "checked": made["checked"], "what_happens_next": NOT_SENT}
+
+
+class WithdrawRealOrder(Args):
+    id: str = Field(min_length=1, max_length=40, description="The id of a waiting proposal that you wrote")
+
+
+def _withdraw_real_order(core: App, a: WithdrawRealOrder) -> dict:
+    return {"withdrawn": pick(real_orders.withdraw(core, a.id), *REAL_ORDER)}
 
 
 class Trades(Args):
@@ -923,6 +967,18 @@ TOOLS: list[Tool] = [
          "the checks the app made on those figures. Read-only: it cannot be traded from this app. Only the "
          "account's owner can see it; for anyone else it reports that it is unavailable.", NoArgs, _real_account,
          label=lambda a: "Reading the real brokerage account"),
+    Tool("real_orders", "Real orders for the REAL brokerage account: whether proposals can be written now, the limits the "
+         "owner set and how much of them was used today, the proposals waiting for the owner's decision, and what became "
+         "of earlier ones at the broker. Only for the account's owner.", NoArgs, _real_orders,
+         label=lambda a: "Reading the real orders"),
+    Tool("propose_real_order", "Write a proposal for a REAL order (real money) for the owner to decide on: one stock, buy or "
+         "sell, whole shares, a limit price, and your reasoning. It is checked against the owner's limits and the "
+         "broker's figures, then it waits on the Real account page. It is NOT sent: only the owner can approve it there. "
+         "Use it only when the user asked for a real order to be prepared, or their autopilot mandate says to.",
+         ProposeRealOrder, _propose_real_order, kind="write",
+         label=lambda a: f"Preparing a real {a.side.lower()} order for {a.qty:,} {a.symbol.upper()} at {a.limit_price} (for approval)"),
+    Tool("withdraw_real_order_proposal", "Take back a waiting proposal for a real order that you wrote and no longer stand behind.",
+         WithdrawRealOrder, _withdraw_real_order, kind="write", label=lambda a: "Withdrawing a real order proposal"),
     Tool("preview_trade", "What a paper order would cost before placing it: fill price, every fee line, total cash, and "
          "whether it would be accepted.", TradeArgs, _preview_trade,
          label=lambda a: f"Pricing a {a.side.lower()} of {a.qty} {a.symbol.upper()}"),
