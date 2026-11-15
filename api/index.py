@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 # authorises every request with the caller's own Firebase sign-in token.
 os.environ.setdefault("STORE_BACKEND", "firestore")
 os.environ.setdefault("FIREBASE_PROJECT_ID", "eurotools-a1ea6")
+os.environ.setdefault("FIREBASE_WEB_API_KEY", "AIzaSyA9XdUMM1KXbkthRnUGpgbqVnTjJbWWdlE")  # public by design
 os.environ.setdefault("APP_ENV", "production")
 
 from app.main import app  # noqa: E402,F401

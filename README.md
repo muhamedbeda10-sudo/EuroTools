@@ -88,7 +88,7 @@ hit in one bar the stop is assumed first. Long-only, whole shares, daily bars.
 
 ## Known limits
 
-- Any active account of the Firebase project can sign in; each one gets its own separate paper portfolio.
+- Accounts of the quality system and accounts created in Settings → Accounts can sign in; each one gets its own separate paper portfolio. Only an administrator sees the Accounts card.
 - The instrument list is a seed of 53 stocks; sector names should be checked against EGX.
 - Trading calendar is Sunday–Thursday without public holidays.
 - Imported prices are used as given (no adjustment for splits, bonus shares or dividends).

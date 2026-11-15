@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # authenticated with the caller's own Firebase sign-in token).
     store_backend: str = "sqlite"
     firebase_project_id: str = ""
+    # Public web API key of the Firebase project (identifies it, grants nothing).
+    firebase_web_api_key: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Live brokerage execution is a separate, future module. It is not implemented
     # and this flag exists only so the UI can state the fact explicitly.

@@ -181,3 +181,89 @@ def test_first_load_race_creates_exactly_one_portfolio(api, user):
     docs = httpx.get(f"{DOCS}/egx/{uid}/portfolios", headers=h).json()["documents"]
     assert len(docs) == 1
     assert api.get("/api/v1/portfolio", headers=h).json()["summary"]["cash"] == 50000
+
+
+# ---- accounts created from inside the app -----------------------------------
+AUTH_HOST = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9099")
+IDP = f"http://{AUTH_HOST}/identitytoolkit.googleapis.com/v1"
+
+
+@pytest.fixture()
+def acc_api(monkeypatch):
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", AUTH_HOST)
+    from app.config import Settings
+    from app.main import create_app
+    cfg = Settings(store_backend="firestore", firebase_project_id=PROJECT, firebase_web_api_key="fake-api-key")
+    with TestClient(create_app(cfg)) as c:
+        yield c
+
+
+def sign_in(email: str, password: str) -> dict:
+    res = httpx.post(f"{IDP}/accounts:signInWithPassword", params={"key": "fake-api-key"},
+                     json={"email": email, "password": password, "returnSecureToken": True})
+    assert res.status_code == 200, res.text
+    return {"Authorization": f"Bearer {res.json()['idToken']}"}
+
+
+def test_admin_creates_an_account_that_can_use_egx_and_nothing_else(acc_api, user):
+    admin_uid, h = user
+    email = f"friend-{uuid.uuid4().hex[:8]}@example.com"
+    assert acc_api.get("/api/v1/accounts", headers=h).json() == {"can_manage": True, "accounts": []} or \
+        acc_api.get("/api/v1/accounts", headers=h).json()["can_manage"] is True
+
+    assert acc_api.post("/api/v1/accounts", json={"email": "not-an-email", "name": "X", "password": "long-enough-1"}, headers=h).status_code == 422
+    assert acc_api.post("/api/v1/accounts", json={"email": email, "name": "X", "password": "short"}, headers=h).status_code == 422
+    made = acc_api.post("/api/v1/accounts", json={"email": email.upper(), "name": " Friend ", "password": "long-enough-1"}, headers=h)
+    assert made.status_code == 201, made.text
+    new_uid = made.json()["uid"]
+    assert made.json()["email"] == email and made.json()["name"] == "Friend"
+    assert "password" not in made.text
+    dup = acc_api.post("/api/v1/accounts", json={"email": email, "name": "Again", "password": "long-enough-1"}, headers=h)
+    assert dup.status_code == 422 and "already" in dup.json()["detail"]
+
+    listed = acc_api.get("/api/v1/accounts", headers=h).json()["accounts"]
+    assert any(a["uid"] == new_uid and a["active"] is True and a["createdBy"] == admin_uid for a in listed)
+    assert acc_api.get("/api/v1/audit", params={"limit": 1}, headers=h).json()[0]["entity"] == "account"
+
+    # the new person signs in and gets their own paper portfolio
+    hn = sign_in(email, "long-enough-1")
+    assert acc_api.get("/api/v1/portfolio", headers=hn).json()["summary"]["cash"] == 50000
+    assert acc_api.post("/api/v1/trades", json={"side": "BUY", "symbol": "COMI", "qty": 1}, headers=hn).status_code == 201
+    # ...cannot manage accounts, cannot see the admin's data or the quality system
+    assert acc_api.get("/api/v1/accounts", headers=hn).json() == {"can_manage": False, "accounts": []}
+    assert acc_api.post("/api/v1/accounts", json={"email": "x@example.com", "name": "X", "password": "long-enough-1"}, headers=hn).status_code == 401
+    assert acc_api.put(f"/api/v1/accounts/{admin_uid}", json={"active": False}, headers=hn).status_code == 401
+    for path in (f"egx/{admin_uid}/settings/app", f"users/{admin_uid}", "planningLines", "inspections", "egxAccounts"):
+        assert httpx.get(f"{DOCS}/{path}", headers=hn).status_code == 403, path
+    assert httpx.get(f"{DOCS}/egxAccounts/{new_uid}", headers=hn).status_code == 200      # own record: readable
+    grant = {"fields": {"active": {"booleanValue": True}, "createdBy": {"stringValue": new_uid}}}
+    assert httpx.patch(f"{DOCS}/egxAccounts/{new_uid}", headers=hn, json=grant).status_code == 403  # ...not writable
+    assert httpx.patch(f"{DOCS}/users/{new_uid}", headers=hn, json={"fields": {"active": {"booleanValue": True}, "role": {"stringValue": "ADMIN"}}}).status_code == 403
+
+    # deactivating stops the account on its next request; reactivating restores it with its data
+    assert acc_api.put(f"/api/v1/accounts/{admin_uid}", json={"active": False}, headers=h).status_code == 422  # not your own
+    assert acc_api.put(f"/api/v1/accounts/{new_uid}", json={"active": False}, headers=h).status_code == 200
+    assert acc_api.get("/api/v1/portfolio", headers=hn).status_code == 401
+    assert acc_api.put(f"/api/v1/accounts/{new_uid}", json={"active": True}, headers=h).status_code == 200
+    assert len(acc_api.get("/api/v1/portfolio", headers=hn).json()["holdings"]) == 1
+    assert acc_api.put("/api/v1/accounts/no-such-uid", json={"active": True}, headers=h).status_code == 422
+    assert httpx.delete(f"{DOCS}/egxAccounts/{new_uid}", headers=h).status_code == 403
+
+
+def test_a_non_admin_quality_account_cannot_create_accounts(acc_api):
+    uid = "insp-" + uuid.uuid4().hex[:8]
+    res = httpx.patch(f"{DOCS}/users/{uid}", headers={"Authorization": "Bearer owner"},
+                      json={"fields": {"active": {"booleanValue": True}, "role": {"stringValue": "INSPECTOR"}}})
+    assert res.status_code == 200
+    h = {"Authorization": f"Bearer {token(uid)}"}
+    email = f"nope-{uuid.uuid4().hex[:8]}@example.com"
+    assert acc_api.get("/api/v1/accounts", headers=h).json()["can_manage"] is False
+    assert acc_api.post("/api/v1/accounts", json={"email": email, "name": "X", "password": "long-enough-1"}, headers=h).status_code == 401
+    # nothing was left behind: the sign-in does not exist
+    res = httpx.post(f"{IDP}/accounts:signInWithPassword", params={"key": "fake-api-key"},
+                     json={"email": email, "password": "long-enough-1", "returnSecureToken": True})
+    assert res.status_code == 400
+    # and the rules refuse the grant even if the API is bypassed
+    grant = {"fields": {"active": {"booleanValue": True}, "createdBy": {"stringValue": uid}}}
+    assert httpx.patch(f"{DOCS}/egxAccounts/someone", headers=h, json=grant).status_code == 403

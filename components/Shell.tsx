@@ -77,7 +77,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  const { data: status, error } = useApi("/api/v1/status");
+  const { data: status, error, status: httpStatus } = useApi("/api/v1/status");
 
   useEffect(() => {
     setTheme((document.documentElement.dataset.theme as "light" | "dark") || systemTheme());
@@ -94,6 +94,22 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   };
 
   const d = status?.data;
+  // Signed in to Firebase, but the server refused the account: say so once, plainly,
+  // instead of rendering every screen full of the same error.
+  if (email && httpStatus === 401) {
+    return (
+      <main style={{ maxWidth: 440, margin: "12vh auto", padding: "0 16px" }}>
+        <div className="card">
+          <h1>No access</h1>
+          <p style={{ margin: "10px 0 16px" }}>
+            <strong>{email}</strong> is not allowed to use EGX Intelligence. The account may have been deactivated, or it was never
+            given access. Ask the administrator.
+          </p>
+          <button className="primary" onClick={() => signOut(clientAuth())}>Sign out</button>
+        </div>
+      </main>
+    );
+  }
   return (
     <ThemeCtx.Provider value={theme}>
       <div className="shell">

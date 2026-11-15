@@ -149,6 +149,76 @@ function DataImport() {
   );
 }
 
+function AccountsCard() {
+  const { data, error, reload } = useApi("/api/v1/accounts");
+  const [f, setF] = useState({ name: "", email: "", password: "" });
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (error) return <div className="card"><h2>Accounts</h2><div className="note danger" role="alert">{error}</div></div>;
+  if (!data?.can_manage) return null; // only administrators see this card
+  const ready = f.name.trim() && f.email.trim() && f.password.length >= 8;
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    try {
+      const a = await api("/api/v1/accounts", { method: "POST", json: f });
+      setMsg({ ok: true, text: `Account created for ${a.email}. Give them the email and password; they sign in at this same address.` });
+      setF({ name: "", email: "", password: "" });
+      reload();
+    } catch (err: any) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggle = async (a: any) => {
+    if (a.active && !confirm(`Deactivate ${a.email}? They will be locked out immediately. Their data is kept.`)) return;
+    setMsg(null);
+    try {
+      await api(`/api/v1/accounts/${a.uid}`, { method: "PUT", json: { active: !a.active } });
+      reload();
+    } catch (err: any) {
+      setMsg({ ok: false, text: err.message });
+    }
+  };
+  return (
+    <div className="card">
+      <h2>Accounts</h2>
+      <p className="muted">
+        Create a sign-in for another person. Each account gets its own separate paper portfolio and settings, and cannot see anyone
+        else&apos;s. Accounts created here can use EGX Intelligence only.
+      </p>
+      <form className="row" onSubmit={create}>
+        <div><label htmlFor="ac-name">Name</label><input id="ac-name" maxLength={80} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div><label htmlFor="ac-email">Email</label><input id="ac-email" type="email" autoComplete="off" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        <div><label htmlFor="ac-pass">Password (8 characters or more)</label>
+          <input id="ac-pass" type="text" autoComplete="off" minLength={8} maxLength={128} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
+        <button className="primary fit" type="submit" disabled={busy || !ready}>{busy ? "Creating…" : "Create account"}</button>
+      </form>
+      {msg && <div className={`note ${msg.ok ? "info" : "danger"}`} role={msg.ok ? "status" : "alert"} style={{ marginTop: 12 }}>{msg.text}</div>}
+      {data.accounts.length ? (
+        <div className="table-wrap" style={{ marginTop: 12 }}>
+          <table>
+            <thead><tr><th>Name</th><th className="l">Email</th><th>Created</th><th>Status</th><th>&nbsp;</th></tr></thead>
+            <tbody>
+              {data.accounts.map((a: any) => (
+                <tr key={a.uid}>
+                  <td>{a.name}</td><td className="l">{a.email}</td><td>{String(a.createdAt ?? "").slice(0, 10)}</td>
+                  <td>{a.active ? <span className="badge ok">Active</span> : <span className="badge bad">Deactivated</span>}</td>
+                  <td><button className={`small ${a.active ? "danger" : ""}`} onClick={() => toggle(a)}>{a.active ? "Deactivate" : "Reactivate"}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="empty">No accounts created here yet.</div>
+      )}
+    </div>
+  );
+}
+
 function Audit() {
   const { data, loading, error } = useApi("/api/v1/audit?limit=50");
   return (
@@ -162,7 +232,7 @@ function Audit() {
               <tbody>
                 {data.map((a: any) => {
                   const dt = a.detail || {};
-                  const text = dt.after?.name ?? dt.name ?? dt.strategy ?? (dt.symbol ? `${dt.side ?? ""} ${dt.qty ?? ""} ${dt.symbol}`.trim() : dt.id ?? dt.reason ?? "");
+                  const text = dt.email ?? dt.after?.name ?? dt.name ?? dt.strategy ?? (dt.symbol ? `${dt.side ?? ""} ${dt.qty ?? ""} ${dt.symbol}`.trim() : dt.id ?? dt.reason ?? "");
                   return <tr key={a.seq}><td>{a.seq}</td><td>{a.ts.slice(0, 19).replace("T", " ")}</td><td className="l">{a.action}</td><td className="l">{a.entity.replace("_", " ")}</td><td className="l wrap muted">{String(text)}</td></tr>;
                 })}
               </tbody>
@@ -188,6 +258,7 @@ export default function Settings() {
         <Fees />
         <Capital />
         <DataImport />
+        <AccountsCard />
         <div className="card">
           <h2>Connections</h2>
           <dl className="kv">

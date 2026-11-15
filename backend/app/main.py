@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from .accounts import AccountError, Accounts
 from .config import Settings, get_settings
 from .data.market import DataError
 from .domain.backtest import BacktestError
@@ -44,6 +45,16 @@ class CategoryIn(BaseModel):
 class AppSettingsIn(BaseModel):
     starting_capital: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
     benchmark: str | None = Field(default=None, max_length=12)
+
+
+class AccountIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AccountActiveIn(BaseModel):
+    active: bool
 
 
 class BacktestIn(BaseModel):
@@ -106,6 +117,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def _not_found(_: Request, exc: NotFound):
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
+    @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)
     @api.exception_handler(DataError)
     @api.exception_handler(BacktestError)
@@ -284,6 +296,38 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if doc is None:
             raise HTTPException(404, "backtest not found")
         return doc
+
+    # ---- accounts --------------------------------------------------------
+    def accounts_for(request: Request, core: App) -> Accounts | None:
+        if not firestore:
+            return None  # local SQLite runs have no sign-in and no accounts
+        token = request.headers.get("authorization", "")[7:].strip()
+        return Accounts(settings.firebase_project_id, settings.firebase_web_api_key, token, core.store.uid)
+
+    @api.get("/api/v1/accounts")
+    def list_accounts(request: Request, core: App = Depends(get_core)):
+        acc = accounts_for(request, core)
+        if acc is None or not acc.can_manage():
+            return {"can_manage": False, "accounts": []}
+        return {"can_manage": True, "accounts": acc.list()}
+
+    @api.post("/api/v1/accounts", status_code=201)
+    def create_account(request: Request, body: AccountIn, core: App = Depends(get_core)):
+        acc = accounts_for(request, core)
+        if acc is None:
+            raise HTTPException(404, "accounts are not available in local mode")
+        created = acc.create(body.email, body.password, body.name)
+        core.audit("create", "account", {"uid": created["uid"], "email": created["email"], "name": created["name"]})
+        return created
+
+    @api.put("/api/v1/accounts/{uid}")
+    def set_account_active(request: Request, uid: str, body: AccountActiveIn, core: App = Depends(get_core)):
+        acc = accounts_for(request, core)
+        if acc is None:
+            raise HTTPException(404, "accounts are not available in local mode")
+        result = acc.set_active(uid, body.active)
+        core.audit("activate" if body.active else "deactivate", "account", {"uid": uid})
+        return result
 
     # ---- data import & audit --------------------------------------------
     @api.post("/api/v1/data/bars/import")

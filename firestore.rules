@@ -298,8 +298,13 @@ service cloud.firestore {
     // the application: an entry can be created once and never changed or
     // removed, by anyone, including the account that owns it.
     match /egx/{uid}/{coll}/{docId} {
+      // Either a provisioned account of the quality system, or an account an
+      // administrator created for EGX Intelligence alone (see /egxAccounts).
       function owner() {
-        return signedIn() && request.auth.uid == uid;
+        return request.auth != null && request.auth.uid == uid
+          && (signedIn()
+              || (exists(/databases/$(database)/documents/egxAccounts/$(uid))
+                  && get(/databases/$(database)/documents/egxAccounts/$(uid)).data.active == true));
       }
       function appendOnly() {
         return coll == 'audit' || coll.matches('ledger_.*');
@@ -307,6 +312,26 @@ service cloud.firestore {
       allow read: if owner();
       allow create: if owner();
       allow update, delete: if owner() && !appendOnly();
+    }
+
+    // Who may use EGX Intelligence without being part of the quality system.
+    // A document here opens that account's own `egx` tree and nothing else:
+    // every other rule in this file still requires a document in `users`,
+    // which these accounts do not have. Only whoever may manage users can
+    // create or switch one, never their own, and none can be deleted: retiring
+    // an account sets `active` to false, which takes effect on that account's
+    // very next request.
+    match /egxAccounts/{uid} {
+      allow read: if (request.auth != null && request.auth.uid == uid) || canManageUsers();
+      allow create: if canManageUsers()
+        && uid != request.auth.uid
+        && request.resource.data.active is bool
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if canManageUsers()
+        && uid != request.auth.uid
+        && changed().hasOnly(['active', 'updatedBy', 'updatedAt'])
+        && request.resource.data.active is bool;
+      allow delete: if false;
     }
 
     match /{document=**} {
