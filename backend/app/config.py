@@ -1,4 +1,4 @@
-"""Runtime configuration. Secrets never live here: broker credentials are not used by this release."""
+"""Runtime configuration. Secrets never live here: they come from the server's environment."""
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     assistant_users: str = "admins"
     # Rough daily spending ceiling per account, in USD (0 = no ceiling).
     assistant_daily_usd: float = 5.0
+    # The real brokerage account behind the Younit credentials can be looked at (never traded) by these
+    # sign-ins only: Firebase user IDs, separated by commas. Empty = nobody. A server without sign-in
+    # (local SQLite) may look only if the list contains the word "local". See app/broker.py.
+    broker_account_uids: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Live brokerage execution is a separate, future module. It is not implemented
     # and this flag exists only so the UI can state the fact explicitly.

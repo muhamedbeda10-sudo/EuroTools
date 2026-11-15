@@ -4,11 +4,14 @@ import time
 from app.config import Settings
 from app.data.younit import tick_quote
 from app.main import create_app
-from tests.test_feed import FakeYounit
+from tests.test_broker import FakeBroker
 
 
-class MovingYounit(FakeYounit):
-    """Like the test double, but the live stream keeps ticking so a browser can watch it move."""
+class MovingYounit(FakeBroker):
+    """Like the test double, but the live stream keeps ticking so a browser can watch it move.
+
+    It also has a made-up brokerage account behind it, so the Real account page can be opened locally.
+    """
 
     def follow_stock(self, stock_id, max_seconds=240.0):
         price, started = 0.827, time.monotonic()
@@ -42,4 +45,9 @@ import app.services as _services  # noqa: E402
 
 _feed.market_open = _services.market_open = _main.market_open = _market.market_open = lambda *a, **k: True
 
-app = create_app(Settings(), younit=MovingYounit())
+_younit = MovingYounit()
+# A stock priced like the app's feed, one the broker prices differently, one partly unsettled, and a fund.
+_younit.hold((1, "COMI", "Commercial International Bank", 120, 120, 33.4, 35.9), (2, "TMGH", "Talaat Moustafa Group", 300, 180, 47.25, 46.5),
+             (3, "NEWCO", "A New Listing", 50, 50, 52.1, 55.9), (9001, None, "Money Market Fund", 250, 250, 1.52, 1.61))
+
+app = create_app(Settings(broker_account_uids="local"), younit=_younit)

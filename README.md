@@ -3,6 +3,7 @@
 Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 
 > Paper trading only. Nothing in this codebase can send an order to a broker.
+> The owner's real brokerage account can be **looked at** (read-only); it cannot be traded from here.
 > The app ships with **synthetic sample prices** (clearly labelled in the UI) until real
 > history is imported by CSV or a data feed is connected.
 
@@ -15,6 +16,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
+| Real account | The owner's brokerage account, read-only: cash, holdings, shares free to sell, broker price next to the app's price, and checks on the reading. Owner only |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
 | Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
@@ -48,15 +50,38 @@ rules through `.github/workflows/rules.yml`; that workflow never touches Firebas
 
 When `YOUNIT_TRADING_ID` and `YOUNIT_API_KEY` are set on the server, prices come from the
 Younit (EFG Hermes) API instead of the synthetic sample: the EGX stock list and daily
-history, **read-only**. The code contains no call for orders, funds or the brokerage
-portfolio. The credentials stay on the server; they are never sent to the browser, logged
-or committed.
+history, **read-only**. The code contains no call that places, changes or cancels an order
+or moves money (a test, `test_nothing_in_the_application_can_send_an_order`, keeps it that
+way). The credentials stay on the server; they are never sent to the browser, logged or
+committed.
 
 Prices are the same for every account, so they are cached once in Firestore
 (`egxMarket/`). The first page load of the day pulls the update in short batches, and
 Settings → Connections has a manual update button. The feed provides no sector and no index
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
+
+## Real account (read-only)
+
+The same credentials open the owner's brokerage account. The **Real account** page reads it and
+nothing more (`backend/app/broker.py`; the three GET calls are in `backend/app/data/younit.py`):
+account summary, holdings, and the holder's name with a masked account number.
+
+- **Who sees it.** Only the sign-ins named in `BROKER_ACCOUNT_UIDS` on the server (Firebase user
+  IDs, comma-separated). Empty means nobody: being an administrator is not enough. Everyone else
+  gets no menu entry and a 403 from `GET /api/v1/real-account`. Settings → Market data →
+  Connections shows whether the current sign-in may look, and its user ID to copy into the
+  variable. A local run without sign-in may look only when the variable contains the word `local`.
+- **Nothing is stored.** A reading lives in the server's memory for 20 seconds (a refresh reuses one
+  younger than 5), so several looks cost one call to the broker. Nothing is written to Firestore,
+  and nothing enters the paper portfolio.
+- **Checks on every reading.** The holdings add up to the broker's own total; the total equals cash
+  plus stocks; the broker's price for each holding is within 1% of the app's. A failed check is
+  shown with what differs.
+- **The assistant** can read it for the owner (`real_account`, a read tool). It is told to keep real
+  and paper figures apart and that it cannot trade the account. What it reads becomes part of that
+  conversation, which is stored in the owner's own data.
+- Not read yet: funds as a separate list, buying power, and the broker's order history.
 
 ## Run locally
 
@@ -110,6 +135,7 @@ An assistant built into every screen (the **Assistant** button in the top bar). 
 market and the account's own data and operates the app through tools: it can read everything the screens show
 and do everything they do (paper trades, strategies, backtests, automatic runs, alerts, research, journal,
 settings). It has no tool for sign-in accounts or passwords, and none for real orders: no such code exists.
+For the brokerage account's owner it can also read the real account (never trade it).
 
 ### What the assistant knows about trading
 

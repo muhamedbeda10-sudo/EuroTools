@@ -356,9 +356,12 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     tool, parsed, _ = parse("price_depth", {"symbol": "COMI"})
     content, failed = assistant._execute(core, tool, parsed)
     assert failed and "live market-data feed" in content
-    # no tool reaches sign-in accounts or a broker
+    # no tool reaches sign-in accounts, and the only one that reaches the broker looks at the account, for its owner
     names = {t.name for t in TOOLS}
-    assert not any(word in name for name in names for word in ("account", "password", "broker"))
+    assert [n for n in names if any(word in n for word in ("account", "password", "broker"))] == ["real_account"]
+    assert next(t for t in TOOLS if t.name == "real_account").kind == "read"
+    assert run("real_account")["available"] is False   # nothing has said this request is the owner's
+    assert run("open_page", page="account") == {"opened": "/account"}
     assert [s["name"] for s in tool_specs()] == [t.name for t in TOOLS]
 
 

@@ -130,6 +130,7 @@ def test_refresh_then_everything_runs_on_feed_prices(env):
     assert s["data"]["mode"] == "younit" and s["data"]["sources"][0]["symbols"] == 3
     assert s["provider"]["refresh_due"] is False and s["provider"]["latest_bar_date"] == days(1)[0]
     assert "connected for market data only" in s["broker_note"] and s["live_trading_enabled"] is False
+    assert s["trading_mode"] == "paper" and s["broker_connected"] is False
 
     rows = {r["symbol"]: r for r in c.get("/api/v1/stocks").json()}
     assert set(rows) == {"COMI", "TMGH", "NEWCO"}

@@ -136,6 +136,20 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       </ul>
     </>
   ) },
+  { id: "real-account", title: "The paper portfolio and the real account", body: (
+    <>
+      <p>The app keeps two things apart, and never mixes their figures.</p>
+      <p><strong>The paper portfolio</strong> is the simulation: every trade, order, strategy run and profit figure elsewhere in the app belongs to it. No real money moves.</p>
+      <p><strong>The real account</strong> is the brokerage account at EFG Hermes. Its owner can look at it on the <em>Real account</em> page: cash, holdings, what the broker says they are worth, and how many shares are free to sell. The app <strong>only reads</strong> it. It cannot buy, sell, change an order or move money, and nothing on that page is stored.</p>
+      <ul>
+        <li><strong>Who sees it.</strong> Only the sign-in the server names as the account&apos;s owner. For everyone else the page is not in the menu at all.</li>
+        <li><strong>Free to sell.</strong> Shares you bought settle two sessions later. Until then they count in the quantity but may not be sellable; the page shows them as unsettled.</li>
+        <li><strong>Two prices.</strong> The broker&apos;s price and the app&apos;s own latest price are shown side by side. After the close they can differ a little, because the official close is a volume-weighted average and the app shows the last trade.</li>
+        <li><strong>The checks.</strong> Each reading is checked: the holdings must add up to the broker&apos;s total, the total must equal cash plus stocks, and the two prices must agree. A check that fails is shown, not hidden.</li>
+      </ul>
+      <p>The assistant can read the real account for its owner and discuss it, but it cannot trade it. A view on real holdings is analysis: the decision, and the order, are yours.</p>
+    </>
+  ) },
 ];
 
 export default function Guide() {
