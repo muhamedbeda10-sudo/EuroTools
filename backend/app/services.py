@@ -47,10 +47,12 @@ def clean(obj):
 class App:
     """One unit of work for one user. `cache` outlives it (per user, per server instance)."""
 
-    def __init__(self, store, settings: Settings, cache: dict | None = None):
+    def __init__(self, store, settings: Settings, cache: dict | None = None, feed=None, younit=None):
         self.store = store
         self.settings = settings
         self.cache = cache if cache is not None else {}
+        self.feed = feed      # data.feed.Feed when the Younit feed is configured, else None
+        self.younit = younit  # data.younit.YounitClient, used only to refresh the feed
         self._app_settings: dict | None = None
         self.market: MarketData = None  # set by bootstrap()
 
@@ -81,8 +83,21 @@ class App:
         self._app_settings = cfg
         self.market = MarketData(self.store, self.cache.setdefault("market", {}),
                                  data_version=int(self._app_settings.get("data_version", 0)),
-                                 sample=self.settings.seed_sample_data)
+                                 sample=self.settings.seed_sample_data,
+                                 feed=self.feed.load() if self.feed is not None else None)
         return self
+
+    def provider_status(self) -> dict:
+        if self.feed is None:
+            return {"name": None, "configured": False}
+        return {"name": "younit", "configured": True, "read_only": True, **self.feed.summary(self.market.today)}
+
+    def refresh_feed(self) -> dict:
+        if self.feed is None or self.younit is None:
+            raise NotFound("no market-data feed is configured")
+        result = self.feed.refresh(self.younit, today=self.market.today)
+        self.audit("refresh", "market_data", {k: result[k] for k in ("updated", "remaining", "total")})
+        return result
 
     def bump_data_version(self) -> None:
         cfg = self.app_settings()
@@ -265,7 +280,9 @@ class App:
                 "available": False,
                 "reason": "No verified fundamental data source is connected yet (financial statements, EPS, P/E, dividends).",
             },
-            "data_note": "SAMPLE DATA - synthetic prices, not market quotes." if quote["source"] == "sample" else None,
+            "data_note": ("SAMPLE DATA - synthetic prices, not market quotes." if quote["source"] == "sample"
+                          else "Daily prices from Younit, as of the date shown. Not a live quote." if quote["source"] == "younit"
+                          else None),
         })
 
     # ---- watchlist & categories -----------------------------------------

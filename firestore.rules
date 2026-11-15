@@ -314,6 +314,22 @@ service cloud.firestore {
       allow update, delete: if owner() && !appendOnly();
     }
 
+    // Market prices shared by every EGX Intelligence account: the same data for
+    // everyone, so it is stored once instead of per account. Any account that
+    // may use the app can read it and refresh it (the API server writes it with
+    // the caller's token while pulling prices from the data feed). Nothing here
+    // is personal, and nothing can be deleted.
+    match /egxMarket/{docId} {
+      function egxUser() {
+        return request.auth != null
+          && (signedIn()
+              || (exists(/databases/$(database)/documents/egxAccounts/$(request.auth.uid))
+                  && get(/databases/$(database)/documents/egxAccounts/$(request.auth.uid)).data.active == true));
+      }
+      allow read, create, update: if egxUser();
+      allow delete: if false;
+    }
+
     // Who may use EGX Intelligence without being part of the quality system.
     // A document here opens that account's own `egx` tree and nothing else:
     // every other rule in this file still requires a document in `users`,

@@ -20,7 +20,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Strategy Simulator | Historical backtest: return, drawdown, win rate, profit factor, equity curve vs benchmark, run history |
 | Settings | Fee schedule, starting capital, CSV data import, audit trail |
 
-Not built yet: live-data paper trading, Younit integration, fundamentals, research/news,
+Not built yet: live streaming quotes, automatic paper trading, order execution, fundamentals, research/news,
 journal, alerts, AI analysis, corporate actions.
 
 ## How it is hosted
@@ -39,6 +39,20 @@ The API holds **no credentials**. It forwards the caller's sign-in token to Fire
 so `firestore.rules` authorises every read and write. The ledger and the audit trail are
 append-only in the rules themselves. Pushing a change to `firestore.rules` publishes the
 rules through `.github/workflows/rules.yml`; that workflow never touches Firebase Hosting.
+
+## Market data (Younit)
+
+When `YOUNIT_TRADING_ID` and `YOUNIT_API_KEY` are set on the server, prices come from the
+Younit (EFG Hermes) API instead of the synthetic sample: the EGX stock list and daily
+history, **read-only**. The code contains no call for orders, funds or the brokerage
+portfolio. The credentials stay on the server; they are never sent to the browser, logged
+or committed.
+
+Prices are the same for every account, so they are cached once in Firestore
+(`egxMarket/`). The first page load of the day pulls the update in short batches, and
+Settings → Connections has a manual update button. The feed provides no sector and no index
+series: known symbols keep the seed list's sector, others show as "Unclassified", and index
+figures are simply not shown.
 
 ## Run locally
 

@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     firebase_project_id: str = ""
     # Public web API key of the Firebase project (identifies it, grants nothing).
     firebase_web_api_key: str = ""
+    # Younit market-data credentials. Server-side only: never sent to the browser,
+    # never logged, never committed. Leave empty to run on sample / imported data.
+    younit_trading_id: str = ""
+    younit_api_key: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Live brokerage execution is a separate, future module. It is not implemented
     # and this flag exists only so the UI can state the fact explicitly.

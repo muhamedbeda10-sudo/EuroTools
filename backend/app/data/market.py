@@ -20,6 +20,7 @@ class DataError(ValueError):
 
 
 MAX_CSV_ROWS = 6000
+UNCLASSIFIED = "Unclassified"
 
 
 def seed_instruments() -> list[dict]:
@@ -38,11 +39,14 @@ class MarketData:
     `data_version`, which is bumped on every import, and by the calendar day.
     """
 
-    def __init__(self, store, cache: dict, *, data_version: int, sample: bool, today: date | None = None):
+    def __init__(self, store, cache: dict, *, data_version: int, sample: bool, today: date | None = None,
+                 feed: dict | None = None):
         self.store = store
         self.cache = cache
         self.data_version = data_version
-        self.sample = sample
+        self.feed = feed  # {"version", "index", "bars"} from the shared Younit cache, or None
+        # Synthetic prices are never mixed with a real feed.
+        self.sample = sample and feed is None
         self.today = today or date.today()
 
     # ---- instruments -----------------------------------------------------
@@ -57,12 +61,20 @@ class MarketData:
 
     # ---- bars ------------------------------------------------------------
     def _load(self) -> None:
-        key = (self.data_version, self.today.isoformat(), self.sample)
+        key = (self.data_version, self.today.isoformat(), self.sample, self.feed["version"] if self.feed else None)
         if self.cache.get("key") == key:
             return
         custom = self.store.list("instruments")
-        seeded = {i["symbol"] for i in _SEED}
-        instruments = sorted(_SEED + [c for c in custom if c["symbol"] not in seeded], key=lambda i: i["symbol"])
+        if self.feed is not None:
+            # The feed defines which stocks exist. It carries no sector, so the seed
+            # list's classification is used where the symbol is known.
+            sector = {i["symbol"]: i["sector"] for i in _SEED if i["type"] == "stock"}
+            base = [{"symbol": i["symbol"], "name": i["name"], "type": "stock",
+                     "sector": sector.get(i["symbol"], UNCLASSIFIED)} for i in self.feed["index"]["instruments"]]
+        else:
+            base = list(_SEED)
+        listed = {i["symbol"] for i in base}
+        instruments = sorted(base + [c for c in custom if c["symbol"] not in listed], key=lambda i: i["symbol"])
         frames: dict[str, pd.DataFrame] = {}
         sources: dict[str, str] = {}
 
@@ -75,6 +87,10 @@ class MarketData:
         if self.sample:
             for symbol, rows in sample.generate([i for i in instruments if i["symbol"] not in imported], self.today).items():
                 frames[symbol], sources[symbol] = frame(rows), "sample"
+        if self.feed is not None:
+            for symbol, rows in self.feed["bars"].items():
+                if rows and symbol not in imported:
+                    frames[symbol], sources[symbol] = frame(rows), "younit"
         for symbol, rows in imported.items():
             frames[symbol], sources[symbol] = frame(rows), "csv"
         self.cache.clear()
@@ -157,7 +173,8 @@ class MarketData:
         names = set(src.values())
         return {
             "sources": sources,
-            "mode": "none" if not names else "sample" if names == {"sample"} else "mixed" if "sample" in names else "imported",
+            "mode": ("none" if not names else "sample" if names == {"sample"} else "mixed" if "sample" in names
+                     else "younit" if "younit" in names else "imported"),
             "has_sample_data": "sample" in names,
             "latest_bar_date": latest.isoformat() if latest else None,
             "trading_days_behind": age,

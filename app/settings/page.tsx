@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { useFeedUpdate } from "@/components/Shell";
 import { State } from "@/components/ui";
 
 function Fees() {
@@ -131,7 +132,7 @@ function DataImport() {
           <table>
             <thead><tr><th>Source</th><th>Stocks</th><th>Bars</th><th>From</th><th>To</th></tr></thead>
             <tbody>
-              {d.sources.map((s: any) => <tr key={s.source}><td>{s.source === "sample" ? "Sample (synthetic)" : "Imported CSV"}</td><td>{s.symbols}</td><td>{s.bars}</td><td>{s.first_date}</td><td>{s.last_date}</td></tr>)}
+              {d.sources.map((s: any) => <tr key={s.source}><td>{s.source === "sample" ? "Sample (synthetic)" : s.source === "younit" ? "Younit (daily)" : "Imported CSV"}</td><td>{s.symbols}</td><td>{s.bars}</td><td>{s.first_date}</td><td>{s.last_date}</td></tr>)}
             </tbody>
           </table>
         </div>
@@ -246,6 +247,9 @@ function Audit() {
 
 export default function Settings() {
   const status = useApi("/api/v1/status");
+  const feed = useFeedUpdate();
+  const pv = status.data?.provider;
+  useEffect(() => { if (feed.state.done) status.reload(); }, [feed.state.done]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="page-head">
@@ -263,12 +267,33 @@ export default function Settings() {
           <h2>Connections</h2>
           <dl className="kv">
             <dt>Trading mode</dt><dd>Paper only</dd>
-            <dt>Broker (Younit)</dt><dd>Not connected</dd>
+            <dt>Younit market data</dt><dd>{pv?.configured ? "Connected, read-only" : "Not connected"}</dd>
+            {pv?.configured && (
+              <>
+                <dt>Stocks in the feed</dt><dd>{pv.symbols} ({pv.with_history} with price history)</dd>
+                <dt>Latest daily bar</dt><dd>{pv.latest_bar_date ?? "—"}</dd>
+                <dt>Last updated</dt><dd>{pv.updated_at ? `${pv.updated_at.slice(0, 16).replace("T", " ")} UTC` : "never"}</dd>
+              </>
+            )}
             <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
-            <dt>Live market data</dt><dd>Not connected</dd>
+            <dt>Live streaming quotes</dt><dd>Not connected</dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
           {status.data && <p className="muted" style={{ marginTop: 10 }}>{status.data.broker_note}</p>}
+          {pv?.configured && (
+            <>
+              <button onClick={feed.run} disabled={feed.state.running}>
+                {feed.state.running
+                  ? `Updating… ${feed.state.total ? `${feed.state.total - (feed.state.left ?? feed.state.total)} of ${feed.state.total}` : ""}`
+                  : "Update market data now"}
+              </button>
+              {feed.state.done && <div className="note info" role="status" style={{ marginTop: 10 }}>Market data is up to date. Prices are re-checked at most every 15 minutes.</div>}
+              {feed.state.error && <div className="note danger" role="alert" style={{ marginTop: 10 }}>{feed.state.error}</div>}
+              {pv.errors?.length > 0 && !feed.state.error && (
+                <div className="note" style={{ marginTop: 10 }}>Some stocks failed on the last update: {pv.errors.join("; ")}</div>
+              )}
+            </>
+          )}
         </div>
         <Audit />
       </div>

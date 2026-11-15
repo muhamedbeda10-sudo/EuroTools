@@ -1,0 +1,210 @@
+"""Younit feed: client parsing, shared cache, and the API on top of it (no network)."""
+import json
+from datetime import date, timedelta
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.data.calendar import is_trading_day
+from app.data.feed import Feed, StoreDocs
+from app.data.younit import YounitClient, YounitError
+from app.main import create_app
+from app.store.sqlite_store import Store
+
+
+def days(n: int, end: date | None = None) -> list[str]:
+    out, d = [], end or date.today()
+    while len(out) < n:
+        if is_trading_day(d):
+            out.append(d.isoformat())
+        d -= timedelta(days=1)
+    return out[::-1]
+
+
+class FakeYounit:
+    """Stands in for YounitClient: three stocks, deterministic rising prices."""
+
+    def __init__(self, n=260):
+        self.n, self.calls, self.fail = n, [], set()
+        self.listing = [{"symbol": "COMI", "name": "Commercial International Bank", "stock_id": 1},
+                        {"symbol": "TMGH", "name": "Talaat Moustafa Group", "stock_id": 2},
+                        {"symbol": "NEWCO", "name": "A New Listing", "stock_id": 3}]
+
+    def stocks(self):
+        return self.listing
+
+    def daily_history(self, stock_id, date_from, date_to):
+        self.calls.append((stock_id, date_from, date_to))
+        if stock_id in self.fail:
+            raise YounitError("Younit request failed (HTTP 500)")
+        rows = []
+        for i, d in enumerate(days(self.n)):
+            if date_from.isoformat() <= d <= date_to.isoformat():
+                c = 10.0 * stock_id + i * 0.1
+                rows.append([d, c - 0.05, c + 0.2, c - 0.2, c, 1000.0 * stock_id])
+        return rows
+
+
+@pytest.fixture(autouse=True)
+def _fresh_feed():
+    Feed.reset()
+    yield
+    Feed.reset()
+
+
+@pytest.fixture()
+def env(tmp_path):
+    fake = FakeYounit()
+    app = create_app(Settings(data_dir=tmp_path, younit_trading_id="", younit_api_key=""), Store(tmp_path / "t.sqlite3"), younit=fake)
+    with TestClient(app) as c:
+        yield c, fake
+
+
+def test_no_sample_prices_once_a_feed_is_configured(env):
+    c, _ = env
+    s = c.get("/api/v1/status").json()
+    assert s["provider"]["configured"] and s["provider"]["read_only"] and s["provider"]["refresh_due"]
+    assert s["data"]["mode"] == "none" and s["data"]["has_sample_data"] is False
+    assert c.get("/api/v1/stocks").json() == []
+    assert c.get("/api/v1/market/overview").json()["indices"] == []
+
+
+def test_refresh_then_everything_runs_on_feed_prices(env):
+    c, fake = env
+    r = c.post("/api/v1/data/refresh").json()
+    assert r == {"updated": 3, "remaining": 0, "total": 3, "errors": [], "stalled": False}
+    s = c.get("/api/v1/status").json()
+    assert s["data"]["mode"] == "younit" and s["data"]["sources"][0]["symbols"] == 3
+    assert s["provider"]["refresh_due"] is False and s["provider"]["latest_bar_date"] == days(1)[0]
+    assert "connected for market data only" in s["broker_note"] and s["live_trading_enabled"] is False
+
+    rows = {r["symbol"]: r for r in c.get("/api/v1/stocks").json()}
+    assert set(rows) == {"COMI", "TMGH", "NEWCO"}
+    assert rows["COMI"]["sector"] == "Banks" and rows["NEWCO"]["sector"] == "Unclassified"
+    assert rows["COMI"]["source"] == "younit" and rows["COMI"]["last"] == pytest.approx(10 + 259 * 0.1)
+
+    d = c.get("/api/v1/stocks/COMI").json()
+    assert "Younit" in d["data_note"] and d["assessment"]["sma200"] is not None
+    assert c.post("/api/v1/trades", json={"side": "BUY", "symbol": "NEWCO", "qty": 5}).json()["price_source"] == "younit"
+    st = c.post("/api/v1/strategies", json={"name": "T", "type": "sma_cross", "params": {"fast": 5, "slow": 20}}).json()
+    bt = c.post("/api/v1/backtests", json={"strategy_id": st["id"]}).json()
+    assert bt["data_sources"] == ["younit"] and not any("SAMPLE" in w for w in bt["warnings"])
+    assert bt["benchmark"] is None  # the feed has no index series; nothing is invented in its place
+    assert c.get("/api/v1/audit", params={"limit": 50}).json()[-1 if False else 0]["entity"] in ("backtest", "market_data")
+
+    # a second refresh right away has nothing to do and makes no history calls
+    before = len(fake.calls)
+    assert c.post("/api/v1/data/refresh").json()["updated"] == 0 and len(fake.calls) == before
+
+
+def test_incremental_refresh_merges_and_keeps_history(tmp_path):
+    store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit(n=100)
+    feed = Feed(StoreDocs(store))
+    feed.refresh(fake, today=date.today())
+    idx = store.get("egxMarket", "index")
+    idx["checked"] = {k: "2000-01-01T00:00:00+00:00" for k in idx["checked"]}   # pretend it was long ago
+    store.put("egxMarket", "index", idx)
+    fake.n, fake.calls = 105, []
+    Feed.reset()
+    out = feed.refresh(fake, today=date.today())
+    assert out["updated"] == 3
+    assert all(c[1] > date.today() - timedelta(days=30) for c in fake.calls)   # asked only for the recent tail
+    bars = feed.load()["bars"]["COMI"]
+    assert len(bars) >= 100 and [b[0] for b in bars] == sorted({b[0] for b in bars})
+    assert bars[-1][0] == days(1)[0]
+
+
+def test_batches_respect_the_time_budget_and_report_failures(tmp_path):
+    store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit()
+    feed = Feed(StoreDocs(store))
+    partial = feed.refresh(fake, today=date.today(), budget_seconds=0)   # no time: only the stock list is saved
+    assert partial["updated"] == 0 and partial["remaining"] == 3 and partial["stalled"]
+    fake.fail = {2}
+    out = feed.refresh(fake, today=date.today())
+    assert out["updated"] == 2 and out["remaining"] == 1 and "TMGH" in out["errors"][0]
+    assert feed.summary(date.today())["refresh_due"] is True
+    fake.fail = set()
+    assert feed.refresh(fake, today=date.today())["remaining"] == 0
+
+
+def test_feed_outage_is_reported_and_writes_nothing(env):
+    c, fake = env
+    c.post("/api/v1/data/refresh")
+
+    def down():
+        raise YounitError("cannot reach Younit (ConnectTimeout)")
+    fake.stocks = down
+    r = c.post("/api/v1/data/refresh")
+    assert r.status_code == 502 and "cannot reach Younit" in r.json()["detail"]
+    assert len(c.get("/api/v1/stocks").json()) == 3   # yesterday's data still served
+
+
+def test_csv_import_overrides_the_feed_for_that_account(env):
+    c, _ = env
+    c.post("/api/v1/data/refresh")
+    good = "Date,Open,High,Low,Close,Volume\n2024-01-01,10,11,9,10.5,1000\n2024-01-02,10.5,12,10,11,2000\n"
+    assert c.post("/api/v1/data/bars/import", data={"symbol": "COMI"}, files={"file": ("c.csv", good, "text/csv")}).status_code == 200
+    assert c.get("/api/v1/stocks/COMI").json()["quote"]["source"] == "csv"
+    assert c.get("/api/v1/stocks/TMGH").json()["quote"]["source"] == "younit"
+
+
+# ---- the HTTP client itself ---------------------------------------------------
+def make_client(handler):
+    YounitClient._tokens.clear()
+    return YounitClient("tid-1", "key-1", transport=httpx.MockTransport(handler))
+
+
+def test_client_signs_in_once_reuses_the_token_and_parses_both_field_spellings():
+    seen = {"token": 0, "auth": []}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/public-keys/token":
+            seen["token"] += 1
+            assert json.loads(req.content) == {"tradingId": "tid-1", "secret": "key-1"}
+            return httpx.Response(200, json={"data": {"accessToken": f"tok{seen['token']}", "expiresIn": 3600, "tokenType": "Bearer"}})
+        seen["auth"].append(req.headers["authorization"])
+        if req.url.path == "/api/stocks/market/1":
+            return httpx.Response(200, json={"data": [
+                {"stockId": 7, "symbol": "comi", "stockName": "CIB"},
+                {"securityID": 9, "symbol": "TMGH", "securityName": "TMG"},
+                {"stockId": 11, "symbol": ""}, {"symbol": "NOID"}, "garbage"]})
+        assert dict(req.url.params) == {"SecurityID": "7", "Period": "Day", "DateFrom": "2026-01-01", "DateTo": "2026-01-10"}
+        return httpx.Response(200, json={"messages": None, "data": {"errorCode": 0, "data": {"chartingDataViewModel": [
+            {"dateTime": "2026-01-05T00:00:00", "openPrice": 10, "highPrice": 11, "lowPrice": 9.5, "price": 10.5, "volume": 100},
+            {"date": "2026-01-04T00:00:00", "open": 9, "high": 10, "low": 8.5, "close": 9.5, "volume": 50},
+            {"dateTime": "2026-01-06T00:00:00", "openPrice": 0, "highPrice": 0, "lowPrice": 0, "price": 12, "volume": None},
+            {"dateTime": "2026-01-07T00:00:00", "price": 0}, {"dateTime": "bad", "price": 5}]}}})
+
+    c = make_client(handler)
+    assert c.stocks() == [{"symbol": "COMI", "name": "CIB", "stock_id": 7}, {"symbol": "TMGH", "name": "TMG", "stock_id": 9}]
+    rows = c.daily_history(7, date(2026, 1, 1), date(2026, 1, 10))
+    assert rows == [["2026-01-04", 9.0, 10.0, 8.5, 9.5, 50.0], ["2026-01-05", 10.0, 11.0, 9.5, 10.5, 100.0],
+                    ["2026-01-06", 12.0, 12.0, 12.0, 12.0, 0.0]]
+    assert seen["token"] == 1 and seen["auth"] == ["Bearer tok1", "Bearer tok1"]
+
+
+def test_client_reauthenticates_once_on_401_and_explains_failures():
+    state = {"token": 0, "calls": 0}
+
+    def handler(req):
+        if req.url.path == "/api/public-keys/token":
+            state["token"] += 1
+            return httpx.Response(200, json={"accessToken": f"t{state['token']}", "expiresIn": 3600, "tokenType": "Bearer"})
+        state["calls"] += 1
+        return httpx.Response(401) if req.headers["authorization"] == "Bearer t1" else httpx.Response(200, json=[])
+    c = make_client(handler)
+    assert c.stocks() == [] and state == {"token": 2, "calls": 2}
+
+    with pytest.raises(YounitError, match="rejected the Trading ID"):
+        make_client(lambda r: httpx.Response(401)).stocks()
+    with pytest.raises(YounitError, match="rate limit"):
+        make_client(lambda r: httpx.Response(200, json={"accessToken": "t", "expiresIn": 60, "tokenType": "Bearer"})
+                    if "token" in r.url.path else httpx.Response(429)).stocks()
+
+    def boom(_):
+        raise httpx.ConnectTimeout("x")
+    with pytest.raises(YounitError, match="cannot reach Younit") as info:
+        make_client(boom).stocks()
+    assert "key-1" not in str(info.value) and "tid-1" not in str(info.value)

@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
+import { api } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 
 const NAV = [
@@ -73,6 +74,59 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   return <Frame email={user?.email ?? null}>{children}</Frame>;
 }
 
+let feedUpdateStarted = false; // once per page load, however many times the shell re-renders
+
+/** Pulls the day's prices from the feed in short batches and says what it is doing. */
+export function useFeedUpdate() {
+  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean }>({ running: false });
+  const run = async () => {
+    setState({ running: true });
+    try {
+      for (let i = 0; i < 60; i++) {
+        const r = await api("/api/v1/data/refresh", { method: "POST" });
+        if (r.remaining === 0) return setState({ running: false, done: true, total: r.total });
+        if (r.stalled) return setState({ running: false, error: r.errors?.[0] ?? "The data feed returned nothing." });
+        setState({ running: true, left: r.remaining, total: r.total });
+      }
+      setState({ running: false, error: "The update is taking too long. Try again later." });
+    } catch (e: any) {
+      setState({ running: false, error: e.message });
+    }
+  };
+  return { state, run };
+}
+
+function FeedUpdater({ provider }: { provider: any }) {
+  const { state, run } = useFeedUpdate();
+  const first = provider.with_history === 0;
+  useEffect(() => {
+    if (provider.refresh_due && !feedUpdateStarted) {
+      feedUpdateStarted = true;
+      run();
+    }
+  }, [provider.refresh_due]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (state.done && first) window.location.reload(); // nothing was on screen yet: show the data
+  }, [state.done, first]);
+  if (state.running)
+    return (
+      <div className="banner" role="status">
+        <strong>{first ? "Loading market data for the first time." : "Updating market data."}</strong>{" "}
+        {state.total ? `${state.total - (state.left ?? state.total)} of ${state.total} stocks…` : "Contacting Younit…"}
+        {first ? " This takes a minute or two; keep the page open." : ""}
+      </div>
+    );
+  if (state.error)
+    return <div className="banner danger" role="alert"><strong>Market data was not updated.</strong> {state.error}</div>;
+  if (state.done && !first)
+    return (
+      <div className="banner" role="status">
+        Market data updated. <button className="small" onClick={() => window.location.reload()}>Reload to see it</button>
+      </div>
+    );
+  return null;
+}
+
 function Frame({ children, email }: { children: React.ReactNode; email: string | null }) {
   const path = usePathname();
   const [open, setOpen] = useState(false);
@@ -133,11 +187,11 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             </button>
             {d && (
               <span className={`badge ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`}>
-                Data: {d.mode === "sample" ? "sample (synthetic)" : d.mode === "mixed" ? "imported + sample" : d.mode === "imported" ? "imported CSV" : "none"}
+                Data: {d.mode === "sample" ? "sample (synthetic)" : d.mode === "mixed" ? "imported + sample" : d.mode === "imported" ? "imported CSV" : d.mode === "younit" ? "Younit, daily" : "none"}
                 {d.latest_bar_date ? ` · as of ${d.latest_bar_date}` : ""}
               </span>
             )}
-            <span className="badge">Broker: not connected</span>
+            <span className="badge">{status?.provider?.configured ? "Younit: market data only · orders off" : "Broker: not connected"}</span>
             <span className="badge paper">PAPER TRADING</span>
             <button onClick={toggle} aria-label="Toggle light or dark theme">
               {theme === "dark" ? "Light" : "Dark"} theme
@@ -153,6 +207,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
               are not EGX market quotes. Import real history in Settings.
             </div>
           )}
+          {status?.provider?.configured && <FeedUpdater provider={status.provider} />}
           {d && !d.has_sample_data && d.is_stale && (
             <div className="banner" role="status">
               <strong>Stale data.</strong> Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.

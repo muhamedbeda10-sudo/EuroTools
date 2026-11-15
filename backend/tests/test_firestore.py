@@ -267,3 +267,33 @@ def test_a_non_admin_quality_account_cannot_create_accounts(acc_api):
     # and the rules refuse the grant even if the API is bypassed
     grant = {"fields": {"active": {"booleanValue": True}, "createdBy": {"stringValue": uid}}}
     assert httpx.patch(f"{DOCS}/egxAccounts/someone", headers=h, json=grant).status_code == 403
+
+
+# ---- shared market data from the feed ----------------------------------------
+def test_feed_data_is_shared_between_accounts_and_closed_to_strangers(monkeypatch, user):
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    from app.config import Settings
+    from app.data.feed import Feed
+    from app.main import create_app
+    from tests.test_feed import FakeYounit
+    Feed.reset()
+    cfg = Settings(store_backend="firestore", firebase_project_id=PROJECT)
+    with TestClient(create_app(cfg, younit=FakeYounit())) as api:
+        uid, h = user
+        out = api.post("/api/v1/data/refresh", headers=h)
+        assert out.status_code == 200 and out.json()["remaining"] == 0, out.text
+        assert api.get("/api/v1/status", headers=h).json()["data"]["mode"] == "younit"
+
+        other = "o-" + uuid.uuid4().hex[:8]
+        provision(other)
+        ho = {"Authorization": f"Bearer {token(other)}"}
+        Feed.reset()  # as if served by a different server instance
+        assert {r["symbol"] for r in api.get("/api/v1/stocks", headers=ho).json()} == {"COMI", "TMGH", "NEWCO"}
+
+        stranger = {"Authorization": f"Bearer {token('s-' + uuid.uuid4().hex[:8])}"}
+        assert httpx.get(f"{DOCS}/egxMarket/index", headers=stranger).status_code == 403
+        assert httpx.get(f"{DOCS}/egxMarket/index").status_code == 403
+        assert httpx.patch(f"{DOCS}/egxMarket/index", headers=stranger, json={"fields": {"body": {"stringValue": "{}"}}}).status_code == 403
+        assert httpx.delete(f"{DOCS}/egxMarket/index", headers=h).status_code == 403
+        assert api.post("/api/v1/data/refresh", headers=stranger).status_code == 401
+    Feed.reset()

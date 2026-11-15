@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 
 from .accounts import AccountError, Accounts
 from .config import Settings, get_settings
+from .data.feed import Feed, FirestoreDocs, StoreDocs
 from .data.market import DataError
+from .data.younit import YounitClient, YounitError
 from .domain.backtest import BacktestError
 from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
@@ -69,8 +71,10 @@ class BacktestIn(BaseModel):
 MAX_CACHED_USERS = 20
 
 
-def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, store: Store | None = None, younit=None) -> FastAPI:
     settings = settings or get_settings()
+    if younit is None and settings.younit_trading_id and settings.younit_api_key:
+        younit = YounitClient(settings.younit_trading_id, settings.younit_api_key)
     firestore = settings.store_backend == "firestore"
     if firestore and not settings.firebase_project_id:
         raise RuntimeError("FIREBASE_PROJECT_ID is required when STORE_BACKEND=firestore")
@@ -80,7 +84,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def get_core(request: Request) -> App:
         """Build the per-request application object for the signed-in user."""
         if not firestore:
-            return App(local_store, settings, caches.setdefault("local", {})).bootstrap()
+            feed = Feed(StoreDocs(local_store)) if younit else None
+            return App(local_store, settings, caches.setdefault("local", {}), feed, younit).bootstrap()
         header = request.headers.get("authorization", "")
         if not header.lower().startswith("bearer "):
             raise AuthError("sign in to use the app")
@@ -88,7 +93,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         uid = uid_from_token(token)
         # bootstrap() reads the user's settings first; Firestore rejects that read
         # unless the token is genuine, so the cache below is never reached by a forgery.
-        core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {})
+        core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {},
+                   Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
         core.bootstrap()
         core.cache = caches.setdefault(uid, {})
         core.market.cache = core.cache.setdefault("market", {})
@@ -117,6 +123,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def _not_found(_: Request, exc: NotFound):
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
+    @api.exception_handler(YounitError)
+    async def _feed_down(_: Request, exc: YounitError):
+        return JSONResponse({"detail": str(exc)}, status_code=502)
+
     @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)
     @api.exception_handler(DataError)
@@ -138,7 +148,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "trading_mode": "paper",
             "live_trading_enabled": False,
             "broker_connected": False,
-            "broker_note": "Younit is not connected. This release cannot send orders to any broker.",
+            "broker_note": ("Younit is connected for market data only (read-only). This release cannot send orders to any broker."
+                            if younit else "Younit is not connected. This release cannot send orders to any broker."),
+            "provider": core.provider_status(),
             "data": core.market.status(),
             "storage": settings.store_backend,
             "fees_verified": core.fee_schedule().verified,
@@ -296,6 +308,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if doc is None:
             raise HTTPException(404, "backtest not found")
         return doc
+
+    @api.post("/api/v1/data/refresh")
+    def refresh_market_data(core: App = Depends(get_core)):
+        """Pull the next batch of prices from the feed. The page calls this until `remaining` is 0."""
+        return core.refresh_feed()
 
     # ---- accounts --------------------------------------------------------
     def accounts_for(request: Request, core: App) -> Accounts | None:

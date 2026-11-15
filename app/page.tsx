@@ -50,6 +50,12 @@ export default function Dashboard() {
         {ov.data && (
           <>
             <div className="grid cols-4">
+              {ov.data.indices.length === 0 && (
+                <div className="card kpi">
+                  <div className="label">EGX indices</div>
+                  <div className="hint" style={{ marginTop: 8 }}>Not provided by the current data feed. No index figures are shown in their place.</div>
+                </div>
+              )}
               {ov.data.indices.map((i: any) => (
                 <div className="card kpi" key={i.symbol}>
                   <div className="label">{i.symbol}{i.source === "sample" ? " · sample" : ""}</div>
@@ -147,11 +153,11 @@ export default function Dashboard() {
           <h2>Data connection status</h2>
           {d && (
             <dl className="kv">
-              <dt>Price data</dt><dd>{d.mode === "sample" ? "Sample (synthetic)" : d.mode === "mixed" ? "Imported + sample" : d.mode === "imported" ? "Imported CSV" : "None"}</dd>
+              <dt>Price data</dt><dd>{d.mode === "sample" ? "Sample (synthetic)" : d.mode === "mixed" ? "Imported + sample" : d.mode === "imported" ? "Imported CSV" : d.mode === "younit" ? "Younit, daily bars" : "None"}</dd>
               <dt>Latest bar</dt><dd>{d.latest_bar_date ?? "—"}</dd>
               <dt>Sessions behind today</dt><dd>{d.trading_days_behind ?? "—"}</dd>
-              <dt>Live feed</dt><dd>Not connected</dd>
-              <dt>Broker (Younit)</dt><dd>Not connected</dd>
+              <dt>Live streaming quotes</dt><dd>Not connected</dd>
+              <dt>Younit market data</dt><dd>{st.data?.provider?.configured ? "Connected, read-only" : "Not connected"}</dd>
               <dt>Live order execution</dt><dd>Disabled</dd>
               <dt>News feed</dt><dd>Later phase</dd>
               <dt>Stocks missing data</dt><dd>{d.symbols_without_data.length}</dd>
