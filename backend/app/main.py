@@ -13,7 +13,7 @@ from typing import Literal
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .accounts import AccountError, Accounts
@@ -31,6 +31,7 @@ from .store.firestore_store import FirestoreStore, uid_from_token
 from .store.sqlite_store import Store
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
+NO_BUFFERING = {"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"}
 
 
 class TradeIn(BaseModel):
@@ -157,6 +158,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
                     times.append(round((time.monotonic() - started) * 1000))
             out["database_ms"] = {"first": times[0], "then": sorted(times[1:])}
         return out
+
+    @api.get("/health/stream")
+    def health_stream():
+        """Five ticks, one a second: shows whether this host delivers a response as it is produced."""
+        def ticks():
+            for i in range(5):
+                yield f"data: {i} {time.time():.1f}\n\n"
+                time.sleep(1)
+        return StreamingResponse(ticks(), media_type="text/event-stream", headers=NO_BUFFERING)
 
     @api.get("/api/v1/status")
     def status(core: App = Depends(get_core)):
