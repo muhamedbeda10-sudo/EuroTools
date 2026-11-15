@@ -1,11 +1,11 @@
 "use client";
-import Link from "next/link";
+import { Newspaper, Plus } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { CATEGORIES, ResearchItem } from "@/components/ResearchItem";
-import { State } from "@/components/ui";
+import { Empty, State } from "@/components/ui";
 
 const blank = () => ({ title: "", url: "", source: "", published: "", symbols: "", sectors: [] as string[], strategy_ids: [] as string[],
   category: "news", summary: "", notes: "", sentiment: "neutral", importance: 2, reliability: "unverified", verified: false });
@@ -51,12 +51,12 @@ function Research() {
           <h1>Research &amp; News</h1>
           <p className="sub">Collect links and notes, and tie each one to the stocks, sectors and strategies it concerns.</p>
         </div>
-        {!draft && <button className="primary" onClick={() => (setDraft({ ...blank(), symbols: preset }), setError(null))}>Add item</button>}
+        {!draft && <button className="primary" onClick={() => (setDraft({ ...blank(), symbols: preset }), setError(null))}><Plus size={15} aria-hidden="true" />Add item</button>}
       </div>
-      <div className="note info">A headline is not a verified fact. Mark an item verified only after checking it against the company&apos;s own disclosure or financial statements.</div>
+      <div className="note info"><strong>A headline is not a verified fact.</strong> Mark an item verified only after checking it against the company&apos;s own disclosure or financial statements.</div>
 
       {draft && (
-        <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card" style={{ marginBottom: 16 }}>
           <h2>{draft.id ? "Edit item" : "New item"}</h2>
           <div className="row">
             <div className="field" style={{ flex: "3 1 280px" }}><label htmlFor="r-title">Title</label><input id="r-title" maxLength={200} value={draft.title} onChange={(e) => set({ title: e.target.value })} /></div>
@@ -68,7 +68,7 @@ function Research() {
             <div className="field"><label htmlFor="r-date">Publication date</label><input id="r-date" type="date" value={draft.published ?? ""} onChange={(e) => set({ published: e.target.value })} /></div>
             <div className="field"><label htmlFor="r-sym">Stocks (comma separated)</label><input id="r-sym" value={Array.isArray(draft.symbols) ? draft.symbols.join(", ") : draft.symbols} onChange={(e) => set({ symbols: e.target.value.toUpperCase() })} placeholder="COMI, TMGH" /></div>
           </div>
-          <div className="row">
+          <div className="row top">
             <div className="field"><label htmlFor="r-sec">Sectors (Ctrl / Cmd for several)</label><select id="r-sec" multiple size={3} value={draft.sectors} onChange={(e) => set({ sectors: Array.from(e.target.selectedOptions, (o) => o.value) })}>{(sectors.data ?? []).map((s: any) => <option key={s.sector}>{s.sector}</option>)}</select></div>
             <div className="field"><label htmlFor="r-str">Strategies</label><select id="r-str" multiple size={3} value={draft.strategy_ids} onChange={(e) => set({ strategy_ids: Array.from(e.target.selectedOptions, (o) => o.value) })}>{(strategies.data ?? []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
             <div className="field"><label htmlFor="r-sent">Likely impact</label><select id="r-sent" value={draft.sentiment} onChange={(e) => set({ sentiment: e.target.value })}><option value="positive">Positive</option><option value="neutral">Neutral</option><option value="negative">Negative</option></select></div>
@@ -77,13 +77,13 @@ function Research() {
           </div>
           <div className="field"><label htmlFor="r-sum">Short summary</label><textarea id="r-sum" rows={2} maxLength={2000} value={draft.summary} onChange={(e) => set({ summary: e.target.value })} /></div>
           <div className="field"><label htmlFor="r-notes">Your notes</label><textarea id="r-notes" rows={3} maxLength={4000} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} /></div>
-          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--text)", marginBottom: 12 }}>
+          <label className="check" style={{ marginBottom: 14 }}>
             <input type="checkbox" checked={draft.verified} onChange={(e) => set({ verified: e.target.checked })} /> I checked this against an official source
           </label>
           {error && <div className="note danger" role="alert">{error}</div>}
-          <div className="row">
-            <button className="primary fit" disabled={busy || !draft.title.trim()} onClick={save}>{busy ? "Saving…" : "Save"}</button>
-            <button className="fit" onClick={() => setDraft(null)}>Cancel</button>
+          <div className="form-actions">
+            <button className="primary" disabled={busy || !draft.title.trim()} onClick={save}>{busy ? "Saving…" : "Save item"}</button>
+            <button onClick={() => setDraft(null)}>Cancel</button>
           </div>
         </div>
       )}
@@ -97,8 +97,9 @@ function Research() {
         </div>
         <State loading={list.loading} error={list.error}>
           {list.data && (list.data.length
-            ? list.data.map((item: any) => <ResearchItem key={item.id} item={item} onEdit={() => (setDraft({ ...item }), setError(null), window.scrollTo({ top: 0 }))} onDelete={() => remove(item)} />)
-            : <div className="empty">Nothing here yet. Add a news link, a disclosure or a report to start your library.</div>)}
+            ? <div className="list">{list.data.map((item: any) => <ResearchItem key={item.id} item={item} onEdit={() => (setDraft({ ...item }), setError(null), window.scrollTo({ top: 0 }))} onDelete={() => remove(item)} />)}</div>
+            : query ? <Empty icon={Newspaper} title="Nothing matches these filters" action={<button onClick={() => setFilter({ symbol: "", sector: "", category: "", q: "" })}>Clear filters</button>} />
+            : <Empty icon={Newspaper} title="Your library is empty">Add a news link, a disclosure or a report, and tie it to the stocks it concerns.</Empty>)}
         </State>
       </div>
     </>

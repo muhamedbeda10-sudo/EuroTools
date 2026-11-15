@@ -147,19 +147,18 @@ export default function Guide() {
           <p className="sub">Short explanations of what the app shows and how to use it with care. General education, not investment advice.</p>
         </div>
       </div>
-      <div className="card" style={{ marginBottom: 14 }}>
-        <h3>Contents</h3>
-        <ul style={{ margin: 0, paddingLeft: 18, columns: "2 240px" }}>
-          {TOPICS.map((t) => <li key={t.id}><a href={`#${t.id}`}>{t.title}</a></li>)}
-        </ul>
-      </div>
-      <div className="grid" style={{ maxWidth: 860 }}>
-        {TOPICS.map((t) => (
-          <section className="card" id={t.id} key={t.id} style={{ scrollMarginTop: 12 }}>
-            <h2>{t.title}</h2>
-            {t.body}
-          </section>
-        ))}
+      <div className="guide">
+        <nav className="toc" aria-label="Guide contents">
+          {TOPICS.map((t) => <a key={t.id} href={`#${t.id}`}>{t.title}</a>)}
+        </nav>
+        <div className="grid">
+          {TOPICS.map((t) => (
+            <section className="card" id={t.id} key={t.id}>
+              <h2>{t.title}</h2>
+              {t.body}
+            </section>
+          ))}
+        </div>
       </div>
     </>
   );

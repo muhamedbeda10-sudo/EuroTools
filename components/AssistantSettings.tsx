@@ -79,19 +79,19 @@ export default function AssistantSettings() {
                 <select id="as-model" value={draft.model} onChange={(e) => set({ model: e.target.value })}>
                   {data.models.map((m: any) => <option key={m.id} value={m.id}>{m.name} · ${m.input_usd_per_mtok} in / ${m.output_usd_per_mtok} out per million tokens</option>)}
                 </select>
-                <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>{model?.about} Model id: <code>{draft.model}</code></p>
+                <p className="foot-note" style={{ marginTop: 6 }}>{model?.about} Model id: <code>{draft.model}</code></p>
               </div>
               <div className="field">
                 <label htmlFor="as-effort">How much it thinks</label>
                 <select id="as-effort" value={draft.effort} onChange={(e) => set({ effort: e.target.value })}>
                   {data.efforts.map((e: string) => <option key={e} value={e}>{EFFORT[e] ?? e}</option>)}
                 </select>
-                <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>More thinking costs more and takes longer. Medium suits most questions.</p>
+                <p className="foot-note" style={{ marginTop: 6 }}>More thinking costs more and takes longer. Medium suits most questions.</p>
               </div>
               <div className="field">
                 <label htmlFor="as-daily">Daily spending ceiling (USD, 0 for none)</label>
                 <input id="as-daily" type="number" min={0} max={200} step={0.5} value={draft.daily_usd} onChange={(e) => set({ daily_usd: e.target.value })} />
-                <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
+                <p className="foot-note" style={{ marginTop: 6 }}>
                   About ${Number(data.spent_today_usd).toFixed(2)} used today. An estimate from the tokens used; the bill itself comes from Anthropic.
                 </p>
               </div>
@@ -100,27 +100,29 @@ export default function AssistantSettings() {
                 <select id="as-acc" value={draft.access} onChange={(e) => set({ access: e.target.value })}>
                   {data.access_levels.map((a: string) => <option key={a} value={a}>{ACCESS[a]?.[0] ?? a}</option>)}
                 </select>
-                <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>{ACCESS[draft.access]?.[1]} It can never place a real order or manage sign-in accounts.</p>
+                <p className="foot-note" style={{ marginTop: 6 }}>{ACCESS[draft.access]?.[1]} It can never place a real order or manage sign-in accounts.</p>
               </div>
             </div>
           </div>
 
           <div className="card">
             <h2>Limits on the assistant&apos;s own trades</h2>
-            <p className="muted" style={{ marginTop: 0 }}>Checked by the app on every trade the assistant places, whatever it was asked. A trade outside them is refused and it is told why. Trades you place yourself are not affected.</p>
-            <div className="grid cols-4" style={{ alignItems: "end" }}>
+            <p className="muted" style={{ marginTop: 0, maxWidth: "110ch" }}>Checked by the app on every trade the assistant places, whatever it was asked. A trade outside them is refused and it is told why. Trades you place yourself are not affected.</p>
+            <div className="grid cols-4">
               {LIMITS.map(([key, label, unit, min, max]) => (
                 <div className="field" key={key}>
-                  <label htmlFor={`as-${key}`}>{label} ({unit})</label>
-                  <input id={`as-${key}`} type="number" min={min} max={max} value={draft[key]} onChange={(e) => set({ [key]: e.target.value })} />
+                  <label htmlFor={`as-${key}`}>{label}</label>
+                  <input id={`as-${key}`} type="number" min={min} max={max} value={draft[key]} aria-describedby={`as-${key}-unit`} onChange={(e) => set({ [key]: e.target.value })} />
+                  <p className="foot-note" id={`as-${key}-unit`} style={{ marginTop: 6 }}>{unit}</p>
                 </div>
               ))}
             </div>
           </div>
 
           <div className="card">
-            <h2>Autopilot</h2>
-            <p className="muted" style={{ marginTop: 0 }}>
+            <div className="card-head"><h2>Autopilot</h2>
+              <span className={`badge ${draft.autopilot_mode === "off" ? "" : "ok"}`}>{draft.autopilot_mode !== "off" && <span className="dot" />}{AUTOPILOT[draft.autopilot_mode]?.[0] ?? draft.autopilot_mode}</span></div>
+            <p className="muted" style={{ marginTop: 0, maxWidth: "110ch" }}>
               Lets the assistant review the portfolio and trade by itself, inside the limits above. Each review is a new conversation you can read afterwards,
               and each one uses the API (typically a few cents to a few tens of cents, depending on the model). It runs while the app is open in a browser tab.
             </p>
@@ -130,7 +132,7 @@ export default function AssistantSettings() {
                 <select id="as-auto" value={draft.autopilot_mode} onChange={(e) => set({ autopilot_mode: e.target.value })}>
                   {data.autopilot_modes.map((m: string) => <option key={m} value={m}>{AUTOPILOT[m]?.[0] ?? m}</option>)}
                 </select>
-                <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>{AUTOPILOT[draft.autopilot_mode]?.[1]}</p>
+                <p className="foot-note" style={{ marginTop: 6 }}>{AUTOPILOT[draft.autopilot_mode]?.[1]}</p>
               </div>
               <div className="field">
                 <label htmlFor="as-every">Minutes between checks during the session</label>
@@ -146,11 +148,11 @@ export default function AssistantSettings() {
             {draft.autopilot_mode !== "off" && draft.access !== "full" && (
               <div className="note">With “{ACCESS[draft.access]?.[0]}” the autopilot only looks and reports. It trades by itself only with Full access.</div>
             )}
-            {data.autopilot?.last_run && <p className="muted" style={{ fontSize: 12.5 }}>Last review: {String(data.autopilot.last_run).slice(0, 16).replace("T", " ")} UTC.</p>}
+            {data.autopilot?.last_run && <p className="foot-note">Last review: {String(data.autopilot.last_run).slice(0, 16).replace("T", " ")} UTC.</p>}
           </div>
 
           {msg && <div className={`note ${msg.ok ? "info" : "danger"}`} role={msg.ok ? "status" : "alert"}>{msg.text}</div>}
-          <div><button className="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save assistant settings"}</button></div>
+          <div className="form-actions"><button className="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save assistant settings"}</button></div>
         </>
       )}
     </State>
