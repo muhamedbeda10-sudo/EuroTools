@@ -146,7 +146,7 @@ class Feed:
     def reset() -> None:
         Feed._state = {"version": None, "meta": None, "instruments": [], "frames": {}, "live": None, "live_ts": None}
 
-    def poll_live(self, client: YounitClient, *, now: datetime | None = None, min_age_seconds: float = 45.0) -> dict:
+    def poll_live(self, client: YounitClient, *, now: datetime | None = None, min_age_seconds: float = 12.0) -> dict:
         """Take the latest price of every stock, once, and keep today's running open/high/low.
 
         Several open pages ask for this every minute; whoever arrives within

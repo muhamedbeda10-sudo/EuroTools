@@ -5,6 +5,7 @@ import { Suspense, useState } from "react";
 import { api } from "@/lib/api";
 import { big, num, pct, signed, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { useStockStream } from "@/lib/useStockStream";
 import { MacdChart, PriceChart, RsiChart, SMA_COLORS } from "@/components/Charts";
 import PriceDepth from "@/components/PriceDepth";
 import TradeTicket from "@/components/TradeTicket";
@@ -17,6 +18,9 @@ function StockView() {
   const [tf, setTf] = useState<"d" | "w" | "m">("d");
   const { data, error, loading, reload } = useApi(symbol ? `/api/v1/stocks/${symbol}?timeframe=${tf}` : null);
 
+  // Tick-by-tick price and order book while this page is open (feed stocks only).
+  const stream = useStockStream(symbol, data?.quote?.source === "younit");
+  const t = stream.state === "live" ? stream.tick?.quote : null;
   if (!symbol) return <div className="empty">Pick a stock from <Link href="/market">Market</Link>.</div>;
   const q = data?.quote, a = data?.assessment, ins = data?.instrument;
   const toggleWatch = async () => {
@@ -45,8 +49,15 @@ function StockView() {
             <>
               {data.data_note && <div className="note">{data.data_note}</div>}
               <div className="grid cols-4">
-                <Kpi label={q.live ? `Live price · ${q.as_of}` : `Last close · ${q.as_of}`} value={num(q.last)} hint={<><span className={tone(q.change)}>{signed(q.change)} ({pct(q.change_pct)})</span> <SourceTag source={q.source} live={q.live} /></>} />
-                <Kpi label="Volume" value={big(q.volume)} hint={`20-day average ${big(q.avg_volume_20)} · turnover ≈ EGP ${big(q.turnover)}`} />
+                {t?.last ? (
+                  <Kpi label={`Live price · ${stream.at?.toLocaleTimeString() ?? ""}`} value={t.last < 10 ? t.last.toFixed(3) : num(t.last)}
+                    hint={<><span className={tone(t.change_pct)}>{t.change != null ? `${signed(t.change)} ` : ""}({pct(t.change_pct)})</span> <span className="badge ok">● live</span>
+                      {t.high && t.low ? <span className="muted"> · day {num(t.low)} – {num(t.high)}</span> : null}</>} />
+                ) : (
+                  <Kpi label={q.live ? `Live price · ${q.as_of}` : `Last close · ${q.as_of}`} value={num(q.last)} hint={<><span className={tone(q.change)}>{signed(q.change)} ({pct(q.change_pct)})</span> <SourceTag source={q.source} live={q.live} /></>} />
+                )}
+                <Kpi label={t?.volume ? "Volume today" : "Volume"} value={big(t?.volume ?? q.volume)}
+                  hint={t?.volume ? `${t.trades ? `${big(t.trades)} trades · ` : ""}20-day average ${big(q.avg_volume_20)}` : `20-day average ${big(q.avg_volume_20)} · turnover ≈ EGP ${big(q.turnover)}`} />
                 <Kpi label="Trend" value={a.trend} hint={`Technical score ${a.technical_score > 0 ? "+" : ""}${a.technical_score} of ±3`} />
                 <Kpi label="Momentum" value={a.momentum} hint={<>1m <Chg v={a.returns_pct["1m"]} /> · 3m <Chg v={a.returns_pct["3m"]} /></>} />
               </div>
@@ -104,7 +115,7 @@ function StockView() {
               {q.source === "younit" && (
                 <div className="card section">
                   <h2>Price depth</h2>
-                  <PriceDepth symbol={symbol} />
+                  <PriceDepth symbol={symbol} stream={stream} />
                 </div>
               )}
 

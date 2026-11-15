@@ -98,3 +98,78 @@ def snapshot(url: str, adapter_set: str, groups: list[dict], *, user: str | None
         raise StreamError(f"the streaming server sent no prices (connection: {state['status'] or 'never connected'})"
                           + (f"; {errors[0]}" if errors else ""))
     return {"values": values, "errors": errors[:5], "status": state["status"]}
+
+
+def follow(url: str, adapter_set: str, group: dict, *, user: str | None = None, password: str | None = None,
+           max_seconds: float = 240.0, heartbeat: float = 15.0, settle: float = 0.25):
+    """Stay subscribed to one group and yield {item: {field: value}} every time something changes.
+
+    Yields None when `heartbeat` seconds pass in silence (so the caller can keep
+    its own connection alive) and stops after `max_seconds`. Bursts of updates
+    within `settle` seconds are merged into one. Always disconnects on exit,
+    including when the consumer stops iterating.
+    """
+    import queue
+
+    from lightstreamer.client import LightstreamerClient, Subscription
+
+    events: queue.Queue = queue.Queue()
+
+    class Connection(_Quiet):
+        def onServerError(self, code, message):  # noqa: N802
+            events.put(StreamError(f"streaming server refused the connection ({code}: {message})"))
+
+    class Sub(_Quiet):
+        def onItemUpdate(self, update):  # noqa: N802
+            row = {}
+            for field in group["fields"]:
+                value = update.getValue(field)
+                if value is not None:
+                    row[field] = value
+            events.put((update.getItemName(), row))
+
+        def onSubscriptionError(self, code, message):  # noqa: N802
+            events.put(StreamError(f"subscription refused ({code}: {message})"))
+
+    client = LightstreamerClient(url, adapter_set)
+    if user is not None:
+        client.connectionDetails.setUser(user)
+        client.connectionDetails.setPassword(password)
+    client.addListener(Connection())
+    sub = Subscription("MERGE", group["items"], group["fields"])
+    if group.get("data_adapter"):
+        sub.setDataAdapter(group["data_adapter"])
+    sub.setRequestedSnapshot("yes")
+    sub.addListener(Sub())
+    deadline = time.monotonic() + max_seconds
+    state: dict[str, dict] = {}
+    try:
+        client.connect()
+        client.subscribe(sub)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                event = events.get(timeout=min(heartbeat, remaining))
+            except queue.Empty:
+                yield None
+                continue
+            changed: set[str] = set()
+            end = time.monotonic() + settle
+            while True:
+                if isinstance(event, Exception):
+                    raise event
+                item, row = event
+                state.setdefault(item, {}).update(row)
+                changed.add(item)
+                try:
+                    event = events.get(timeout=max(end - time.monotonic(), 0))
+                except queue.Empty:
+                    break
+            yield {item: dict(state[item]) for item in changed}
+    finally:
+        try:
+            client.disconnect()
+        except Exception:  # noqa: BLE001 - nothing useful to do if hanging up fails
+            pass

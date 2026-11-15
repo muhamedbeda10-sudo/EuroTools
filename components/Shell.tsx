@@ -106,7 +106,7 @@ export function useFeedUpdate() {
 }
 
 const RECHECK_MS = 15 * 60 * 1000;
-const LIVE_MS = 60 * 1000;
+const LIVE_MS = 15 * 1000;
 
 function FeedUpdater({ provider }: { provider: any }) {
   const { state, run } = useFeedUpdate();
@@ -129,7 +129,7 @@ function FeedUpdater({ provider }: { provider: any }) {
     return () => clearInterval(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // While the market is open: the latest price of every stock, once a minute.
+  // While the market is open: the latest price of every stock, every 15 seconds.
   const open = useRef(false);
   open.current = !!provider.market_open;
   useEffect(() => {

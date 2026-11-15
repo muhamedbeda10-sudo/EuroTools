@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import time
 from collections import OrderedDict
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from .accounts import AccountError, Accounts
 from .config import Settings, get_settings
+from .data.calendar import market_open
 from .data.feed import Feed, FirestoreDocs, StoreDocs
 from .data.market import DataError
 from .data.younit import YounitClient, YounitError
@@ -25,12 +27,13 @@ from .domain.backtest import BacktestError
 from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
-from .services import App, NotFound
+from .services import App, NotFound, clean
 from .store.errors import AuthError, ConflictError
 from .store.firestore_store import FirestoreStore, uid_from_token
 from .store.sqlite_store import Store
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
+STREAM_SECONDS = 240.0  # one streaming response; kept under the function time limit
 NO_BUFFERING = {"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"}
 
 
@@ -196,6 +199,32 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def stocks(core: App = Depends(get_core), *, sector: str | None = None, q: str | None = Query(default=None, max_length=60),
                category: str | None = None):
         return core.stock_rows(sector, q, category)
+
+    @api.get("/api/v1/stocks/{symbol}/stream")
+    def stock_stream(core: App = Depends(get_core), *, symbol: str):
+        """Server-sent events: one message per change in the stock's price or order book.
+
+        The connection to the feed lives on the server, so the feed's credentials
+        never reach the browser. A stream ends by itself before the host's time
+        limit; the page simply opens the next one.
+        """
+        ticks = core.follow(symbol, STREAM_SECONDS)  # validates the symbol before any bytes are sent
+
+        def events():
+            yield f"event: hello\ndata: {json.dumps({'market_open': market_open()})}\n\n"
+            try:
+                for tick in ticks:
+                    if tick is None:
+                        yield ": keep-alive\n\n"
+                    else:
+                        yield f"data: {json.dumps(clean(tick))}\n\n"
+                yield "event: end\ndata: {}\n\n"
+            except YounitError as exc:
+                yield f"event: failed\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            finally:
+                ticks.close()  # hang up on the feed as soon as the page stops listening
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers=NO_BUFFERING)
 
     @api.get("/api/v1/stocks/{symbol}/depth")
     def stock_depth(core: App = Depends(get_core), *, symbol: str):

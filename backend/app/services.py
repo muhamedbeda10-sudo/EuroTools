@@ -121,6 +121,16 @@ class App:
             _DEPTH_CACHE.pop(next(iter(_DEPTH_CACHE)))
         return book
 
+    def follow(self, symbol: str, max_seconds: float):
+        """Tick-by-tick quote and order book of one stock, for as long as the caller keeps reading."""
+        symbol = symbol.upper()
+        if self.feed is None or self.younit is None:
+            raise NotFound("live streaming needs the market-data feed")
+        stock = next((i for i in self.market.feed["instruments"] if i["symbol"] == symbol), None)
+        if stock is None:
+            raise NotFound(f"{symbol} is not in the live feed")
+        return self.younit.follow_stock(stock["stock_id"], max_seconds=max_seconds)
+
     def poll_live(self) -> dict:
         """Latest prices for the running session. Does nothing while the market is closed."""
         if self.feed is None or self.younit is None:

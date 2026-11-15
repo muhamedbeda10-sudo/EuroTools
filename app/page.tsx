@@ -46,7 +46,7 @@ export default function Dashboard() {
         {ov.data?.as_of && (
           <span className="badge">
             {d?.is_live
-              ? `Live prices · ${String(d.live_as_of).slice(11, 16)} Cairo · updated every minute while the market is open`
+              ? `Live prices · ${String(d.live_as_of).slice(11, 16)} Cairo · updated every 15 seconds while the market is open`
               : `Market data as of ${ov.data.as_of} · end of day, not live`}
           </span>
         )}

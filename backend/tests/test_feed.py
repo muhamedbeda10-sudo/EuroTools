@@ -55,6 +55,22 @@ class FakeYounit:
                       "m_AskBook": "|".join(f"{p},{s},{n}" for p, s, n in asks),
                       "m_TotalBids": "19225841", "m_TotalAsks": "18831655"})
 
+    def follow_stock(self, stock_id, max_seconds=240.0):
+        from app.data.younit import tick_quote
+        self.followed = getattr(self, "followed", [])
+        self.followed.append(stock_id)
+        try:
+            for i, price in enumerate(getattr(self, "ticks", [0.827, 0.828, 0.826])):
+                if price is None:
+                    yield None
+                    continue
+                if isinstance(price, Exception):
+                    raise price
+                yield {"quote": tick_quote({"m_LastTradePrice": str(price), "m_PercentChange": "-1.5", "m_TradedVolume": str(1000 + i)}),
+                       "depth": self.depth(stock_id)}
+        finally:
+            self.hung_up = True
+
     def snapshot(self):
         self.snapshots = getattr(self, "snapshots", 0) + 1
         return {"fields": ["id", "name", "reuterCode"],   # like the real list: no prices in it
@@ -336,8 +352,8 @@ def test_live_prices_sit_on_top_of_history_until_the_session_settles(tmp_path):
     assert m.instrument("NEWCO")["sector"] == "Real Estate" and m.instrument("COMI")["sector"] == "Banks"
     assert m.cache["indices"][0]["name"] == "EGX 30" and m.cache["indices"][0]["live"] is True
 
-    # a poll 20 seconds later reuses the saved prices: the feed is not called again
-    again = feed.poll_live(fake, now=t0.replace(second=20))
+    # a poll 5 seconds later reuses the saved prices: the feed is not called again
+    again = feed.poll_live(fake, now=t0.replace(second=5))
     assert again["updated"] is False and fake.live_calls == 1
     # a minute later it is; a stock that stops answering just falls back to its settled bar
     fake.live_prices = {"COMI": settled_close - 3}
@@ -387,3 +403,47 @@ def test_depth_endpoint_serves_the_book_and_refuses_unknown_stocks(env):
     assert b["symbol"] == "COMI" and b["best_bid"] == 0.827 and b["best_ask"] == 0.828
     assert len(b["bids"]) == 8 and b["bids"][0]["orders"] == 4 and b["unread"] is None and "as_of" in b
     assert c.get("/api/v1/stocks/NOPE/depth").status_code == 404
+
+
+def sse(response):
+    """Parse a server-sent-events body into (event, data) pairs; comments come out as ("comment", text)."""
+    out = []
+    for block in response.text.strip().split("\n\n"):
+        event, data = "message", None
+        for line in block.split("\n"):
+            if line.startswith(":"):
+                event, data = "comment", line[1:].strip()
+            elif line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data = json.loads(line[5:])
+        out.append((event, data))
+    return out
+
+
+def test_stock_stream_sends_every_tick_then_ends_and_hangs_up(env):
+    c, fake = env
+    c.post("/api/v1/data/refresh")
+    fake.ticks = [0.827, None, 0.83]
+    r = c.get("/api/v1/stocks/comi/stream")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    assert "no-cache" in r.headers["cache-control"]
+    events = sse(r)
+    assert [e for e, _ in events] == ["hello", "message", "comment", "message", "end"]
+    assert "market_open" in events[0][1]
+    first, last = events[1][1], events[3][1]
+    assert first["quote"]["last"] == 0.827 and first["quote"]["change_pct"] == -1.5 and first["quote"]["open"] is None
+    assert first["depth"]["best_bid"] == 0.827 and len(first["depth"]["bids"]) == 8
+    assert last["quote"]["last"] == 0.83 and last["quote"]["volume"] == 1002
+    assert fake.followed == [1] and fake.hung_up is True
+
+    assert c.get("/api/v1/stocks/NOPE/stream").status_code == 404   # refused before any stream starts
+
+
+def test_stock_stream_reports_a_feed_failure_as_an_event(env):
+    c, fake = env
+    c.post("/api/v1/data/refresh")
+    fake.ticks = [0.827, YounitError("Younit live stream: subscription refused (17: bad item)")]
+    events = sse(c.get("/api/v1/stocks/COMI/stream"))
+    assert [e for e, _ in events] == ["hello", "message", "failed"]
+    assert "subscription refused" in events[-1][1]["detail"] and fake.hung_up is True

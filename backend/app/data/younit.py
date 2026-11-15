@@ -33,6 +33,8 @@ INDEX_PROBE = 25
 QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
 DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m_AskPrice", "m_AskVol",
                 "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
+TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_TradedValue",
+                             "m_TradesCount", "m_LastTradeVolume", "m_Change", "m_PercentChange", "m_LastUpdated"]
 INDEX_FIELDS = ["m_IndexName", "m_EnglishName", "m_IndexValue", "m_IndexClose", "m_PrecentChange"]
 SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
 
@@ -66,6 +68,22 @@ def _unwrap(data, *list_keys):
             if isinstance(data.get(k), list):
                 return data[k]
     return data if isinstance(data, list) else []
+
+
+def tick_quote(row: dict) -> dict:
+    """The session figures of one stock from a streaming row; None where the feed has no value."""
+    def pos(key):
+        value = _num(row.get(key))
+        return value if value > 0 else None
+
+    def signed(key):
+        raw = row.get(key)
+        return _num(raw) if raw not in (None, "") else None
+    last = pos("m_LastTradePrice")
+    return {"last": last, "open": pos("m_OpenPrice"), "high": pos("m_DailyHighPrice"), "low": pos("m_DailyLowPrice"),
+            "volume": pos("m_TradedVolume"), "value": pos("m_TradedValue"), "trades": pos("m_TradesCount"),
+            "last_size": pos("m_LastTradeVolume"), "change": signed("m_Change"), "change_pct": signed("m_PercentChange"),
+            "updated": str(row.get("m_LastUpdated") or "")[:40] or None}
 
 
 def _shape(body, items) -> str:
@@ -248,6 +266,24 @@ class YounitClient:
         except stream.StreamError as exc:
             raise YounitError(f"Younit price depth: {exc}") from None
         return depth.build(got["values"].get(item, {}))
+
+    def follow_stock(self, stock_id: int, *, max_seconds: float = 240.0):
+        """Live feed of one stock: yields {"quote": {...}, "depth": {...}} on every change, None on heartbeats."""
+        from . import depth, stream
+        token = self._authorization().split(" ", 1)[-1]
+        item = f"sy{int(stock_id)}"
+        group = {"items": [item], "fields": TICK_FIELDS, "data_adapter": STREAM_ADAPTER}
+        try:
+            for update in stream.follow(STREAM_URL, STREAM_ADAPTER, group, user=self._trading_id, password=token,
+                                        max_seconds=max_seconds):
+                if update is None:
+                    yield None
+                    continue
+                row = update.get(item)
+                if row:
+                    yield {"quote": tick_quote(row), "depth": depth.build(row)}
+        except stream.StreamError as exc:
+            raise YounitError(f"Younit live stream: {exc}") from None
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

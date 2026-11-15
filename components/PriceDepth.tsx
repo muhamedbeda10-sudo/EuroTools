@@ -39,13 +39,20 @@ function DepthChart({ bids, asks }: { bids: Level[]; asks: Level[] }) {
   );
 }
 
-export default function PriceDepth({ symbol }: { symbol: string }) {
-  const [book, setBook] = useState<any>(null);
+type Stream = { tick: any; state: "connecting" | "live" | "failed"; error: string | null; at: Date | null };
+
+/** The order book of a stock. Given a working live stream it shows every change as it
+ *  happens; without one (or if the stream fails) it asks again every 15 seconds. */
+export default function PriceDepth({ symbol, stream }: { symbol: string; stream?: Stream }) {
+  const [polled, setPolled] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const live = useRef(true);
+  const streaming = !!stream && stream.state !== "failed";
+  const setBook = setPolled;
 
   useEffect(() => {
+    if (streaming) return;
     live.current = true;
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
@@ -66,8 +73,12 @@ export default function PriceDepth({ symbol }: { symbol: string }) {
     };
     load();
     return () => { live.current = false; clearTimeout(timer); };
-  }, [symbol]);
+  }, [symbol, streaming]);
 
+  const book = streaming && stream!.tick
+    ? { ...stream!.tick.depth, as_of: stream!.at?.toISOString(), streamed: true }
+    : streaming ? null : polled;
+  if (streaming && !book) return <div className="empty">Connecting to the live order book…</div>;
   if (loading && !book) return <div className="empty">Loading the order book…</div>;
   if (error && !book) return <div className="note danger" role="alert">{error}</div>;
   if (!book) return null;
@@ -79,9 +90,12 @@ export default function PriceDepth({ symbol }: { symbol: string }) {
   return (
     <div>
       <p className="muted" style={{ fontSize: 12 }}>
-        Buy orders (green) and sell orders (red) waiting at each price. As of {String(book.as_of).slice(11, 19)} Cairo
-        {book.market_open ? ", refreshed every 15 seconds." : ". The market is closed: this is the book as it was left."}
+        Buy orders (green) and sell orders (red) waiting at each price.{" "}
+        {book.streamed
+          ? <><span className="badge ok">● live</span> updating as orders change · last change {stream!.at?.toLocaleTimeString()}</>
+          : <>As of {String(book.as_of).slice(11, 19)} Cairo{book.market_open ? ", refreshed every 15 seconds." : ". The market is closed: this is the book as it was left."}</>}
       </p>
+      {stream?.state === "failed" && <div className="note" role="status">The live stream is not available ({stream.error ?? "no connection"}); refreshing every 15 seconds instead.</div>}
       {error && <div className="note" role="status">Could not refresh: {error}</div>}
       {!bids.length && !asks.length ? (
         <div className="empty">The feed has no orders for this stock right now.</div>
