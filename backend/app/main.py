@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import time
 from collections import OrderedDict
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import paper
+from . import assistant, paper
 from .accounts import AccountError, Accounts
 from .config import Settings, get_settings
 from .data.calendar import market_open
@@ -29,6 +30,7 @@ from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
 from .extras import AlertIn, Extras, JournalIn, ResearchIn
+from .llm import ClaudeModel
 from .services import App, NotFound, clean
 from .store.errors import AuthError, ConflictError
 from .store.firestore_store import FirestoreStore, uid_from_token
@@ -86,6 +88,19 @@ class AccountActiveIn(BaseModel):
     active: bool
 
 
+class AssistantMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=assistant.MAX_MESSAGE_CHARS)
+    page: str | None = Field(default=None, max_length=200)
+
+
+class AssistantResolveIn(BaseModel):
+    decisions: dict[str, Literal["approve", "decline"]] = Field(max_length=40)
+
+
+class AssistantAccessIn(BaseModel):
+    access: Literal["full", "confirm", "read"]
+
+
 class BacktestIn(BaseModel):
     strategy_id: str | None = None
     strategy: StrategyConfig | None = None
@@ -98,10 +113,12 @@ class BacktestIn(BaseModel):
 MAX_CACHED_USERS = 20
 
 
-def create_app(settings: Settings | None = None, store: Store | None = None, younit=None) -> FastAPI:
+def create_app(settings: Settings | None = None, store: Store | None = None, younit=None, assistant_model=None) -> FastAPI:
     settings = settings or get_settings()
     if younit is None and settings.younit_trading_id and settings.younit_api_key:
         younit = YounitClient(settings.younit_trading_id, settings.younit_api_key)
+    if assistant_model is None and settings.anthropic_api_key:
+        assistant_model = ClaudeModel(settings.anthropic_api_key, settings.assistant_model, settings.assistant_effort)
     firestore = settings.store_backend == "firestore"
     if firestore and not settings.firebase_project_id:
         raise RuntimeError("FIREBASE_PROJECT_ID is required when STORE_BACKEND=firestore")
@@ -158,6 +175,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     async def _feed_busy(_: Request, exc: YounitRateLimit):
         return JSONResponse({"detail": str(exc), "retry_after": exc.retry_after}, status_code=429,
                             headers={"Retry-After": str(exc.retry_after)})
+
+    @api.exception_handler(assistant.Blocked)
+    async def _assistant_blocked(_: Request, exc: assistant.Blocked):
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)
@@ -525,6 +546,73 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         result = acc.set_active(uid, body.active)
         core.audit("activate" if body.active else "deactivate", "account", {"uid": uid})
         return result
+
+    # ---- assistant ---------------------------------------------------------
+    def assistant_allowed(request: Request, core: App) -> bool:
+        """With several accounts on one API key, the key's owner decides who may spend from it."""
+        if not firestore or settings.assistant_users == "all":
+            return True
+        return accounts_for(request, core).can_manage()
+
+    def assistant_ready(request: Request, core: App):
+        if assistant_model is None:
+            raise HTTPException(503, "The assistant is not connected yet: no Claude API key is saved on the server.")
+        if not assistant_allowed(request, core):
+            raise HTTPException(403, "The assistant is switched on for administrators only.")
+        return assistant_model
+
+    def assistant_stream(events):
+        """Server-sent events: one JSON object per step of the assistant's work."""
+        def body():
+            try:
+                for event in events:
+                    if event["type"] == "beat":
+                        yield ": keep-alive\n\n"
+                    else:
+                        yield f"data: {json.dumps(clean(event), ensure_ascii=False, separators=(',', ':'))}\n\n"
+            except Exception:  # noqa: BLE001 - the reply has started: the failure has to be reported inside it
+                logging.getLogger("egx.assistant").exception("assistant stream failed")
+                failed = {"type": "error", "detail": "Something went wrong while the assistant was working. Try again."}
+                yield f"data: {json.dumps(failed)}\n\n"
+        return StreamingResponse(body(), media_type="text/event-stream", headers=NO_BUFFERING)
+
+    @api.get("/api/v1/assistant")
+    def assistant_status(request: Request, core: App = Depends(get_core)):
+        return assistant.status(core, assistant_model, allowed=assistant_model is not None and assistant_allowed(request, core),
+                                daily_limit=settings.assistant_daily_usd)
+
+    @api.put("/api/v1/assistant/access")
+    def assistant_access(request: Request, body: AssistantAccessIn, core: App = Depends(get_core)):
+        assistant_ready(request, core)
+        return {"access": assistant.set_access(core, body.access)}
+
+    @api.post("/api/v1/assistant/chats", status_code=201)
+    def assistant_new_chat(request: Request, core: App = Depends(get_core)):
+        assistant_ready(request, core)
+        return assistant.transcript(assistant.new_chat(core))
+
+    @api.get("/api/v1/assistant/chats/{id}")
+    def assistant_chat(request: Request, id: str, core: App = Depends(get_core)):
+        assistant_ready(request, core)
+        return assistant.transcript(assistant.load(core, id))
+
+    @api.delete("/api/v1/assistant/chats/{id}")
+    def assistant_delete_chat(request: Request, id: str, core: App = Depends(get_core)):
+        assistant_ready(request, core)
+        assistant.delete_chat(core, id)
+        return {"deleted": id}
+
+    @api.post("/api/v1/assistant/chats/{id}/messages")
+    def assistant_message(request: Request, id: str, body: AssistantMessageIn, core: App = Depends(get_core)):
+        """Say something to the assistant. The reply streams back as it is produced."""
+        model = assistant_ready(request, core)
+        return assistant_stream(assistant.send(core, model, id, body.text, body.page, daily_limit=settings.assistant_daily_usd))
+
+    @api.post("/api/v1/assistant/chats/{id}/resolve")
+    def assistant_resolve(request: Request, id: str, body: AssistantResolveIn, core: App = Depends(get_core)):
+        """Approve or decline the actions the assistant is waiting to take, then let it carry on."""
+        model = assistant_ready(request, core)
+        return assistant_stream(assistant.resolve(core, model, id, body.decisions, daily_limit=settings.assistant_daily_usd))
 
     # ---- data import & audit --------------------------------------------
     @api.post("/api/v1/data/bars/import")

@@ -447,3 +447,38 @@ def test_shared_market_documents_are_version_checked(monkeypatch, user):
         a.put(name, {"bars": {}}, guard=True)
     a.put(name, {"bars": {"X": [1], "Y": [1, 2], "Z": []}})     # unguarded documents (live prices) are last-writer-wins
     assert FirestoreDocs(PROJECT, token(uid)).get(name)["bars"]["Z"] == []
+
+
+# ---- the assistant on the deployed store -------------------------------------------------
+def test_the_assistant_is_for_administrators_and_keeps_its_conversations_in_the_users_own_data(monkeypatch):
+    from app.config import Settings
+    from app.main import create_app
+    from tests.test_assistant import Script, call, events
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    admin = "u-" + uuid.uuid4().hex[:10]
+    provision(admin)
+    member = "u-" + uuid.uuid4().hex[:10]          # signed in, active, but not an administrator
+    res = httpx.patch(f"{DOCS}/users/{member}", headers={"Authorization": "Bearer owner"},
+                      json={"fields": {"active": {"booleanValue": True}, "role": {"stringValue": "INSPECTOR"}}})
+    assert res.status_code == 200
+    ha, hm = ({"Authorization": f"Bearer {token(u)}"} for u in (admin, member))
+    script = Script({"calls": [call(1, "place_trade", side="BUY", symbol="COMI", qty=5)]}, {"say": "Bought 5 COMI."})
+    settings = Settings(store_backend="firestore", firebase_project_id=PROJECT)
+    with TestClient(create_app(settings, assistant_model=script)) as c:
+        assert c.get("/api/v1/assistant", headers=hm).json()["allowed"] is False
+        assert c.post("/api/v1/assistant/chats", headers=hm).status_code == 403
+        assert c.get("/api/v1/assistant", headers=ha).json()["allowed"] is True
+        chat = c.post("/api/v1/assistant/chats", headers=ha).json()["id"]
+        out = events(c.post(f"/api/v1/assistant/chats/{chat}/messages", headers=ha, json={"text": "buy 5 COMI"}))
+        assert out[-1]["type"] == "done" and out[1]["changed"] is True
+        view = c.get(f"/api/v1/assistant/chats/{chat}", headers=ha).json()
+        assert view["items"][-1]["text"] == "Bought 5 COMI." and view["usage"]["calls"] == 2
+        assert c.get("/api/v1/trades", headers=ha).json()["totals"]["count"] == 1
+        assert c.get(f"/api/v1/assistant/chats/{chat}", headers=hm).status_code == 403     # and nobody else's to read
+    # with the switch set to everyone, a member may use it too, on their own data only
+    script = Script({"say": "Hello."})
+    with TestClient(create_app(Settings(store_backend="firestore", firebase_project_id=PROJECT, assistant_users="all"),
+                               assistant_model=script)) as c:
+        mine = c.post("/api/v1/assistant/chats", headers=hm)
+        assert mine.status_code == 201
+        assert c.get(f"/api/v1/assistant/chats/{chat}", headers=hm).status_code == 404     # the admin's conversation is not there

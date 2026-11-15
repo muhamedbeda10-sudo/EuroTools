@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     # never logged, never committed. Leave empty to run on sample / imported data.
     younit_trading_id: str = ""
     younit_api_key: str = ""
+    # The in-app assistant (Claude). Server-side only, like the feed credentials. Without the key
+    # the assistant is switched off and nothing is ever charged.
+    anthropic_api_key: str = ""
+    assistant_model: str = "claude-opus-5-5"
+    assistant_effort: str = "medium"
+    # Who may use the assistant when several people have accounts: "admins" (default) or "all".
+    assistant_users: str = "admins"
+    # Rough daily spending ceiling per account, in USD (0 = no ceiling).
+    assistant_daily_usd: float = 5.0
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Live brokerage execution is a separate, future module. It is not implemented
     # and this flag exists only so the UI can state the fact explicitly.

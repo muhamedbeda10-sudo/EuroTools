@@ -395,3 +395,60 @@ section.card p strong { color: var(--text); }
   .hero-value { font-size: 34px; }
   .quote-head .px .last { font-size: 32px; }
 }
+
+/* ---- assistant: a panel docked at the right edge of every screen ---- */
+.as-open { gap: 6px; height: 32px; padding: 0 10px; color: var(--accent); }
+.assistant { position: fixed; top: 0; right: 0; bottom: 0; z-index: 45; width: min(420px, 100vw); display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow-pop); }
+.as-head { display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border);
+  color: var(--accent); flex: none; }
+.as-title { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; color: var(--text); }
+.as-title span { font-size: 11px; color: var(--muted); }
+.as-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; font-size: 13.5px; line-height: 1.55; }
+.as-body h3 { margin: 0; }
+.as-body > p, .as-body > ol { margin: 0; }
+.as-body > ol { padding-inline-start: 20px; display: grid; gap: 6px; }
+.as-user { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 12px 12px 3px 12px; background: var(--accent-soft);
+  color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.as-reply { display: grid; gap: 8px; overflow-wrap: anywhere; min-width: 0; }
+.md p, .md ul, .md ol, .md pre, .md-table { margin: 0 0 8px; }
+.md > :last-child { margin-bottom: 0; }
+.md ul, .md ol { padding-inline-start: 20px; }
+.md li { margin: 2px 0; }
+.md-h { font-weight: 650; color: var(--text); }
+.md code { font-size: 12.5px; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+.md pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; }
+.md-table { overflow-x: auto; }
+.md-table table { font-size: 12.5px; width: 100%; }
+.md-table th, .md-table td { padding: 5px 8px; text-align: start; white-space: normal; }
+.as-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.as-tool { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.as-tool svg { flex: none; margin-top: 3px; }
+.as-tool.ok svg { color: var(--up); }
+.as-tool.failed svg, .as-tool.declined svg { color: var(--down); }
+.as-tool.waiting svg { color: var(--warn); }
+.as-working { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 12.5px; }
+.spin { animation: spin 0.9s linear infinite; flex: none; margin-top: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.as-confirm { border: 1px solid var(--warn-border); background: var(--warn-soft); border-radius: 10px; padding: 12px; display: grid; gap: 8px; color: var(--text); }
+.as-confirm ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.as-confirm li { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.as-yesno { display: flex; gap: 6px; flex: none; }
+.as-empty p { color: var(--text-2); margin: 0 0 12px; }
+.as-ideas { display: grid; gap: 6px; }
+.as-ideas button { justify-content: flex-start; text-align: start; height: auto; min-height: 34px; padding: 7px 10px; white-space: normal; }
+.as-compose { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px 8px; border-top: 1px solid var(--border); flex: none; }
+.as-compose textarea { flex: 1; resize: none; max-height: 160px; }
+.as-compose .icon-btn { width: 38px; height: 38px; flex: none; }
+.as-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 0 12px 10px; font-size: 11.5px; flex: none; }
+.as-foot select { height: 26px; font-size: 12px; width: auto; padding: 0 6px; }
+.as-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.as-history li { display: flex; align-items: center; gap: 4px; }
+.as-history li > button:first-child { flex: 1; min-width: 0; justify-content: space-between; height: auto; min-height: 36px; padding: 6px 10px; text-align: start; }
+.as-history li > button:first-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.as-history li > button[aria-current="true"] { background: var(--accent-soft); }
+.as-history small { color: var(--muted); flex: none; margin-inline-start: 10px; }
+@media (min-width: 1500px) { .shell.with-assistant .main { padding-right: 420px; } }
+@media (min-width: 700px) { .with-assistant .toasts { right: 438px; } }
+@media (max-width: 520px) { .as-open span { display: none; } }

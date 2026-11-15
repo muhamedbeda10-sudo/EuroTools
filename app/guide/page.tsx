@@ -80,6 +80,18 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       </ul>
     </>
   ) },
+  { id: "assistant", title: "The assistant", body: (
+    <>
+      <p>The <strong>Assistant</strong> button in the top bar opens a panel where you can ask about the market, a stock or your own portfolio, or say what you want done: place a paper trade, build and test a strategy, start an automatic run, set an alert, write a journal entry. Arabic or English.</p>
+      <ul>
+        <li><strong>It works on your real data.</strong> It looks things up in the app rather than answering from memory, and everything it does is recorded in <Link href="/trades">Trades</Link> and the activity log like any other action.</li>
+        <li><strong>You choose how far it may go</strong>, at the bottom of the panel: <em>Full access</em> acts straight away; <em>Ask me first</em> shows each trade, run change, deletion or settings change and waits for you; <em>Look only</em> changes nothing.</li>
+        <li><strong>It cannot place a real order</strong> (nothing in the app can) and it does not manage sign-in accounts.</li>
+        <li><strong>It is not an adviser.</strong> Its views come from price history and your own notes: there are no company financials in the app, and the simulation has the limits listed below. It can be wrong.</li>
+        <li><strong>It has a cost.</strong> It runs on Claude through an API key billed per use; the panel shows an estimate for the conversation and the day.</li>
+      </ul>
+    </>
+  ) },
   { id: "limits", title: "What the simulation leaves out", body: (
     <>
       <p>Every paper result here is a simplification. Know these before trusting a number:</p>

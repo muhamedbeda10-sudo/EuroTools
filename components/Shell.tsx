@@ -6,8 +6,9 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } fr
 import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
 import { LiveProvider } from "@/lib/live";
+import Assistant from "./Assistant";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
-import {
+import { Sparkles,
   Bell, BookOpen, Briefcase, CandlestickChart, Check, FlaskConical, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
   Receipt, Settings, SlidersHorizontal, Star, Sun, X, type LucideIcon,
 } from "lucide-react";
@@ -284,6 +285,14 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [assistant, setAssistant] = useState(false);
+  useEffect(() => { try { setAssistant(localStorage.getItem("egx-assistant-open") === "1"); } catch {} }, []);
+  const assistantButton = useRef<HTMLButtonElement>(null);
+  const showAssistant = (on: boolean) => {
+    setAssistant(on);
+    try { localStorage.setItem("egx-assistant-open", on ? "1" : "0"); } catch {}
+    if (!on) assistantButton.current?.focus(); // closing hands the keyboard back to where the panel was opened from
+  };
   const { data: status, error, status: httpStatus } = useApi("/api/v1/status");
 
   useEffect(() => {
@@ -321,7 +330,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   return (
     <ThemeCtx.Provider value={theme}>
       <LiveProvider enabled={!!status?.provider?.configured && !!status?.provider?.market_open}>
-      <div className="shell">
+      <div className={`shell ${assistant ? "with-assistant" : ""}`}>
         <aside className={`side ${open ? "open" : ""}`}>
           <div className="brand">
             <Logo />
@@ -365,7 +374,11 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                   : d.mode === "younit" ? (d.is_live ? `Live · ${String(d.live_as_of).slice(11, 16)} Cairo` : `Close of ${d.latest_bar_date}`) : "No data"}
               </span>
             )}
-            <span className="pill paper" title="Simulated orders only. Nothing is sent to a broker.">Paper trading</span>
+            <span className="pill paper hide-sm" title="Simulated orders only. Nothing is sent to a broker.">Paper trading</span>
+            <button ref={assistantButton} className={`as-open ${assistant ? "on" : ""}`} onClick={() => showAssistant(!assistant)} aria-expanded={assistant}
+              aria-label="Assistant" title="Ask the assistant, or tell it what to do">
+              <Sparkles size={15} aria-hidden="true" /><span>Assistant</span>
+            </button>
             <button className="icon-btn ghost" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title="Theme">
               {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
             </button>
@@ -391,6 +404,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
           </footer>
         </div>
+        <Assistant open={assistant} onClose={() => showAssistant(false)} />
       </div>
       </LiveProvider>
     </ThemeCtx.Provider>
