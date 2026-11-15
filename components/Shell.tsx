@@ -81,17 +81,24 @@ export function useFeedUpdate() {
   const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean }>({ running: false });
   const run = async () => {
     setState({ running: true });
-    try {
-      for (let i = 0; i < 60; i++) {
+    let failures = 0;
+    for (let i = 0; i < 60; i++) {
+      try {
         const r = await api("/api/v1/data/refresh", { method: "POST" });
+        failures = 0;
         if (r.remaining === 0) return setState({ running: false, done: true, total: r.total });
         if (r.stalled) return setState({ running: false, error: r.errors?.[0] ?? "The data feed returned nothing." });
         setState({ running: true, left: r.remaining, total: r.total });
+      } catch (e: any) {
+        // One slow batch is not a failure: whatever it saved is kept, so try the next one.
+        const transient = [0, 502, 503, 504].includes(e.status) && !/rejected|rate limit|could not be read/i.test(e.message);
+        if (!transient || ++failures >= 3) {
+          const text = e.status === 504 ? "The data feed is answering too slowly right now. Try again in a few minutes." : e.message;
+          return setState({ running: false, error: text });
+        }
       }
-      setState({ running: false, error: "The update is taking too long. Try again later." });
-    } catch (e: any) {
-      setState({ running: false, error: e.message });
     }
+    setState({ running: false, error: "The update is taking too long. Try again later." });
   };
   return { state, run };
 }

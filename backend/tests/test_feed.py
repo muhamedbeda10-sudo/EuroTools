@@ -74,6 +74,7 @@ def test_no_sample_prices_once_a_feed_is_configured(env):
 def test_refresh_then_everything_runs_on_feed_prices(env):
     c, fake = env
     r = c.post("/api/v1/data/refresh").json()
+    assert r.pop("seconds") >= 0
     assert r == {"updated": 3, "remaining": 0, "total": 3, "errors": [], "stalled": False}
     s = c.get("/api/v1/status").json()
     assert s["data"]["mode"] == "younit" and s["data"]["sources"][0]["symbols"] == 3
@@ -206,7 +207,7 @@ def test_client_reauthenticates_once_on_401_and_explains_failures():
                     if "token" in r.url.path else httpx.Response(429)).stocks()
 
     def boom(_):
-        raise httpx.ConnectTimeout("x")
+        raise httpx.ConnectError("x")
     with pytest.raises(YounitError, match="cannot reach Younit") as info:
         make_client(boom).stocks()
     assert "key-1" not in str(info.value) and "tid-1" not in str(info.value)
@@ -240,3 +241,20 @@ def test_stock_list_uses_reuters_code_when_there_is_no_symbol_and_explains_unkno
         return tok if "token" in req.url.path else httpx.Response(200, json={"data": {"data": {"chartingDataViewModel": [{"t": 1, "c": 2}]}}})
     with pytest.raises(YounitError, match=r"price history could not be read: 1 entries with fields \[c, t\]"):
         make_client(odd_candles).daily_history(1, date(2026, 1, 1), date(2026, 1, 2))
+
+
+def test_a_large_market_is_loaded_in_bounded_batches(tmp_path):
+    from app.data import feed as feed_module
+    fake = FakeYounit(n=30)
+    fake.listing = [{"symbol": f"S{i:03d}", "name": f"Stock {i}", "stock_id": i + 1} for i in range(95)]
+    feed = Feed(StoreDocs(Store(tmp_path / "f.sqlite3")))
+    seen = []
+    for _ in range(10):
+        out = feed.refresh(fake, today=date.today())
+        seen.append(out["updated"])
+        if out["remaining"] == 0:
+            break
+    assert seen == [40, 40, 15] and max(seen) <= feed_module.MAX_PER_BATCH
+    state = feed.load()
+    assert len(state["bars"]) == 95 and all(len(b) == 30 for b in state["bars"].values())
+    assert feed.summary(date.today())["refresh_due"] is False

@@ -86,7 +86,7 @@ class YounitClient:
         self._trading_id = trading_id.strip()
         self._api_key = api_key.strip()
         self._base = base_url
-        self._http = httpx.Client(timeout=25.0, headers=HEADERS, transport=transport)
+        self._http = httpx.Client(timeout=httpx.Timeout(12.0, connect=6.0), headers=HEADERS, transport=transport)
 
     # ---- authentication --------------------------------------------------
     def _authorization(self, force: bool = False) -> str:
@@ -123,6 +123,8 @@ class YounitClient:
             try:
                 res = self._http.get(f"{self._base}{path}", params=params,
                                      headers={"Authorization": self._authorization(force=attempt == 1)})
+            except httpx.TimeoutException:
+                raise YounitError("Younit took too long to answer") from None
             except httpx.HTTPError as exc:
                 raise YounitError(f"cannot reach Younit ({exc.__class__.__name__})") from None
             if res.status_code == 401 and attempt == 0:

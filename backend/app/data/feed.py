@@ -28,6 +28,7 @@ MAX_BARS = 800
 RECHECK_MINUTES = 15
 WORKERS = 6
 MAX_DOC_BYTES = 900_000
+MAX_PER_BATCH = 40  # stocks per call: keeps one request far below the host's time limit
 
 
 class SharedDocs(Protocol):
@@ -127,7 +128,7 @@ class Feed:
             "errors": index.get("errors", [])[:5],
         }
 
-    def refresh(self, client: YounitClient, *, today: date, budget_seconds: float = 35.0) -> dict:
+    def refresh(self, client: YounitClient, *, today: date, budget_seconds: float = 18.0) -> dict:
         """Update as many symbols as fit in the time budget. Call again while `remaining` > 0."""
         started = time.monotonic()
         index = json.loads(json.dumps(self.docs.get("index") or empty_index()))
@@ -148,10 +149,9 @@ class Feed:
             # once a day is enough on a closed market; during a session, look again
             return checked[:10] != now.date().isoformat() or is_trading_day(today)
 
-        pending = [s for s in stocks if due(s["symbol"])]
+        pending = [s for s in stocks if due(s["symbol"])][:MAX_PER_BATCH]
         updated: dict[str, list] = {}
         errors: list[str] = []
-        chunks: dict[str, dict] = {}
 
         def fetch(stock: dict):
             last = index["last_dates"].get(stock["symbol"])
@@ -186,22 +186,24 @@ class Feed:
                         break
 
         stamp = _now().isoformat()
+        names = sorted({chunk_of(symbol) for symbol in updated})
+        with ThreadPoolExecutor(8) as pool:
+            chunks = {name: doc or {"bars": {}} for name, doc in zip(names, pool.map(self.docs.get, names), strict=True)}
         for symbol, rows in updated.items():
             name = chunk_of(symbol)
-            if name not in chunks:
-                chunks[name] = self.docs.get(name) or {"bars": {}}
             merged = {r[0]: r for r in chunks[name]["bars"].get(symbol, [])}
             merged.update({r[0]: r for r in rows})
             bars = [merged[k] for k in sorted(merged)][-MAX_BARS:]
             chunks[name]["bars"][symbol] = bars
             index["checked"][symbol] = stamp
             index["last_dates"][symbol] = bars[-1][0] if bars else None
-        for name, doc in chunks.items():
+        for doc in chunks.values():
             doc["bars"] = {s: b for s, b in doc["bars"].items() if s in known}
             while len(json.dumps(doc, separators=(",", ":"))) > MAX_DOC_BYTES:  # stay under the document size limit
                 longest = max(doc["bars"], key=lambda s: len(doc["bars"][s]))
                 doc["bars"][longest] = doc["bars"][longest][100:]
-            self.docs.put(name, doc)
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(lambda item: self.docs.put(*item), chunks.items()))
         index["last_dates"] = {s: d for s, d in index["last_dates"].items() if s in known}
         index["checked"] = {s: d for s, d in index["checked"].items() if s in known}
         index["errors"] = errors[:8]
@@ -211,4 +213,4 @@ class Feed:
         Feed.reset()
         remaining = sum(1 for s in stocks if due(s["symbol"]))
         return {"updated": done, "remaining": remaining, "total": len(stocks), "errors": errors[:5],
-                "stalled": done == 0 and remaining > 0}
+                "stalled": done == 0 and remaining > 0, "seconds": round(time.monotonic() - started, 1)}

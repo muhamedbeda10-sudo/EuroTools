@@ -6,7 +6,7 @@
   ],
   "functions": {
     "api/index.py": {
-      "maxDuration": 60,
+      "maxDuration": 120,
       "excludeFiles": "{.next,out,node_modules,app,components,lib,tests,.github}/**"
     }
   }
