@@ -159,7 +159,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
             out["database_ms"] = {"first": times[0], "then": sorted(times[1:])}
         return out
 
-    @api.get("/health/stream")
+    @api.get("/api/v1/ping/stream")
     def health_stream():
         """Five ticks, one a second: shows whether this host delivers a response as it is produced."""
         def ticks():
