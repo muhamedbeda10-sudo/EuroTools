@@ -43,6 +43,13 @@ market prices for everyone, and the real brokerage account for its owner.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
   sign-in accounts (administrators only), and the activity log.
 
+## Installing the app on a phone
+- The app installs from the browser, not from a store, and then opens from the home screen in its own window.
+- Android (Chrome): the browser offers "Install app", or it is in the browser menu. iPhone or iPad (Safari):
+  the Share button, then "Add to Home Screen". The app's own menu has an "Install app" entry with these steps.
+- The installed app signs in separately, once. It needs a connection: without one it says so, and it never
+  shows prices or balances from a saved copy.
+
 ## The paper portfolio and the real account
 - They are two separate things and their figures are never mixed or added together.
 - The paper portfolio is the simulation: every trade, protective order, automatic run, backtest and profit

@@ -61,6 +61,21 @@ Settings → Connections has a manual update button. The feed provides no sector
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
 
+## Install on a phone
+
+The site is an installable web app: it opens from the home screen in its own window, with no store
+involved and always the deployed version.
+
+- **Android (Chrome):** the browser offers "Install app" by itself, or use the browser menu.
+- **iPhone / iPad (Safari):** Share → "Add to Home Screen".
+- The menu has an **Install app** entry that opens the browser's offer where there is one and shows
+  these steps where there is not. It is hidden inside the installed app.
+
+What makes it installable: `public/manifest.webmanifest`, the icons in `public/icons/` and the tags in
+`app/layout.tsx`. `public/sw.js` does one thing: when a page cannot be loaded because the phone is
+offline, it shows `public/offline.html`. It keeps **no copy of the app or its data**, so a price or a
+balance is never shown from a saved copy. The installed app has its own sign-in (once).
+
 ## Real account (read-only)
 
 The same credentials open the owner's brokerage account. The **Real account** page reads it and

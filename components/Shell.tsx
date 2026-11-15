@@ -13,6 +13,7 @@ import {
   Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, Landmark, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
   Receipt, Settings, SlidersHorizontal, Sparkles, Star, Sun, TriangleAlert, X, type LucideIcon,
 } from "lucide-react";
+import InstallApp from "./InstallApp";
 import MarketStrip from "./MarketStrip";
 import SymbolSearch from "./SymbolSearch";
 
@@ -114,6 +115,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!firebaseConfigured) return;
     return onAuthStateChanged(clientAuth(), setUser);
+  }, []);
+  // The installed app's "no connection" page (public/sw.js). It keeps no copy of the app or its data.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
   if (firebaseConfigured && user === undefined)
     return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }} aria-busy="true" aria-label="Loading"><Logo size={44} /></div>;
@@ -355,6 +360,11 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
     setTheme((document.documentElement.dataset.theme as "light" | "dark") || systemTheme());
   }, []);
   useEffect(() => setOpen(false), [path]);
+  // The phone's status bar takes the top bar's colour in the theme actually shown, which the switch can set apart from the system's.
+  useEffect(() => {
+    const colour = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim();
+    if (colour) document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", colour));
+  }, [theme]);
   // the phone menu closes on Escape, like any other layer over the page
   useEffect(() => {
     if (!open) return;
@@ -411,6 +421,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                 ))}
               </div>
             ))}
+            <InstallApp />
           </nav>
           <div className="side-foot">
             <span className="avatar" aria-hidden="true">{(email ?? "L")[0].toUpperCase()}</span>
