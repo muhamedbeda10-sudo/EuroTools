@@ -1,11 +1,11 @@
 "use client";
+import { Bot, ChevronDown, ChevronUp, GitCompareArrows } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { egp, int, num, pct, price } from "@/lib/format";
-import { useApi } from "@/lib/useApi";
 import { LinesChart } from "./Charts";
-import { Chg, State } from "./ui";
+import { CardHead, Chg, Empty, State } from "./ui";
 
 /** Run two to four strategies over the same stocks, period, capital and fees. */
 export function CompareStrategies({ strategies, defaultCapital }: { strategies: any[]; defaultCapital: string }) {
@@ -45,15 +45,15 @@ export function CompareStrategies({ strategies, defaultCapital }: { strategies: 
     <div className="card section">
       <h2>Compare strategies</h2>
       {strategies.length < 2 ? (
-        <div className="empty">Save at least two strategies in <Link href="/strategies">Strategy Management</Link> to compare them.</div>
+        <Empty icon={GitCompareArrows} title="Two strategies are needed">Save at least two in <Link href="/strategies">Strategy Management</Link> to compare them on identical terms.</Empty>
       ) : (
         <>
           <p className="muted">Pick two to four. They are tested on identical terms: the same stocks, period, starting capital and fee schedule.</p>
-          <div className="seg" role="group" aria-label="Strategies to compare" style={{ marginBottom: 12 }}>
+          <div className="seg wrap" role="group" aria-label="Strategies to compare" style={{ marginBottom: 14 }}>
             {strategies.map((s) => <button key={s.id} className={picked.includes(s.id) ? "on" : ""} aria-pressed={picked.includes(s.id)} onClick={() => toggle(s.id)}>{s.name}</button>)}
           </div>
           <div className="row">
-            <div className="field" style={{ flex: "2 1 240px" }}><label htmlFor="cmp-sym">Stocks (blank = every stock)</label><input id="cmp-sym" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="COMI, TMGH" /></div>
+            <div className="field" style={{ flex: "2 1 240px" }}><label htmlFor="cmp-sym">Stocks</label><input id="cmp-sym" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="Blank = every stock" /></div>
             <div className="field"><label htmlFor="cmp-from">From</label><input id="cmp-from" type="date" value={start} onChange={(e) => setStart(e.target.value)} /></div>
             <div className="field"><label htmlFor="cmp-to">To</label><input id="cmp-to" type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
             <button className="primary fit" disabled={picked.length < 2 || busy} onClick={run}>{busy ? "Running…" : `Compare ${picked.length || ""}`.trim()}</button>
@@ -61,7 +61,7 @@ export function CompareStrategies({ strategies, defaultCapital }: { strategies: 
           {error && <div className="note danger" role="alert">{error}</div>}
           {result && (
             <>
-              <p className="muted" style={{ fontSize: 12 }}>{result.same.stocks} stock(s) · {result.same.period.start} → {result.same.period.end} · starting capital {egp(result.same.capital)}</p>
+              <p className="foot-note" style={{ marginBottom: 12 }}>{result.same.stocks} stock(s) · {result.same.period.start} → {result.same.period.end} · starting capital {egp(result.same.capital)}</p>
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Metric</th>{result.runs.map((r: any) => <th key={r.id}>{r.name}</th>)}</tr></thead>
@@ -74,7 +74,7 @@ export function CompareStrategies({ strategies, defaultCapital }: { strategies: 
               {result.runs.some((r: any) => r.metrics.trades < 30) && (
                 <div className="note" style={{ marginTop: 10 }}>At least one strategy closed fewer than 30 trades: too few to tell skill from luck.</div>
               )}
-              <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Do not choose on return alone. A lower return with a much smaller drawdown and more trades is often the sounder result.</p>
+              <p className="foot-note">Do not choose on return alone. A lower return with a much smaller drawdown and more trades is often the sounder result.</p>
             </>
           )}
         </>
@@ -83,12 +83,54 @@ export function CompareStrategies({ strategies, defaultCapital }: { strategies: 
   );
 }
 
-/** A saved strategy trading the paper portfolio by itself, on completed sessions. */
-export function PaperRuns({ strategies }: { strategies: any[] }) {
-  const runs = useApi("/api/v1/paper-runs");
+type Runs = { data: any[] | null; loading: boolean; error: string | null; reload: () => void };
+
+/** A saved strategy trading the paper portfolio by itself, on completed sessions: the form that starts a run. */
+export function PaperRuns({ strategies, runs }: { strategies: any[]; runs: Runs }) {
   const [sid, setSid] = useState("");
   const [capital, setCapital] = useState("10000");
   const [symbols, setSymbols] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const startRun = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const list = symbols.split(/[\s,]+/).filter(Boolean);
+      await api("/api/v1/paper-runs", { method: "POST", json: { strategy_id: sid, capital: Number(capital), symbols: list.length ? list : null } });
+      setSid("");
+      runs.reload();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <CardHead title="Automatic paper trading"><span className="badge paper">Mode 2</span></CardHead>
+      <p className="muted">A strategy places simulated orders in the paper portfolio by itself: signals are read at each session&apos;s close and filled at the next open, with fees and slippage. No order ever goes to a broker.</p>
+      {strategies.length === 0 ? (
+        <Empty icon={Bot} title="No strategy to run yet" action={<Link className="btn primary" href="/strategies">Create a strategy</Link>}>
+          An automatic run follows one saved strategy with its own slice of the paper cash.
+        </Empty>
+      ) : (
+        <>
+          <div className="field"><label htmlFor="pr-s">Strategy</label><select id="pr-s" value={sid} onChange={(e) => setSid(e.target.value)}><option value="">Select a strategy…</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+          <div className="field"><label htmlFor="pr-sym">Stocks</label><input id="pr-sym" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="Blank = the strategy's own scope" /></div>
+          <div className="field" style={{ maxWidth: 260 }}><label htmlFor="pr-c">Capital for this run (EGP)</label><input id="pr-c" type="number" min="1" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
+          {error && <div className="note danger" role="alert">{error}</div>}
+          <div className="form-actions">
+            <button className="primary" disabled={!sid || !Number(capital) || busy} onClick={startRun}>{busy ? "Starting…" : "Start automatic run"}</button>
+            <span className="muted" style={{ fontSize: 12 }}>The capital is set aside from the paper cash.</span>
+          </div>
+          <p className="foot-note">Runs appear in the list below, where each can be paused or stopped.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Every automatic run, with what it is worth now and the controls to pause or stop it. */
+export function PaperRunList({ runs }: { runs: Runs }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -98,37 +140,24 @@ export function PaperRuns({ strategies }: { strategies: any[] }) {
     setError(null);
     try { await fn(); runs.reload(); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
-  const startRun = () => act(async () => {
-    const list = symbols.split(/[\s,]+/).filter(Boolean);
-    await api("/api/v1/paper-runs", { method: "POST", json: { strategy_id: sid, capital: Number(capital), symbols: list.length ? list : null } });
-    setSid("");
-  });
   const change = (id: string, status: string) => {
     if (status === "stopped" && !confirm("Stop this run for good? Shares it holds stay in the paper portfolio as ordinary holdings.")) return;
     act(() => api(`/api/v1/paper-runs/${id}`, { method: "PUT", json: { status } }));
   };
   const processNow = () => act(() => api("/api/v1/paper-runs/process", { method: "POST" }));
+  if (!runs.data?.length && !runs.error) return null; // nothing started yet: the form above says how
 
   return (
-    <div className="card">
-      <h2><span className="badge paper">Mode 2</span> Automatic paper trading</h2>
-      <p className="muted">A strategy places simulated orders in the paper portfolio by itself. It reads signals at each session&apos;s close and fills them at the next session&apos;s open, with the fee schedule and slippage. No order ever goes to a broker.</p>
-      {strategies.length === 0 ? (
-        <div className="empty">Create a strategy first in <Link href="/strategies">Strategy Management</Link>.</div>
-      ) : (
-        <div className="row">
-          <div className="field"><label htmlFor="pr-s">Strategy</label><select id="pr-s" value={sid} onChange={(e) => setSid(e.target.value)}><option value="">Select…</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-          <div className="field"><label htmlFor="pr-c">Capital for this run (EGP)</label><input id="pr-c" type="number" min="1" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
-          <div className="field"><label htmlFor="pr-sym">Stocks (blank = the strategy&apos;s own)</label><input id="pr-sym" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="COMI, TMGH" /></div>
-          <button className="primary fit" disabled={!sid || !Number(capital) || busy} onClick={startRun}>Start</button>
-        </div>
-      )}
+    <div className="card section">
+      <CardHead title={<>Automatic runs<span className="count">{runs.data?.length ?? 0}</span></>}>
+        {runs.data?.some((r: any) => r.status === "active") && <button className="small" onClick={processNow} disabled={busy}>Check now</button>}
+      </CardHead>
       {error && <div className="note danger" role="alert">{error}</div>}
       <State loading={runs.loading} error={runs.error}>
-        {runs.data && runs.data.length > 0 && (
-          <div className="table-wrap" style={{ marginTop: 8 }}>
+        {runs.data && (
+          <div className="table-wrap">
             <table>
-              <thead><tr><th>Run</th><th>Status</th><th>Capital</th><th>Value now</th><th>Profit / loss</th><th>Trades</th><th>Up to</th><th>&nbsp;</th></tr></thead>
+              <thead><tr><th>Run</th><th className="l">Status</th><th>Capital</th><th>Value now</th><th>Profit / loss</th><th>Trades</th><th>Up to</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {runs.data.map((r: any) => (
                   <RunRows key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} onChange={change} busy={busy} />
@@ -138,11 +167,7 @@ export function PaperRuns({ strategies }: { strategies: any[] }) {
           </div>
         )}
       </State>
-      {runs.data?.some((r: any) => r.status === "active") && (
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Active runs are brought up to date whenever the app loads new daily data. <button className="small" onClick={processNow} disabled={busy}>Check now</button>
-        </p>
-      )}
+      <p className="foot-note">Active runs are brought up to date whenever the app loads new daily data.</p>
     </div>
   );
 }
@@ -151,21 +176,23 @@ function RunRows({ r, open, onToggle, onChange, busy }: { r: any; open: boolean;
   return (
     <>
       <tr>
-        <td><strong>{r.name}</strong><div className="muted" style={{ fontSize: 12 }}>{r.stocks} stocks{r.current ? "" : " · earlier portfolio"}</div></td>
-        <td><span className={`badge ${r.status === "active" ? "ok" : r.status === "paused" ? "warn" : ""}`}>{r.status}</span></td>
+        <td><strong>{r.name}</strong><span className="sub2">{r.stocks} stocks{r.current ? "" : " · earlier portfolio"}</span></td>
+        <td className="l"><span className={`badge ${r.status === "active" ? "ok" : r.status === "paused" ? "warn" : ""}`}>{r.status === "active" && <span className="dot" />}{r.status}</span></td>
         <td>{egp(r.capital)}</td><td>{egp(r.value)}</td>
         <td className={r.pnl > 0 ? "up" : r.pnl < 0 ? "down" : ""}>{egp(r.pnl)} <span className="muted">({pct(r.pnl_pct)})</span></td>
         <td>{r.trades}</td><td>{r.last_date}</td>
-        <td>
-          <button className="small" aria-expanded={open} onClick={onToggle}>Details</button>{" "}
+        <td className="actions">
           {r.status === "active" && <button className="small" disabled={busy} onClick={() => onChange(r.id, "paused")}>Pause</button>}
-          {r.status === "paused" && <button className="small" disabled={busy} onClick={() => onChange(r.id, "active")}>Resume</button>}{" "}
+          {r.status === "paused" && <button className="small" disabled={busy} onClick={() => onChange(r.id, "active")}>Resume</button>}
           {r.status !== "stopped" && <button className="small danger" disabled={busy} onClick={() => onChange(r.id, "stopped")}>Stop</button>}
+          <button className="icon-btn ghost small" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} the details of ${r.name}`} title="Details" onClick={onToggle}>
+            {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
         </td>
       </tr>
       {open && (
-        <tr>
-          <td colSpan={8} className="l wrap" style={{ background: "var(--panel-2)" }}>
+        <tr className="detail">
+          <td colSpan={8} className="l wrap">
             <div className="grid cols-3">
               <dl className="kv">
                 <dt>Cash left in the run</dt><dd>{egp(r.cash)}</dd>
@@ -189,7 +216,7 @@ function RunRows({ r, open, onToggle, onChange, busy }: { r: any; open: boolean;
               <div>
                 <strong>Notes from the run</strong>
                 {r.notes.length ? <ul style={{ margin: "4px 0", paddingLeft: 18 }} className="muted">{r.notes.map((n: string) => <li key={n}>{n}</li>)}</ul> : <div className="muted">None.</div>}
-                <p className="muted" style={{ fontSize: 12 }}>Every fill is in <Link href="/trades">Trades &amp; Transactions</Link>, marked “auto”.</p>
+                <p className="foot-note">Every fill is in <Link href="/trades">Trades &amp; Transactions</Link>, marked “auto”.</p>
               </div>
             </div>
           </td>

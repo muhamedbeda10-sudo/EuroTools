@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { egp, int, num, price } from "@/lib/format";
 
@@ -54,9 +54,9 @@ export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone
 
   return (
     <div>
-      <div className="seg" role="group" aria-label="Order side" style={{ marginBottom: 12 }}>
-        <button className={side === "BUY" ? "on" : ""} onClick={() => (setDone(null), setSide("BUY"))} aria-pressed={side === "BUY"}>Buy</button>
-        <button className={side === "SELL" ? "on" : ""} onClick={() => (setDone(null), setSide("SELL"))} aria-pressed={side === "SELL"}>Sell</button>
+      <div className="seg buy-sell" role="group" aria-label="Order side" style={{ marginBottom: 14 }}>
+        <button className={side === "BUY" ? "on buy" : ""} onClick={() => (setDone(null), setSide("BUY"))} aria-pressed={side === "BUY"}>Buy</button>
+        <button className={side === "SELL" ? "on sell" : ""} onClick={() => (setDone(null), setSide("SELL"))} aria-pressed={side === "SELL"}>Sell</button>
       </div>
       <div className="field">
         <label htmlFor="tt-qty">Quantity (whole shares)</label>
@@ -67,14 +67,14 @@ export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone
         <textarea id="tt-note" rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
       {preview && (
-        <dl className="kv" style={{ marginBottom: 12 }}>
+        <dl className="kv" style={{ margin: "14px 0", padding: "12px 14px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 8 }}>
           <dt>Fill price (latest price, {preview.price_date})</dt><dd>{price(preview.price)}</dd>
           {preview.price_date !== preview.trade_date && (
             <><dt>Recorded in session</dt><dd>{preview.trade_date}</dd></>
           )}
           <dt>Gross value</dt><dd>{egp(preview.gross)}</dd>
           {preview.fees.map((f: any) => (
-            <div key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></div>
+            <Fragment key={f.code}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></Fragment>
           ))}
           <dt>Total fees{preview.fees_verified ? "" : " (unverified schedule)"}</dt><dd>{egp(preview.fees_total)}</dd>
           <dt className="total">{side === "BUY" ? "Total cash paid" : "Net cash received"}</dt>
@@ -86,10 +86,10 @@ export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone
       {preview?.error && <div className="note danger" role="alert">{preview.error}</div>}
       {error && <div className="note danger" role="alert">{error}</div>}
       {done && <div className="note info" role="status">{done}</div>}
-      <button className="primary" disabled={!valid || busy || !preview || !!preview.error} onClick={submit}>
+      <button className="primary" style={{ width: "100%", height: 38 }} disabled={!valid || busy || !preview || !!preview.error} onClick={submit}>
         {busy ? "Recording…" : `Record simulated ${side.toLowerCase()}`}
       </button>
-      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Paper trade only. No order is sent to any broker.</p>
+      <p className="foot-note" style={{ textAlign: "center" }}>Paper trade only. No order is sent to any broker.</p>
     </div>
   );
 }

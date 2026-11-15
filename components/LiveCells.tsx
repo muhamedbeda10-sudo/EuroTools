@@ -20,14 +20,15 @@ export function LiveVolume({ symbol, value }: { symbol: string; value?: number |
   return <>{big(tick?.[2] ?? value)}</>;
 }
 
+/** An index level and its day change, stacked: the streamed tick when there is one. */
 export function LiveIndex({ name, last, changePct }: { name: string; last?: number | null; changePct?: number | null }) {
   const tick = useIndexTick(name);
   const value = tick?.[0] ?? last;
   const change = tick?.[1] ?? changePct;
   return (
-    <>
-      <div className="value"><Flash value={value}>{value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}</Flash></div>
-      <div className="hint"><span className={tone(change)}>{pct(change)}</span></div>
-    </>
+    <div className="val">
+      <b><Flash value={value}>{value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}</Flash></b>
+      <span className={tone(change)}><span aria-hidden="true" style={{ fontSize: "0.72em" }}>{change == null || change === 0 ? "" : change > 0 ? "▲ " : "▼ "}</span>{pct(change)}</span>
+    </div>
   );
 }

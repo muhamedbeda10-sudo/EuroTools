@@ -1,9 +1,10 @@
 "use client";
+import { Bell, BellRing } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { State } from "@/components/ui";
+import { Empty, State } from "@/components/ui";
 
 const UNIT: Record<string, string> = { price_above: "EGP", price_below: "EGP", change_pct_above: "%", change_pct_below: "%", volume_ratio_above: "× average", rsi_above: "", rsi_below: "" };
 const blank = () => ({ kind: "price_above", symbol: "", value: "", strategy_id: "", note: "", active: true });
@@ -31,9 +32,21 @@ export default function Alerts() {
   const toggle = async (a: any) => { await api(`/api/v1/alerts/${a.id}`, { method: "PUT", json: body({ ...a, active: !a.active }) }); reload(); };
   const remove = async (a: any) => { await api(`/api/v1/alerts/${a.id}`, { method: "DELETE" }); reload(); };
   const strategyName = (id: string) => strategies.data?.find((s: any) => s.id === id)?.name ?? "deleted strategy";
-  const describe = (a: any) => a.kind === "strategy_signal"
-    ? `Signal from “${strategyName(a.strategy_id)}”${a.symbol ? ` on ${a.symbol}` : ""}`
-    : `${a.symbol}: ${data.kinds[a.kind].toLowerCase()} ${a.value}${UNIT[a.kind] ? ` ${UNIT[a.kind]}` : ""}`;
+  /** The condition in plain words, e.g. "Price falls to or below EGP 100". */
+  const condition = (a: any) => {
+    const v = Number(a.value).toLocaleString("en-US", { maximumFractionDigits: 4 });
+    switch (a.kind) {
+      case "strategy_signal": return `Signal from “${strategyName(a.strategy_id)}”`;
+      case "price_above": return `Price rises to or above EGP ${v}`;
+      case "price_below": return `Price falls to or below EGP ${v}`;
+      case "change_pct_above": return `Day change is at or above ${a.value > 0 ? "+" : ""}${v}%`;
+      case "change_pct_below": return `Day change is at or below ${a.value > 0 ? "+" : ""}${v}%`;
+      case "volume_ratio_above": return `Volume is at least ${v}× its 20-session average`;
+      case "rsi_above": return `RSI (14) is at or above ${v}`;
+      case "rsi_below": return `RSI (14) is at or below ${v}`;
+      default: return `${data?.kinds?.[a.kind] ?? a.kind} ${v}`;
+    }
+  };
 
   return (
     <>
@@ -44,8 +57,8 @@ export default function Alerts() {
         </div>
       </div>
       {permission === "default" && (
-        <div className="note info">
-          Alerts appear inside the app. To also get a desktop notification when the tab is in the background:{" "}
+        <div className="note info" style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+          <span>Alerts appear inside the app. Allow notifications to also be told when the tab is in the background.</span>
           <button className="small" onClick={async () => setPermission(await Notification.requestPermission())}>Allow notifications</button>
         </div>
       )}
@@ -74,31 +87,33 @@ export default function Alerts() {
           <button className="primary fit" onClick={save} disabled={isSignal ? !draft.strategy_id : !draft.symbol || draft.value === ""}>Add alert</button>
         </div>
         {formError && <div className="note danger" role="alert">{formError}</div>}
-        <p className="muted" style={{ fontSize: 12 }}>An alert fires at most once per trading day, then is ready again the next day. RSI and strategy signals are read on daily bars.</p>
+        <p className="foot-note" style={{ marginTop: 2 }}>An alert fires at most once per trading day, then is ready again the next day. RSI and strategy signals are read on daily bars.</p>
       </div>
 
       <State loading={loading} error={error}>
         {data && (
           <>
             <div className="card section">
-              <h2>Your alerts ({data.alerts.length})</h2>
+              <h2>Your alerts<span className="count"> {data.alerts.length}</span></h2>
               {data.alerts.length ? (
                 <div className="table-wrap">
                   <table>
-                    <thead><tr><th>Alert</th><th className="l">Note</th><th>Last fired</th><th>Status</th><th>&nbsp;</th></tr></thead>
+                    <thead><tr><th>Stock</th><th className="l">Condition</th><th className="l">Note</th><th className="l">Last fired</th><th className="l">Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
                     <tbody>
                       {data.alerts.map((a: any) => (
                         <tr key={a.id}>
-                          <td className="wrap">{describe(a)}</td><td className="l wrap muted">{a.note}</td><td>{a.last_triggered_on ?? "never"}</td>
-                          <td>{a.active ? <span className="badge ok">On</span> : <span className="badge">Off</span>}</td>
-                          <td><button className="small" onClick={() => toggle(a)}>{a.active ? "Turn off" : "Turn on"}</button>{" "}
+                          <td>{a.symbol ? <Link href={`/stock?symbol=${a.symbol}`}><strong>{a.symbol}</strong></Link> : <span className="muted">Any stock</span>}</td>
+                          <td className="l wrap">{condition(a)}</td><td className="l wrap muted">{a.note || "—"}</td>
+                          <td className="l">{a.last_triggered_on ?? <span className="muted">Never</span>}</td>
+                          <td className="l">{a.active ? <span className="badge ok"><span className="dot" />On</span> : <span className="badge">Off</span>}</td>
+                          <td className="actions"><button className="small" onClick={() => toggle(a)}>{a.active ? "Turn off" : "Turn on"}</button>
                             <button className="small danger" onClick={() => remove(a)}>Delete</button></td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              ) : <div className="empty">No alerts yet.</div>}
+              ) : <Empty icon={Bell} title="No alerts yet">Set a price level, a day move, a volume surge, an RSI level or a strategy signal above.</Empty>}
             </div>
             <div className="card section">
               <h2>Recently fired</h2>
@@ -115,7 +130,7 @@ export default function Alerts() {
                     </tbody>
                   </table>
                 </div>
-              ) : <div className="empty">Nothing has fired yet.</div>}
+              ) : <Empty icon={BellRing} title="Nothing has fired yet">When a condition is met it is listed here and shown as a notice in the app.</Empty>}
             </div>
           </>
         )}

@@ -1,4 +1,5 @@
 "use client";
+import type { LucideIcon } from "lucide-react";
 import { egp, pct, tone } from "@/lib/format";
 
 /** Loading and error handling for a block that depends on a request. */
@@ -56,7 +57,7 @@ export function Profit({ label, gross, net, netLabel = "Net after fees", pctNet 
   return (
     <div className="card kpi">
       <div className="label">{label}</div>
-      <div className="pair" style={{ marginTop: 8 }}>
+      <div className="pair" style={{ marginTop: 10 }}>
         <div>
           <div className="label">Gross</div>
           <div className={`v ${tone(gross)}`}>{egp(gross)}</div>
@@ -66,6 +67,20 @@ export function Profit({ label, gross, net, netLabel = "Net after fees", pctNet 
           <div className={`v ${tone(net)}`}>{egp(net)}{pctNet != null && <span className="muted" style={{ fontWeight: 500 }}> ({pct(pctNet)})</span>}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Nothing to show yet: say what belongs here and how to put it there. */
+export function Empty({ icon: Icon, title, children, action, left }: {
+  icon?: LucideIcon; title: React.ReactNode; children?: React.ReactNode; action?: React.ReactNode; left?: boolean;
+}) {
+  return (
+    <div className={`empty-state ${left ? "left" : ""}`}>
+      {Icon && <span className="ico" aria-hidden="true"><Icon size={18} /></span>}
+      <strong>{title}</strong>
+      {children && <p>{children}</p>}
+      {action && <div className="act">{action}</div>}
     </div>
   );
 }

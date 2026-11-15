@@ -4,7 +4,7 @@ import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import { useFeedUpdate } from "@/components/Shell";
-import { State } from "@/components/ui";
+import { CardHead, Empty, State } from "@/components/ui";
 
 function Fees() {
   const { data, loading, error, reload } = useApi("/api/v1/settings/fees");
@@ -25,23 +25,25 @@ function Fees() {
   };
   return (
     <div className="card">
-      <h2>Brokerage and market fee schedule</h2>
+      <CardHead title="Brokerage and market fee schedule">
+        {draft && <span className={`badge ${draft.verified ? "ok" : "warn"}`}>{draft.verified ? "Verified against the tariff" : "Placeholder rates"}</span>}
+      </CardHead>
       <State loading={loading} error={error}>
         {draft && (
           <>
-            {!draft.verified && <div className="note">These rates are placeholders, not your broker&apos;s tariff. Check each line against the current tariff, then tick “verified”.</div>}
+            {!draft.verified && <div className="note"><strong>These rates are placeholders, not your broker&apos;s tariff.</strong> Check each line against the current tariff, then tick “verified”.</div>}
             <div className="table-wrap">
-              <table>
-                <thead><tr><th>Charge</th><th>Rate (% of trade value)</th><th>Fixed (EGP)</th><th>Minimum (EGP)</th><th>Maximum (EGP)</th><th>Applies to</th><th>Enabled</th></tr></thead>
+              <table className="form-table">
+                <thead><tr><th>Charge</th><th>Rate (% of value)</th><th>Fixed (EGP)</th><th>Minimum (EGP)</th><th>Maximum (EGP)</th><th className="l">Applies to</th><th>Enabled</th></tr></thead>
                 <tbody>
                   {draft.items.map((it: any, i: number) => (
                     <tr key={it.code}>
-                      <td><input aria-label="Charge name" value={it.name} maxLength={80} onChange={(e) => setItem(i, { name: e.target.value })} style={{ minWidth: 200 }} /></td>
+                      <td><input aria-label="Charge name" value={it.name} maxLength={80} onChange={(e) => setItem(i, { name: e.target.value })} style={{ minWidth: 190 }} /></td>
                       {(["rate_pct", "fixed", "minimum", "maximum"] as const).map((k) => (
                         <td key={k}><input aria-label={`${it.name} ${k}`} type="number" min="0" step="any" value={it[k] ?? ""} placeholder={k === "maximum" ? "none" : "0"}
-                          onChange={(e) => setItem(i, { [k]: e.target.value === "" ? (k === "maximum" ? null : "0") : e.target.value })} style={{ width: 110 }} /></td>
+                          onChange={(e) => setItem(i, { [k]: e.target.value === "" ? (k === "maximum" ? null : "0") : e.target.value })} style={{ width: 96 }} /></td>
                       ))}
-                      <td><select aria-label={`${it.name} applies to`} value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value })}>
+                      <td className="l"><select aria-label={`${it.name} applies to`} value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value })} style={{ minWidth: 130 }}>
                         <option value="both">Buy and sell</option><option value="buy">Buy only</option><option value="sell">Sell only</option></select></td>
                       <td><input aria-label={`${it.name} enabled`} type="checkbox" checked={it.enabled} onChange={(e) => setItem(i, { enabled: e.target.checked })} /></td>
                     </tr>
@@ -49,14 +51,14 @@ function Fees() {
                 </tbody>
               </table>
             </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <div style={{ flex: "3 1 300px" }}><label htmlFor="fee-note">Note (source and date of the tariff)</label>
-                <input id="fee-note" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} /></div>
-              <label className="fit" style={{ display: "flex", gap: 8, alignItems: "center", margin: 0, color: "var(--text)" }}>
+            <div className="field" style={{ marginTop: 4 }}><label htmlFor="fee-note">Note (source and date of the tariff)</label>
+              <input id="fee-note" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} /></div>
+            <div className="form-actions" style={{ justifyContent: "space-between" }}>
+              <label className="check">
                 <input type="checkbox" checked={draft.verified} onChange={(e) => setDraft({ ...draft, verified: e.target.checked })} />
                 I verified this against my broker&apos;s tariff
               </label>
-              <button className="primary fit" onClick={save}>Save fee schedule</button>
+              <button className="primary" onClick={save}>Save fee schedule</button>
             </div>
             {msg && <div className={`note ${msg.ok ? "info" : "danger"}`} role={msg.ok ? "status" : "alert"} style={{ marginTop: 12 }}>{msg.text}</div>}
           </>
@@ -90,13 +92,21 @@ function Capital() {
   return (
     <div className="card">
       <h2>Paper portfolio</h2>
-      <div className="row">
-        <div><label htmlFor="cap">Starting capital (EGP)</label><input id="cap" type="number" min="1" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
+      <div className="row" style={{ maxWidth: 520 }}>
+        <div className="field"><label htmlFor="cap">Starting capital (EGP)</label><input id="cap" type="number" min="1" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
         <button className="primary fit" onClick={save} disabled={!capital}>Save</button>
-        <button className="danger fit" onClick={reset} disabled={!data}>Reset paper portfolio</button>
       </div>
-      {data && <p className="muted" style={{ marginTop: 10 }}>Currency {data.currency} · benchmark {data.benchmark} · trading calendar Sunday–Thursday (public holidays not modelled yet).</p>}
+      {data && (
+        <dl className="kv ruled" style={{ maxWidth: 520, marginBottom: 14 }}>
+          <dt>Currency</dt><dd>{data.currency}</dd>
+          <dt>Benchmark</dt><dd>{data.benchmark}</dd>
+          <dt>Trading calendar</dt><dd>Sunday–Thursday, public holidays not modelled yet</dd>
+        </dl>
+      )}
       {msg && <div className={`note ${msg.ok ? "info" : "danger"}`} role={msg.ok ? "status" : "alert"}>{msg.text}</div>}
+      <h3 style={{ marginTop: 20 }}>Start over</h3>
+      <p className="muted" style={{ maxWidth: "70ch" }}>A reset starts a new paper portfolio with the starting capital above. The current ledger is archived, not deleted.</p>
+      <button className="danger" onClick={reset} disabled={!data}>Reset paper portfolio</button>
     </div>
   );
 }
@@ -128,16 +138,17 @@ function DataImport() {
     <div className="card">
       <h2>Historical data</h2>
       {d && (
-        <div className="table-wrap" style={{ marginBottom: 12 }}>
+        <div className="table-wrap">
           <table>
             <thead><tr><th>Source</th><th>Stocks</th><th>Bars</th><th>From</th><th>To</th></tr></thead>
             <tbody>
-              {d.sources.map((s: any) => <tr key={s.source}><td>{s.source === "sample" ? "Sample (synthetic)" : s.source === "younit" ? "Younit (daily)" : "Imported CSV"}</td><td>{s.symbols}</td><td>{s.bars}</td><td>{s.first_date}</td><td>{s.last_date}</td></tr>)}
+              {d.sources.map((s: any) => <tr key={s.source}><td><strong>{s.source === "sample" ? "Sample (synthetic)" : s.source === "younit" ? "Younit (daily)" : "Imported CSV"}</strong></td><td>{s.symbols}</td><td>{Number(s.bars).toLocaleString("en-US")}</td><td>{s.first_date}</td><td>{s.last_date}</td></tr>)}
             </tbody>
           </table>
         </div>
       )}
-      <p className="muted">Import daily history for one stock. Columns: <code>date, open, high, low, close, volume</code>. The import replaces that stock&apos;s whole history. Prices are used as given, so adjust for splits and bonus shares before importing.</p>
+      <h3 style={{ marginTop: 18 }}>Import a CSV</h3>
+      <p className="muted" style={{ maxWidth: "90ch" }}>Import daily history for one stock. Columns: <code>date, open, high, low, close, volume</code>. The import replaces that stock&apos;s whole history. Prices are used as given, so adjust for splits and bonus shares before importing.</p>
       <div className="row">
         <div><label htmlFor="im-sym">Symbol</label><input id="im-sym" value={f.symbol} maxLength={12} onChange={(e) => setF({ ...f, symbol: e.target.value.toUpperCase() })} placeholder="COMI" /></div>
         <div><label htmlFor="im-file">CSV file (max 5 MB)</label><input id="im-file" ref={file} type="file" accept=".csv,text/csv" /></div>
@@ -214,7 +225,7 @@ function AccountsCard() {
           </table>
         </div>
       ) : (
-        <div className="empty">No accounts created here yet.</div>
+        <Empty title="No accounts created here yet" />
       )}
     </div>
   );
@@ -224,17 +235,17 @@ function Audit() {
   const { data, loading, error } = useApi("/api/v1/audit?limit=50");
   return (
     <div className="card">
-      <h2>Audit trail (latest 50)</h2>
+      <h2>Audit trail<span className="count"> latest 50</span></h2>
       <State loading={loading} error={error}>
         {data && (
-          <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
+          <div className="table-wrap" style={{ maxHeight: 520, overflowY: "auto" }}>
             <table>
               <thead><tr><th>#</th><th>When (UTC)</th><th className="l">Action</th><th className="l">What</th><th className="l">Detail</th></tr></thead>
               <tbody>
                 {data.map((a: any) => {
                   const dt = a.detail || {};
                   const text = dt.email ?? dt.after?.name ?? dt.name ?? dt.strategy ?? (dt.symbol ? `${dt.side ?? ""} ${dt.qty ?? ""} ${dt.symbol}`.trim() : dt.id ?? dt.reason ?? "");
-                  return <tr key={a.seq}><td>{a.seq}</td><td>{a.ts.slice(0, 19).replace("T", " ")}</td><td className="l">{a.action}</td><td className="l">{a.entity.replace("_", " ")}</td><td className="l wrap muted">{String(text)}</td></tr>;
+                  return <tr key={a.seq}><td className="muted">{a.seq}</td><td>{a.ts.slice(0, 19).replace("T", " ")}</td><td className="l"><span className="badge">{a.action}</span></td><td className="l">{a.entity.replace(/_/g, " ")}</td><td className="l wrap muted">{String(text)}</td></tr>;
                 })}
               </tbody>
             </table>
@@ -261,9 +272,9 @@ export default function Settings() {
           <p className="sub">The assumptions behind every number in the app.</p>
         </div>
       </div>
-      <div className="seg" role="tablist" aria-label="Settings sections" style={{ marginBottom: 16 }}>
+      <div className="tabs" role="tablist" aria-label="Settings sections">
         {TABS.map(([key, label]) => (
-          <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>
+          <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
         ))}
       </div>
       <div className="grid" role="tabpanel" aria-label={TABS.find(([k]) => k === tab)?.[1]}>
@@ -274,7 +285,7 @@ export default function Settings() {
         {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
         {(tab === "data") && <div className="card">
           <h2>Connections</h2>
-          <dl className="kv">
+          <dl className="kv ruled" style={{ maxWidth: 720 }}>
             <dt>Trading mode</dt><dd>Paper only</dd>
             <dt>Younit market data</dt><dd>{pv?.configured ? "Connected, read-only" : "Not connected"}</dd>
             {pv?.configured && (
@@ -303,7 +314,7 @@ export default function Settings() {
             <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
-          {status.data && <p className="muted" style={{ marginTop: 10 }}>{status.data.broker_note}</p>}
+          {status.data && <p className="foot-note" style={{ marginTop: 14 }}>{status.data.broker_note}</p>}
           {pv?.live?.errors?.length > 0 && <div className="note" style={{ marginTop: 8 }}>Live feed notes: {pv.live.errors.join("; ")}</div>}
           {pv?.fields?.length > 0 && (
             <details style={{ margin: "8px 0 12px" }}>

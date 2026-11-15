@@ -8,9 +8,9 @@ import { api } from "@/lib/api";
 import { LiveProvider } from "@/lib/live";
 import Assistant from "./Assistant";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
-import { Sparkles,
-  Bell, BookOpen, Briefcase, CandlestickChart, Check, FlaskConical, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
-  Receipt, Settings, SlidersHorizontal, Star, Sun, X, type LucideIcon,
+import {
+  Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
+  Receipt, Settings, SlidersHorizontal, Sparkles, Star, Sun, TriangleAlert, X, type LucideIcon,
 } from "lucide-react";
 import MarketStrip from "./MarketStrip";
 import SymbolSearch from "./SymbolSearch";
@@ -31,6 +31,17 @@ function Logo({ size = 30 }: { size?: number }) {
         <path d="M3 17l5-6 4 3 8-9" /><path d="M15 5h5v5" />
       </svg>
     </span>
+  );
+}
+
+/** One line across the workspace: what the data is, or what just went wrong with it. */
+function Banner({ tone = "warn", title, children }: { tone?: "warn" | "info" | "danger"; title?: string; children?: React.ReactNode }) {
+  const Icon = tone === "danger" ? CircleAlert : tone === "info" ? Info : TriangleAlert;
+  return (
+    <div className={`banner ${tone === "warn" ? "" : tone}`} role={tone === "danger" ? "alert" : "status"}>
+      <Icon size={15} aria-hidden="true" />
+      <span>{title && <strong>{title}</strong>}{children}</span>
+    </div>
   );
 }
 
@@ -77,14 +88,16 @@ function SignIn() {
       </div>
       <div className="form">
         <form onSubmit={submit}>
+          <div className="mini-brand"><Logo size={32} />EGX Intelligence</div>
           <h2>Sign in</h2>
-          <p className="sub" style={{ marginBottom: 20 }}>Use the account your administrator created for you.</p>
+          <p className="sub" style={{ marginBottom: 22 }}>Use the account your administrator created for you.</p>
           <div className="field"><label htmlFor="si-email">Email</label>
             <input id="si-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <div className="field"><label htmlFor="si-pass">Password</label>
             <input id="si-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
           {error && <div className="note danger" role="alert">{error}</div>}
-          <button className="primary" type="submit" disabled={busy} style={{ width: "100%", height: 40 }}>{busy ? "Signing in…" : "Sign in"}</button>
+          <button className="primary" type="submit" disabled={busy} style={{ width: "100%", height: 40, marginTop: 4 }}>{busy ? "Signing in…" : "Sign in"}</button>
+          <p className="muted" style={{ fontSize: 12, margin: "14px 0 0", textAlign: "center" }}>Paper trading only. No order reaches a broker.</p>
         </form>
       </div>
     </div>
@@ -209,23 +222,22 @@ function FeedUpdater({ provider }: { provider: any }) {
 
   if (state.running && state.paused)
     return (
-      <div className="banner" role="status">
-        <strong>The data feed asked for a short pause.</strong> The update continues by itself in about a minute
+      <Banner tone="info" title="The data feed asked for a short pause.">
+        The update continues by itself in about a minute
         {state.total && state.left != null ? ` (${state.total - state.left} of ${state.total} stocks done)` : ""}. Prices already saved stay on screen.
-      </div>
+      </Banner>
     );
   if (state.running && (first || (state.left ?? 0) > 0))
     return (
-      <div className="banner" role="status">
-        <strong>{first ? "Loading market data for the first time." : "Updating market data."}</strong>{" "}
+      <Banner tone="info" title={first ? "Loading market data for the first time." : "Updating market data."}>
         {state.total ? `${state.total - (state.left ?? state.total)} of ${state.total} stocks…` : "Contacting Younit…"}
         {first ? " This takes a minute or two; keep the page open." : ""}
-      </div>
+      </Banner>
     );
   if (state.error)
-    return <div className="banner danger" role="alert"><strong>Market data was not updated.</strong> {state.error}</div>;
-  if (notice) return <div className="banner" role="status">Market data updated.</div>;
-  if (liveError) return <div className="banner" role="status"><strong>Live prices are not coming through.</strong> {liveError} Showing the last saved prices.</div>;
+    return <Banner tone="danger" title="Market data was not updated.">{state.error}</Banner>;
+  if (notice) return <Banner tone="info">Market data updated.</Banner>;
+  if (liveError) return <Banner title="Live prices are not coming through.">{liveError} Showing the last saved prices.</Banner>;
   return null;
 }
 
@@ -299,6 +311,13 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
     setTheme((document.documentElement.dataset.theme as "light" | "dark") || systemTheme());
   }, []);
   useEffect(() => setOpen(false), [path]);
+  // the phone menu closes on Escape, like any other layer over the page
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const toggle = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -335,6 +354,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           <div className="brand">
             <Logo />
             <span>EGX Intelligence<small>Analysis &amp; paper trading</small></span>
+            <button className="close-nav icon-btn ghost" onClick={() => setOpen(false)} aria-label="Close menu"><X size={18} /></button>
           </div>
           <nav className="nav" aria-label="Main">
             {NAV.map((group) => (
@@ -356,6 +376,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             )}
           </div>
         </aside>
+        {open && <div className="scrim" aria-hidden="true" onClick={() => setOpen(false)} />}
         <div className="main">
           <div className="topbar">
             <button className="menu-btn icon-btn ghost" onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Close menu" : "Open menu"}>
@@ -369,7 +390,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
               </span>
             )}
             {d && (
-              <span className={`pill hide-sm ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`}>
+              <span className={`pill hide-sm ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`} title="Where the prices on screen come from">
                 {d.mode === "sample" ? "Sample data" : d.mode === "mixed" ? "Imported + sample data" : d.mode === "imported" ? "Imported data"
                   : d.mode === "younit" ? (d.is_live ? `Live · ${String(d.live_as_of).slice(11, 16)} Cairo` : `Close of ${d.latest_bar_date}`) : "No data"}
               </span>
@@ -384,19 +405,19 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             </button>
           </div>
           <MarketStrip />
-          {error && <div className="banner danger" role="alert">{error}</div>}
+          {error && <Banner tone="danger">{error}</Banner>}
           {d?.has_sample_data && (
-            <div className="banner" role="status">
-              <strong>Sample data.</strong> {d.mode === "mixed" ? "Some stocks still show" : "Prices shown are"} synthetic, generated for testing. They
-              are not EGX market quotes. Import real history in Settings.
-            </div>
+            <Banner title="Sample data.">
+              {d.mode === "mixed" ? "Some stocks still show" : "Prices shown are"} synthetic, generated for testing. They
+              are not EGX market quotes. Import real history in <Link href="/settings">Settings</Link>.
+            </Banner>
           )}
           {status?.provider?.configured && <FeedUpdater provider={status.provider} />}
           <Background />
           {d && !d.has_sample_data && d.is_stale && (
-            <div className="banner" role="status">
-              <strong>Stale data.</strong> Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.
-            </div>
+            <Banner title="Stale data.">
+              Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.
+            </Banner>
           )}
           <main className="content">{children}</main>
           <footer className="foot">
