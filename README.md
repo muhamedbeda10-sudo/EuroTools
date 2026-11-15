@@ -129,10 +129,29 @@ settings). It has no tool for sign-in accounts or passwords, and none for real o
   service methods the screens use, with its input validated before it runs.
 - A conversation is one document in the user's own data and only ever grows: the instructions and tool list
   are fixed and anything that varies (time, current page) is written into the user's message when it is sent.
+- **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): model, thinking effort, access,
+  daily ceiling, the limits on the assistant's own trades, and the autopilot. The environment values above are
+  only the defaults.
+- **Limits on its trades** are enforced in code on every trade the assistant places (`check_trade`): largest
+  single trade and largest holding as a share of the portfolio, cash always kept, trades per day. Its trades are
+  marked `origin: assistant` in the ledger.
+- **Autopilot** (off by default): after each completed session, and optionally every N minutes while the market
+  is open, the page asks the server to run a review. The server decides whether one is due, claims it (so two
+  tabs cannot both run it), builds a briefing from the portfolio and the user's written mandate, and lets the
+  assistant act inside the limits. Each review is a stored conversation. It runs only while the app is open in
+  a browser; with anything less than full access it looks and reports only.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
   description on the second). The assistant lists and reads them through its `knowledge` tool. Add a file to
   teach it something; no code change is needed.
 - Try it locally without a key or any cost: `uvicorn e2e_assistant:app` runs the real API with a stand-in model.
+
+## Protective orders
+
+A stop-loss or take-profit on a holding (`backend/app/orders.py`), placed from the Portfolio page or by the
+assistant. The background job carries them out: on a completed session the day's whole range counts (a stop
+fills at the stop, or at the open if the stock gapped through it, as in the backtester); during a running
+session and on the day the order was placed only the latest price counts. A fill is an ordinary SELL in the
+ledger (`origin: order:<id>`) with the usual fees. One stop and one target per stock.
 
 ## Automatic paper trading
 

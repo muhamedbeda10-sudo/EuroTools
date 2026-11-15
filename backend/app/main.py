@@ -18,8 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, paper
+from . import assistant, orders, paper
 from .accounts import AccountError, Accounts
+from .assistant_prefs import PrefsIn, save_prefs
 from .config import Settings, get_settings
 from .data.calendar import market_open
 from .data.feed import Feed, FirestoreDocs, StoreDocs
@@ -454,8 +455,24 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     @api.post("/api/v1/paper-runs/process")
     def process_paper_runs(core: App = Depends(get_core)):
-        """Fill the orders of every active run up to the latest completed session."""
-        return paper.process_runs(core)
+        """Fill the orders of every active run up to the latest completed session, then carry out any
+        stop-loss or take-profit whose price has been reached."""
+        out = paper.process_runs(core)
+        done = orders.process(core)
+        return {**out, "orders": done["filled"]}
+
+    # ---- protective orders ------------------------------------------------
+    @api.get("/api/v1/orders")
+    def list_orders(core: App = Depends(get_core), *, status: Literal["open", "all"] = "open"):
+        return [orders.view(core, o) for o in orders.list_orders(core, status)[:100]]
+
+    @api.post("/api/v1/orders", status_code=201)
+    def place_order(body: orders.OrderIn, core: App = Depends(get_core)):
+        return orders.view(core, orders.place(core, body))
+
+    @api.delete("/api/v1/orders/{id}")
+    def cancel_order(id: str, core: App = Depends(get_core)):
+        return orders.cancel(core, id)
 
     # ---- research, journal, alerts --------------------------------------
     @api.get("/api/v1/research")
@@ -579,13 +596,26 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     @api.get("/api/v1/assistant")
     def assistant_status(request: Request, core: App = Depends(get_core)):
-        return assistant.status(core, assistant_model, allowed=assistant_model is not None and assistant_allowed(request, core),
-                                daily_limit=settings.assistant_daily_usd)
+        return assistant.status(core, assistant_model, allowed=assistant_model is not None and assistant_allowed(request, core))
 
     @api.put("/api/v1/assistant/access")
     def assistant_access(request: Request, body: AssistantAccessIn, core: App = Depends(get_core)):
         assistant_ready(request, core)
-        return {"access": assistant.set_access(core, body.access)}
+        return {"access": save_prefs(core, PrefsIn(access=body.access))["access"]}
+
+    @api.put("/api/v1/assistant/settings")
+    def assistant_settings(request: Request, body: PrefsIn, core: App = Depends(get_core)):
+        """Model, thinking effort, access, daily budget, trading limits and the autopilot, for this account."""
+        assistant_ready(request, core)
+        save_prefs(core, body)
+        return assistant.status(core, assistant_model, allowed=True)
+
+    @api.post("/api/v1/assistant/autopilot")
+    def assistant_autopilot(request: Request, core: App = Depends(get_core)):
+        """Let the assistant review the portfolio by itself if a review is due. The page calls this; it does nothing otherwise."""
+        if assistant_model is None or not assistant_allowed(request, core):
+            return {"ran": False, "mode": "off"}
+        return assistant.run_autopilot(core, assistant_model)
 
     @api.post("/api/v1/assistant/chats", status_code=201)
     def assistant_new_chat(request: Request, core: App = Depends(get_core)):
@@ -607,13 +637,13 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def assistant_message(request: Request, id: str, body: AssistantMessageIn, core: App = Depends(get_core)):
         """Say something to the assistant. The reply streams back as it is produced."""
         model = assistant_ready(request, core)
-        return assistant_stream(assistant.send(core, model, id, body.text, body.page, daily_limit=settings.assistant_daily_usd))
+        return assistant_stream(assistant.send(core, model, id, body.text, body.page))
 
     @api.post("/api/v1/assistant/chats/{id}/resolve")
     def assistant_resolve(request: Request, id: str, body: AssistantResolveIn, core: App = Depends(get_core)):
         """Approve or decline the actions the assistant is waiting to take, then let it carry on."""
         model = assistant_ready(request, core)
-        return assistant_stream(assistant.resolve(core, model, id, body.decisions, daily_limit=settings.assistant_daily_usd))
+        return assistant_stream(assistant.resolve(core, model, id, body.decisions))
 
     # ---- data import & audit --------------------------------------------
     @api.post("/api/v1/data/bars/import")

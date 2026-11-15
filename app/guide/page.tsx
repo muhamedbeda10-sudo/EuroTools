@@ -69,6 +69,17 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <p>Use the <Link href="/journal">Journal</Link> to write down why you expect a strategy to work before you see the result.</p>
     </>
   ) },
+  { id: "orders", title: "Stop-loss and take-profit orders", body: (
+    <>
+      <p>On the <Link href="/portfolio">Portfolio</Link> page you can leave a standing instruction on a holding: sell if the price falls to a level (stop-loss) or rises to one (take-profit). The app carries it out by itself and records an ordinary sale in the ledger, with fees.</p>
+      <ul>
+        <li>On a completed session the whole day counts: a stop fills at its price, or at the open if the stock opened below it.</li>
+        <li>While a session is running, and on the day you placed the order, only the latest price the app has seen counts.</li>
+        <li>Orders are checked while the app is open; sessions that completed while it was closed are caught up the next time you open it.</li>
+        <li>One stop and one target per stock; a new one replaces the old. Selling the shares another way cancels them.</li>
+      </ul>
+    </>
+  ) },
   { id: "automatic", title: "How automatic paper trading decides", body: (
     <>
       <p>A run follows one strategy with its own slice of the paper cash. It uses completed sessions only, with the same rules and arithmetic as the simulator: a signal read at a close is filled at the next open, with slippage and fees; stops and targets are checked against each day&apos;s low and high.</p>
@@ -89,6 +100,8 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
         <li><strong>It cannot place a real order</strong> (nothing in the app can) and it does not manage sign-in accounts.</li>
         <li><strong>It is not an adviser.</strong> Its views come from price history and your own notes: there are no company financials in the app, and the simulation has the limits listed below. It can be wrong.</li>
         <li><strong>It has a cost.</strong> It runs on Claude through an API key billed per use; the panel shows an estimate for the conversation and the day.</li>
+        <li><strong>You set it up in <Link href="/settings?tab=assistant">Settings → Assistant</Link>:</strong> which model it uses and how hard it thinks (both change the cost), a daily spending ceiling, and limits on its own trades (largest trade, largest holding, cash always kept, trades per day). The app enforces those limits itself, whatever the assistant decides.</li>
+        <li><strong>Autopilot.</strong> Switched on there, the assistant reviews the portfolio after each close (and, if you choose, during the session), trades inside the limits following the instructions you wrote, and leaves a conversation you can read. It works while the app is open in a browser.</li>
       </ul>
     </>
   ) },

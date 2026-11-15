@@ -121,21 +121,41 @@ def without_reasoning(messages: list[dict]) -> list[dict]:
 class ClaudeModel:
     """Streams one model call at a time through the official SDK."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, effort: str = "medium", *, client=None):
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, effort: str = "medium", *, client=None, _shared: dict | None = None):
         self.name = model if model in SUPPORTED_MODELS else DEFAULT_MODEL
         self.effort = effort if effort in EFFORTS else "medium"
-        self._api_key, self._client = api_key, client
-        self._checked: tuple[float, str | None] | None = None
-        self.plain = False  # set when the optional beta features are refused, and kept for this server instance
+        # One connection and one memory of what the API accepts, shared by every model choice made from this object.
+        self._shared = _shared if _shared is not None else {"key": api_key, "client": client, "plain": set(), "checked": {}}
+
+    def using(self, model: str | None = None, effort: str | None = None) -> ClaudeModel:
+        """The same connection with another model or effort: each account chooses its own in Settings."""
+        return ClaudeModel("", model or self.name, effort or self.effort, _shared=self._shared)
 
     @property
     def client(self):
         # The SDK takes about a second to import. It is loaded on the assistant's first use,
         # so a server that never talks to Claude never pays for it.
-        if self._client is None:
+        if self._shared["client"] is None:
             import anthropic
-            self._client = anthropic.Anthropic(api_key=self._api_key, max_retries=2, timeout=240.0)
-        return self._client
+            self._shared["client"] = anthropic.Anthropic(api_key=self._shared["key"], max_retries=2, timeout=240.0)
+        return self._shared["client"]
+
+    @property
+    def plain(self) -> bool:
+        """True once the optional beta features were refused for this model; remembered for this server instance."""
+        return self.name in self._shared["plain"]
+
+    @plain.setter
+    def plain(self, value: bool) -> None:
+        (self._shared["plain"].add if value else self._shared["plain"].discard)(self.name)
+
+    @property
+    def _checked(self) -> tuple[float, str | None] | None:
+        return self._shared["checked"].get(self.name)
+
+    @_checked.setter
+    def _checked(self, value: tuple[float, str | None]) -> None:
+        self._shared["checked"][self.name] = value
 
     def check(self) -> str | None:
         """Is the key accepted and the model available? None when all is well, else what is wrong.

@@ -63,6 +63,16 @@ connected for reading prices only.
   the run, and gives back at cost any of its shares that were sold by hand. Stopping a run is final.
 - Results with fewer than 30 closed trades are too small a sample to judge a strategy.
 
+## Protective orders, limits and the autopilot
+- A stop-loss or take-profit order on a holding is carried out by the app itself. On a completed session the
+  whole day's range counts (a stop fills at its price, or at the open after a gap below it); during a running
+  session and on the placement day only the latest price counts. Orders are checked while the app is open.
+- Trades placed by the assistant must stay inside limits the user sets in Settings -> Assistant: largest single
+  trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
+  places by hand are not limited.
+- Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
+  (optionally also during the session) and act inside those limits following the user's written mandate.
+
 ## What the simulation leaves out
 Splits, bonus shares and dividends; partial fills, price limits and trading halts; the official closing price
 (a volume-weighted average) versus the last trade used here; EGX same-day selling rules; companies delisted in

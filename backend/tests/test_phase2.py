@@ -66,7 +66,7 @@ def test_a_run_trades_the_paper_portfolio_on_completed_sessions(c):
     days = load(c, "COMI", FLAT)
     st, run = start(c)
     assert run["status"] == "active" and run["last_date"] == days[-1] and run["universe"] == ["COMI"]
-    assert c.post("/api/v1/paper-runs/process").json() == {"runs": 1, "fills": 0}     # nothing new yet
+    assert c.post("/api/v1/paper-runs/process").json() == {"runs": 1, "fills": 0, "orders": []}     # nothing new yet
 
     days = load(c, "COMI", FLAT + UP)
     assert c.post("/api/v1/paper-runs/process").json()["fills"] == 1
@@ -104,7 +104,7 @@ def test_stop_loss_pause_and_stop(c):
 
     assert c.put(f"/api/v1/paper-runs/{run['id']}", json={"status": "paused"}).json()["status"] == "paused"
     load(c, "COMI", FLAT + UP + [9.0, 9.0] + UP)            # a new up-trend while paused
-    assert c.post("/api/v1/paper-runs/process").json() == {"runs": 0, "fills": 0}
+    assert c.post("/api/v1/paper-runs/process").json() == {"runs": 0, "fills": 0, "orders": []}
     resumed = c.put(f"/api/v1/paper-runs/{run['id']}", json={"status": "active"}).json()
     assert resumed["pending_buy"] == []                     # the paused days are not traded in hindsight
     assert c.post("/api/v1/paper-runs/process").json()["fills"] == 0

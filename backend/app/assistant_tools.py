@@ -23,8 +23,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import paper
+from . import orders, paper
+from .assistant_prefs import check_trade, prefs
 from .data.calendar import cairo_now, market_open
+from .domain import indicators as ind
 from .domain.fees import FeeItem, FeeSchedule
 from .domain.ledger import replay
 from .domain.strategies import STRATEGY_TYPES, RiskConfig, StrategyConfig
@@ -143,6 +145,113 @@ def _stock_report(core: App, a: StockReport) -> dict:
     return out
 
 
+def market_metrics(core: App) -> list[dict]:
+    """The technical read of every stock, computed once per data update and reused by every screen."""
+    cache = core.market.cache
+    core.quotes()
+    if "screen" not in cache:
+        rows = []
+        table = core.quotes()
+        for q in table[table["type"] == "stock"].to_dict("records") if len(table) else []:
+            df = core.market.bars(q["symbol"])
+            if df is None or len(df) < 30:
+                continue
+            a, last = ind.assess(df), q["last"]
+            high = float(df["high"].tail(252).max())
+            avg_volume = q.get("avg_volume_20")
+            rows.append({
+                **pick(q, "symbol", "name", "sector", "last", "change_pct", "week_pct", "month_pct", "as_of", "current"),
+                "three_month_pct": a["returns_pct"]["3m"], "rsi": a["rsi"], "trend": a["trend"], "technical_score": a["technical_score"],
+                "above_sma50": None if a["sma50"] is None else last > a["sma50"],
+                "above_sma200": None if a["sma200"] is None else last > a["sma200"],
+                "volume_ratio": a["volume_ratio"], "pct_from_high": (last / high - 1) * 100 if high else None,
+                "avg_turnover_20": avg_volume * last if avg_volume == avg_volume and avg_volume is not None else None,
+                "support": a["support"], "resistance": a["resistance"],
+            })
+        cache["screen"] = rows
+    return cache["screen"]
+
+
+class Screen(Args):
+    sector: str | None = Field(default=None, max_length=80)
+    trend: Literal["uptrend", "sideways", "downtrend"] | None = None
+    rsi_min: float | None = Field(default=None, ge=0, le=100)
+    rsi_max: float | None = Field(default=None, ge=0, le=100)
+    above_sma50: bool | None = None
+    above_sma200: bool | None = None
+    min_volume_ratio: float | None = Field(default=None, ge=0, description="Latest volume against the average of the 20 sessions before")
+    min_avg_turnover: float | None = Field(default=None, ge=0, description="Liquidity floor: average daily value traded, in EGP")
+    min_month_pct: float | None = None
+    max_month_pct: float | None = None
+    within_pct_of_high: float | None = Field(default=None, ge=0, le=100, description="At most this far below the 12-month high")
+    traded_in_latest_session_only: bool = True
+    sort_by: Literal["rsi", "change_pct", "week_pct", "month_pct", "three_month_pct", "volume_ratio", "avg_turnover_20",
+                     "pct_from_high", "technical_score"] = "month_pct"
+    descending: bool = True
+    limit: int = Field(default=20, ge=1, le=40)
+
+
+def _screen(core: App, a: Screen) -> dict:
+    def keep(r: dict) -> bool:
+        def at_least(key, floor):
+            return floor is None or (r[key] is not None and r[key] >= floor)
+
+        def at_most(key, ceiling):
+            return ceiling is None or (r[key] is not None and r[key] <= ceiling)
+        return ((not a.sector or r["sector"] == a.sector) and (not a.trend or r["trend"] == a.trend)
+                and (not a.traded_in_latest_session_only or r["current"])
+                and at_least("rsi", a.rsi_min) and at_most("rsi", a.rsi_max)
+                and (a.above_sma50 is None or r["above_sma50"] is a.above_sma50)
+                and (a.above_sma200 is None or r["above_sma200"] is a.above_sma200)
+                and at_least("volume_ratio", a.min_volume_ratio) and at_least("avg_turnover_20", a.min_avg_turnover)
+                and at_least("month_pct", a.min_month_pct) and at_most("month_pct", a.max_month_pct)
+                and (a.within_pct_of_high is None or (r["pct_from_high"] is not None and r["pct_from_high"] >= -a.within_pct_of_high)))
+    rows = [r for r in market_metrics(core) if keep(r)]
+    edge = float("-inf") if a.descending else float("inf")
+    rows.sort(key=lambda r: r[a.sort_by] if r[a.sort_by] is not None else edge, reverse=a.descending)
+    return {"screened": len(market_metrics(core)), "matching": len(rows), "stocks": rows[:a.limit],
+            "note": "Technical figures only, from price history. There are no fundamentals in the app."}
+
+
+class Size(Args):
+    symbol: str = Field(min_length=1, max_length=12)
+    stop_price: float | None = Field(default=None, gt=0, description="Where the stop-loss would sit")
+    stop_pct: float | None = Field(default=None, gt=0, lt=90, description="Or the stop as a percentage below the latest price")
+    risk_pct: float = Field(default=1.0, gt=0, le=10, description="Share of the portfolio you accept to lose if the stop is hit")
+
+
+def _size(core: App, a: Size) -> dict:
+    symbol = a.symbol.upper()
+    quote = core.preview_trade("BUY", symbol, 1, None)
+    last = quote["price"]
+    if a.stop_price is None and a.stop_pct is None:
+        raise ValueError("give stop_price or stop_pct")
+    stop = a.stop_price if a.stop_price is not None else last * (1 - a.stop_pct / 100)
+    if stop >= last:
+        raise ValueError(f"the stop ({stop:g}) must be below the latest price ({last:g})")
+    summary = core.portfolio()["summary"]
+    equity, cash = summary["total_value"], summary["cash"]
+    held = replay(core.store.list(core._ledger_coll())).positions.get(symbol)
+    held_qty = held.qty if held is not None else 0
+    limits = prefs(core)["limits"]
+    with_fees = last * 1.006  # room for fees when turning cash into shares
+    caps = {
+        "the risk accepted": int(equity * a.risk_pct / 100 // (last - stop)),
+        "the per-trade limit": int(equity * limits["max_trade_pct"] / 100 // with_fees),
+        "the per-stock limit": int(equity * limits["max_position_pct"] / 100 // last) - held_qty,
+        "the cash that must stay": int((cash - equity * limits["min_cash_pct"] / 100) // with_fees),
+    }
+    binding = min(caps, key=caps.get)
+    shares = max(caps[binding], 0)
+    out = {"symbol": symbol, "price": last, "stop": round(stop, 4), "risk_per_share": round(last - stop, 4), "shares": shares,
+           "limited_by": binding, "already_held": held_qty, "portfolio_value": equity, "cash": cash, "limits": limits}
+    if shares:
+        cost = core.preview_trade("BUY", symbol, shares, None)
+        out.update(cost_with_fees=cost["gross"] + cost["fees_total"], loss_if_stopped=round(shares * (last - stop), 2),
+                   loss_pct_of_portfolio=round(shares * (last - stop) / equity * 100, 3) if equity else None)
+    return out
+
+
 class SymbolArg(Args):
     symbol: str = Field(min_length=1, max_length=12)
 
@@ -189,11 +298,44 @@ def _preview_trade(core: App, a: TradeArgs) -> dict:
 
 
 def _place_trade(core: App, a: PlaceTrade) -> dict:
-    tx = core.post_trade(a.side, a.symbol, a.qty, None, a.note, None)
+    check_trade(core, a.side, a.symbol, a.qty)  # the user's limits on the assistant's trading, enforced here in code
+    tx = core.post_trade(a.side, a.symbol, a.qty, None, a.note, None, origin="assistant")
     cash = replay(core.store.list(core._ledger_coll())).cash
     recorded = pick(tx, "seq", "type", "symbol", "qty", "trade_date", "price_date")
     recorded.update({k: float(tx[k]) for k in ("price", "gross", "fees_total")})  # numbers, not the ledger's text form
     return {"recorded": recorded, "cash_after": float(cash), "mode": "paper"}
+
+
+class OrdersList(Args):
+    include_closed: bool = Field(default=False, description="Also the filled and cancelled ones")
+
+
+def _orders(core: App, a: OrdersList) -> dict:
+    rows = orders.list_orders(core, None if a.include_closed else "open")
+    held = {s: p.qty for s, p in replay(core.store.list(core._ledger_coll())).positions.items() if p.qty}
+    stops = {o["symbol"] for o in rows if o["status"] == "open" and o["kind"] == "stop"}
+    return {"orders": [orders.view(core, o) for o in rows[:40]], "holdings_without_a_stop": sorted(set(held) - stops)}
+
+
+class SetOrder(Args):
+    symbol: str = Field(min_length=1, max_length=12)
+    kind: Literal["stop", "target"] = Field(description="stop = sell if the price falls to it; target = sell if it rises to it")
+    price: float = Field(gt=0)
+    qty: int | None = Field(default=None, gt=0, description="Leave out to cover the whole holding")
+    note: str = Field(default="", max_length=300)
+
+
+def _set_order(core: App, a: SetOrder) -> dict:
+    body = orders.OrderIn(symbol=a.symbol, kind=a.kind, price=Decimal(str(a.price)), qty=a.qty, note=a.note)
+    return orders.view(core, orders.place(core, body, origin="assistant"))
+
+
+class CancelOrder(Args):
+    id: str = Field(min_length=1, max_length=40)
+
+
+def _cancel_order(core: App, a: CancelOrder) -> dict:
+    return pick(orders.cancel(core, a.id), "id", "symbol", "kind", "status")
 
 
 def _reset_portfolio(core: App, a: NoArgs) -> dict:
@@ -555,6 +697,10 @@ TOOLS: list[Tool] = [
     Tool("find_stocks", "Search and rank the listed stocks by name, symbol or sector, with last price, day, week and "
          "month change and volume. Use it to screen (e.g. biggest movers in a sector).", FindStocks, _find_stocks,
          label=lambda a: f"Searching stocks{f' for {a.query}' if a.query else ''}{f' in {a.sector}' if a.sector else ''}"),
+    Tool("screen_stocks", "Screen the whole market on technical conditions in one call: trend, RSI range, position against "
+         "the 50 and 200-day averages, volume against its average, liquidity, monthly return, distance from the 12-month "
+         "high. Use it to find candidates before looking at any single stock.", Screen, _screen,
+         label=lambda a: "Screening the market"),
     Tool("stock_report", "Everything known about one stock: quote, technical and momentum read (trend, RSI, moving "
          "averages, support and resistance, returns), recent candles, the user's holding in it, active strategy signals.",
          StockReport, _stock_report, label=lambda a: f"Looking at {a.symbol.upper()}"),
@@ -568,9 +714,21 @@ TOOLS: list[Tool] = [
     Tool("preview_trade", "What a paper order would cost before placing it: fill price, every fee line, total cash, and "
          "whether it would be accepted.", TradeArgs, _preview_trade,
          label=lambda a: f"Pricing a {a.side.lower()} of {a.qty} {a.symbol.upper()}"),
+    Tool("size_position", "How many shares to buy so that a stop-loss at a given price costs no more than a chosen share "
+         "of the portfolio, within the user's limits and the cash available. Use it before buying.", Size, _size,
+         label=lambda a: f"Sizing a position in {a.symbol.upper()}"),
     Tool("place_trade", "Record a paper trade in the ledger at the stock's latest price, with fees. Paper only: nothing "
-         "is sent to a broker.", PlaceTrade, _place_trade, kind="confirm",
+         "is sent to a broker. The user's limits on your trading (size per trade and per stock, trades per day, cash "
+         "kept) are enforced; a refused trade says which limit.", PlaceTrade, _place_trade, kind="confirm",
          label=lambda a: f"{'Buy' if a.side == 'BUY' else 'Sell'} {a.qty:,} {a.symbol.upper()} (paper trade)"),
+    Tool("protective_orders", "The stop-loss and take-profit orders on the holdings, how far the price is from each, and "
+         "which holdings have no stop.", OrdersList, _orders, label=lambda a: "Reading the protective orders"),
+    Tool("set_protective_order", "Put a stop-loss or a take-profit on a holding. The app carries it out by itself when "
+         "the price is reached, also when nobody is looking. A new one replaces the old one of the same kind.", SetOrder,
+         _set_order, kind="confirm",
+         label=lambda a: f"{'Stop-loss' if a.kind == 'stop' else 'Take-profit'} on {a.symbol.upper()} at {a.price:g}"),
+    Tool("cancel_protective_order", "Cancel an open stop-loss or take-profit.", CancelOrder, _cancel_order, kind="confirm",
+         label=lambda a: "Cancel a protective order"),
     Tool("watchlist", "The stocks on the watchlist with their quotes, and the user's custom stock lists.", NoArgs, _watchlist,
          label=lambda a: "Reading the watchlist"),
     Tool("set_watch", "Add a stock to the watchlist or remove it.", SetWatch, _set_watch, kind="write",

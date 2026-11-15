@@ -452,3 +452,7 @@ section.card p strong { color: var(--text); }
 @media (min-width: 1500px) { .shell.with-assistant .main { padding-right: 420px; } }
 @media (min-width: 700px) { .with-assistant .toasts { right: 438px; } }
 @media (max-width: 520px) { .as-open span { display: none; } }
+
+/* ---- protective orders form ---- */
+.order-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; }
+.order-form .field { margin-bottom: 0; flex: 1 1 160px; max-width: 280px; }

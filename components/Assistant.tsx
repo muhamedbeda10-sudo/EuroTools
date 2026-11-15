@@ -1,5 +1,6 @@
 "use client";
 import { Check, CircleAlert, History, Loader, Plus, SendHorizontal, Sparkles, Square, Trash2, X } from "lucide-react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { api, request } from "@/lib/api";
@@ -9,6 +10,10 @@ import Markdown from "./Markdown";
 type ToolChip = { id: string; label: string; state: "running" | "ok" | "failed" | "declined" | "waiting" };
 type Item = { role: "user" | "assistant" | "note"; text: string; tools?: ToolChip[] };
 type Pending = { id: string; label: string };
+const MODEL_NAMES: Record<string, string> = {
+  "claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-haiku-5-5": "Claude Haiku 5.5",
+  "claude-fable-5-2": "Claude Fable 5.2",
+};
 type Status = {
   configured: boolean; allowed: boolean; model: string | null; access: "full" | "confirm" | "read" | null; problem?: string | null;
   spent_today_usd: number; daily_limit_usd: number; chats: { id: string; title: string; updated_at: string }[];
@@ -212,7 +217,7 @@ function Panel({ onClose }: { onClose: () => void }) {
 
   const setAccess = async (access: string) => {
     try {
-      await api("/api/v1/assistant/access", { method: "PUT", json: { access } });
+      await api("/api/v1/assistant/settings", { method: "PUT", json: { access } });
       loadStatus();
     } catch (e: any) { setError(e.message); }
   };
@@ -232,7 +237,8 @@ function Panel({ onClose }: { onClose: () => void }) {
     <aside className="assistant" role="complementary" aria-label="Assistant" ref={panel}>
       <header className="as-head">
         <Sparkles size={17} aria-hidden="true" />
-        <div className="as-title"><strong>Assistant</strong>{status?.model && <span>{status.model}</span>}</div>
+        <div className="as-title"><strong>Assistant</strong>
+          {status?.model && <span title="Change the model in Settings → Assistant">{MODEL_NAMES[status.model] ?? status.model}</span>}</div>
         {ready && (
           <>
             <button className="icon-btn ghost" onClick={() => setShowHistory((v) => !v)} aria-pressed={showHistory} aria-label="Earlier conversations" title="Earlier conversations"><History size={16} /></button>
@@ -330,7 +336,7 @@ function Panel({ onClose }: { onClose: () => void }) {
               <span className="muted" title={`About ${usd(status.spent_today_usd)} used today${status.daily_limit_usd ? ` of a ${usd(status.daily_limit_usd)} daily ceiling` : ""}. An estimate from the tokens used.`}>
                 {cost != null ? `This chat ≈ ${usd(cost)} · ` : ""}today ≈ {usd(status.spent_today_usd)}
               </span>
-              <span className="muted">Paper trading only</span>
+              <Link className="muted" href="/settings?tab=assistant" title="Model, limits and autopilot">Settings</Link>
             </div>
           </>
         )}

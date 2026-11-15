@@ -515,7 +515,7 @@ class App:
 
     @retry_conflict
     def post_trade(self, side: str, symbol: str, qty: int, trade_date: str | None, note: str,
-                   client_order_id: str | None) -> dict:
+                   client_order_id: str | None, origin: str = "manual") -> dict:
         from . import paper
         symbol = symbol.upper()
         insx = self.market.instrument(symbol)
@@ -536,12 +536,12 @@ class App:
             latest = self.market.latest_date()
             tx = build_trade(replay(txs), self.fee_schedule(), side=side, symbol=symbol, qty=qty, price=price)
             tx.update(ts=now_iso(), trade_date=used_date, price_date=price_date, price_source=self.market.source(symbol),
-                      note=note.strip(), origin="manual", mode="paper", client_order_id=client_order_id,
+                      note=note.strip(), origin=origin, mode="paper", client_order_id=client_order_id,
                       # filled at a past day's close, with what happened since already known
                       backdated=bool(trade_date and latest and used_date < latest.isoformat()))
             saved = self.store.append(coll, tx)
             self.audit("post", "paper_trade", {"seq": saved["seq"], "side": side, "symbol": symbol, "qty": qty,
-                                              "price": tx["price"], "trade_date": used_date})
+                                              "price": tx["price"], "trade_date": used_date, "origin": origin})
             return saved
 
     def trades(self) -> dict:

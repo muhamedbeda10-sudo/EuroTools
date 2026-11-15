@@ -7,6 +7,7 @@ import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
 import { LiveProvider } from "@/lib/live";
 import Assistant from "./Assistant";
+import { ASSISTANT_SETTINGS } from "./AssistantSettings";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import { Sparkles,
   Bell, BookOpen, Briefcase, CandlestickChart, Check, FlaskConical, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
@@ -103,6 +104,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   if (firebaseConfigured && !user) return <SignIn />;
   return <Frame email={user?.email ?? null}>{children}</Frame>;
 }
+
+/** Fired on `window` to open the assistant's panel on the conversation saved in local storage. */
+const OPEN_ASSISTANT = "egx:open-assistant";
 
 let feedUpdateStarted = false; // once per page load, however many times the shell re-renders
 
@@ -229,7 +233,8 @@ function FeedUpdater({ provider }: { provider: any }) {
   return null;
 }
 
-type Toast = { seq: number; message: string; note?: string; symbol?: string | null };
+type Toast = { seq: number | string; message: string; note?: string; symbol?: string | null; title?: string; chat?: string };
+const AUTOPILOT_MS = 3 * 60 * 1000;
 const CHECK_MS = 30 * 1000;
 
 /** Work that follows the data: bring automatic paper runs up to date and check the alerts.
@@ -238,6 +243,9 @@ function Background() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   useEffect(() => {
     let busy = false, last = 0, stopped = false;
+    let autopilot = true, lastAuto = 0;   // asked once; the server answers "off" unless the user enabled it
+    const onSettings = () => { autopilot = true; lastAuto = 0; };
+    window.addEventListener(ASSISTANT_SETTINGS, onSettings);
     const work = async (force = false) => {
       if (busy || stopped || document.visibilityState !== "visible") return;
       if (!force && Date.now() - last < 12000) return;
@@ -245,7 +253,24 @@ function Background() {
       last = Date.now();
       try {
         const runs = await api("/api/v1/paper-runs/process", { method: "POST" });
-        if (runs.fills > 0) window.dispatchEvent(new Event(DATA_UPDATED));
+        const sold: any[] = runs.orders ?? [];   // stop-loss / take-profit orders the app just carried out
+        if (runs.fills > 0 || sold.length) window.dispatchEvent(new Event(DATA_UPDATED));
+        if (sold.length && !stopped) {
+          setToasts((t) => [...sold.map((o) => ({ seq: `order-${o.id}`, title: "Order filled", message: o.message, symbol: o.symbol })), ...t].slice(0, 5));
+        }
+        // The assistant's own review, when the user switched the autopilot on. The server decides whether one is due.
+        if (autopilot && Date.now() - lastAuto > AUTOPILOT_MS) {
+          lastAuto = Date.now();
+          const review = await api("/api/v1/assistant/autopilot", { method: "POST" });
+          if (review.mode === "off") autopilot = false;
+          if (review.ran && !stopped) {
+            if (review.changes > 0) window.dispatchEvent(new Event(DATA_UPDATED));
+            setToasts((t) => [{ seq: `auto-${review.chat}`, title: "Autopilot", chat: review.chat,
+                                message: review.error ? `The review stopped: ${review.error}`
+                                  : `Reviewed the portfolio: ${review.changes} change${review.changes === 1 ? "" : "s"}.`,
+                                note: review.error ? undefined : review.summary?.slice(0, 180) }, ...t].slice(0, 5));
+          }
+        }
         const out = await api("/api/v1/alerts/check", { method: "POST" });
         if (out.triggered.length && !stopped) {
           setToasts((t) => [...out.triggered, ...t].slice(0, 5));
@@ -263,16 +288,26 @@ function Background() {
     const onData = () => work();
     window.addEventListener(DATA_UPDATED, onData);
     const timer = setInterval(() => work(), CHECK_MS);
-    return () => { stopped = true; window.removeEventListener(DATA_UPDATED, onData); clearInterval(timer); };
+    return () => {
+      stopped = true;
+      window.removeEventListener(DATA_UPDATED, onData);
+      window.removeEventListener(ASSISTANT_SETTINGS, onSettings);
+      clearInterval(timer);
+    };
   }, []);
   if (!toasts.length) return null;
   return (
     <div className="toasts" role="alert" aria-live="assertive">
       {toasts.map((t) => (
         <div className="toast" key={t.seq}>
-          <div><strong>Alert</strong> · {t.message}{t.note ? <span className="muted"> — {t.note}</span> : null}</div>
+          <div><strong>{t.title ?? "Alert"}</strong> · {t.message}{t.note ? <span className="muted" dir="auto"> — {t.note}</span> : null}</div>
           <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
             {t.symbol && <Link className="btn small" href={`/stock?symbol=${t.symbol}`}>Open {t.symbol}</Link>}
+            {t.chat && <button className="small" onClick={() => {
+              try { localStorage.setItem("egx-assistant-chat", t.chat!); localStorage.setItem("egx-assistant-open", "1"); } catch {}
+              window.dispatchEvent(new Event(OPEN_ASSISTANT));
+              setToasts((all) => all.filter((x) => x.seq !== t.seq));
+            }}>Read the review</button>}
             <button className="small" onClick={() => setToasts((all) => all.filter((x) => x.seq !== t.seq))}>Dismiss</button>
           </div>
         </div>
@@ -286,7 +321,13 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [assistant, setAssistant] = useState(false);
-  useEffect(() => { try { setAssistant(localStorage.getItem("egx-assistant-open") === "1"); } catch {} }, []);
+  const [assistantKey, setAssistantKey] = useState(0);
+  useEffect(() => {
+    try { setAssistant(localStorage.getItem("egx-assistant-open") === "1"); } catch {}
+    const onOpen = () => { setAssistant(true); setAssistantKey((k) => k + 1); };   // re-mount on the requested conversation
+    window.addEventListener(OPEN_ASSISTANT, onOpen);
+    return () => window.removeEventListener(OPEN_ASSISTANT, onOpen);
+  }, []);
   const assistantButton = useRef<HTMLButtonElement>(null);
   const showAssistant = (on: boolean) => {
     setAssistant(on);
@@ -404,7 +445,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
           </footer>
         </div>
-        <Assistant open={assistant} onClose={() => showAssistant(false)} />
+        <Assistant key={assistantKey} open={assistant} onClose={() => showAssistant(false)} />
       </div>
       </LiveProvider>
     </ThemeCtx.Provider>

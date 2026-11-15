@@ -146,7 +146,7 @@ def test_with_full_access_it_carries_out_what_was_asked(tmp_path):
         assert done[1]["navigate"] == "/stock?symbol=COMI"
         assert [e["label"] for e in out if e["type"] == "tool"] == ["Buy 10 COMI (paper trade)", "Open the stock page for COMI"]
         (trade,) = trades(c)
-        assert (trade["type"], trade["symbol"], trade["qty"], trade["note"], trade["origin"]) == ("BUY", "COMI", 10, "test", "manual")
+        assert (trade["type"], trade["symbol"], trade["qty"], trade["note"], trade["origin"]) == ("BUY", "COMI", 10, "test", "assistant")
         result = json.loads(results_of(script.seen[1]["messages"][2])[0]["content"])
         assert result["recorded"]["seq"] == 2 and result["mode"] == "paper" and result["cash_after"] < 50000
         assert any(a["entity"] == "paper_trade" for a in c.get("/api/v1/audit").json())   # recorded like any other trade
@@ -338,7 +338,7 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     assert failed and "live market-data feed" in content
     # no tool reaches sign-in accounts or a broker
     names = {t.name for t in TOOLS}
-    assert not any(word in name for name in names for word in ("account", "password", "broker", "order"))
+    assert not any(word in name for name in names for word in ("account", "password", "broker"))
     assert [s["name"] for s in tool_specs()] == [t.name for t in TOOLS]
 
 

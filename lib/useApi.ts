@@ -4,7 +4,7 @@ import { api } from "./api";
 
 /** Fired on `window` when new market data has been saved. */
 export const DATA_UPDATED = "egx:data-updated";
-const PRICE_PATHS = ["/api/v1/status", "/api/v1/market", "/api/v1/stocks", "/api/v1/watchlist", "/api/v1/portfolio", "/api/v1/trades", "/api/v1/signals"];
+const PRICE_PATHS = ["/api/v1/status", "/api/v1/market", "/api/v1/stocks", "/api/v1/watchlist", "/api/v1/portfolio", "/api/v1/trades", "/api/v1/signals", "/api/v1/orders"];
 
 export function useApi<T = any>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
