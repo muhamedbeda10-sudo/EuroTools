@@ -96,7 +96,10 @@ class App:
         self.settings = settings
         self.cache = cache if cache is not None else {}
         self.feed = feed      # data.feed.Feed when the Younit feed is configured, else None
-        self.younit = younit  # data.younit.YounitClient, used only to refresh the feed
+        self.younit = younit  # data.younit.YounitClient: market data, and the read-only look at the real account
+        # Whether this request may look at the real brokerage account. The API sets it for each
+        # sign-in (broker.may_view); anything that builds an App itself gets the safe answer.
+        self.real_account_allowed = False
         self._app_settings: dict | None = None
         self.market: MarketData = None  # set by bootstrap()
 

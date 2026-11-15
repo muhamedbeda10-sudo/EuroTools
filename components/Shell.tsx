@@ -10,16 +10,19 @@ import Assistant from "./Assistant";
 import { ASSISTANT_SETTINGS } from "./AssistantSettings";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import {
-  Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
+  Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, Landmark, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
   Receipt, Settings, SlidersHorizontal, Sparkles, Star, Sun, TriangleAlert, X, type LucideIcon,
 } from "lucide-react";
 import MarketStrip from "./MarketStrip";
 import SymbolSearch from "./SymbolSearch";
 
+/** The owner's real brokerage account (read-only). Listed only for the sign-in the server names as its owner. */
+const REAL_ACCOUNT = "/account";
+
 const NAV: { label: string; items: [string, string, LucideIcon][] }[] = [
   { label: "Markets", items: [["/", "Dashboard", LayoutDashboard], ["/market", "Market", CandlestickChart], ["/watchlist", "Watchlist", Star]] },
-  { label: "Trading", items: [["/portfolio", "Portfolio", Briefcase], ["/trades", "Trades", Receipt], ["/simulator", "Simulator", FlaskConical],
-                             ["/strategies", "Strategies", SlidersHorizontal]] },
+  { label: "Trading", items: [["/portfolio", "Portfolio", Briefcase], [REAL_ACCOUNT, "Real account", Landmark], ["/trades", "Trades", Receipt],
+                             ["/simulator", "Simulator", FlaskConical], ["/strategies", "Strategies", SlidersHorizontal]] },
   { label: "Research", items: [["/research", "Research & News", Newspaper], ["/journal", "Journal", NotebookPen], ["/alerts", "Alerts", Bell],
                               ["/guide", "Guide", BookOpen]] },
   { label: "System", items: [["/settings", "Settings", Settings]] },
@@ -401,7 +404,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             {NAV.map((group) => (
               <div key={group.label} role="group" aria-label={group.label}>
                 <div className="nav-label">{group.label}</div>
-                {group.items.map(([href, label, Icon]) => (
+                {group.items.filter(([href]) => href !== REAL_ACCOUNT || status?.real_account?.allowed).map(([href, label, Icon]) => (
                   <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
                     <Icon size={16} aria-hidden="true" />{label}
                   </Link>

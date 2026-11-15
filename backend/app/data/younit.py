@@ -1,14 +1,16 @@
-"""Read-only market data from the Younit (EFG Hermes) API.
+"""Read-only access to the Younit (EFG Hermes) API: market data, and a look at the brokerage account.
 
-Only three calls exist here: get a token, list the stocks, read daily history.
-There is deliberately no code for orders, funds, portfolio or anything else
-that touches the brokerage account: this application is paper trading only.
+Everything here reads. Market data: the stock list, daily history, live prices and the
+order book. The account (see `app/broker.py`, which decides who may look): its cash, its
+holdings and whose it is. There is deliberately no code that places, changes or cancels
+an order, or that moves money: the application trades on paper only.
 
 The credentials come from the server's environment (YOUNIT_TRADING_ID,
 YOUNIT_API_KEY). They are never sent to the browser, logged, or stored.
 """
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -24,7 +26,7 @@ HEADERS = {
     "X-Server-Select": "real",
     "x-company-code": "003",
     "x-api-version": "1.0",
-    "User-Agent": "egx-intelligence/0.3 (read-only market data)",
+    "User-Agent": "egx-intelligence/0.3 (read-only)",
 }
 REFRESH_BEFORE_EXPIRY = 300
 EGX_MARKET_ID = 1
@@ -74,6 +76,29 @@ def _num(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _opt(v) -> float | None:
+    """A figure the feed may leave out: None says "not given", which is not the same as zero."""
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _count(v) -> int:
+    """A whole number of shares; anything unreadable or negative counts as none."""
+    n = _opt(v)
+    return max(int(n), 0) if n is not None else 0
+
+
+def _object(body):
+    """The payload of a response that carries one object, unwrapped from its `data` envelope(s)."""
+    for _ in range(3):
+        if isinstance(body, dict) and "data" in body:
+            body = body["data"]
+    return body
 
 
 def _untraded(row: dict) -> bool:
@@ -149,11 +174,16 @@ def _shape(body, items) -> str:
         return f"{len(items)} entries of type {type(items[0]).__name__}"
     if isinstance(body, list):
         return "the list is empty"
+    return "no list found; response is " + _outline(body)
+
+
+def _outline(body) -> str:
+    """The nesting of a response by key names only: `{data, messages} > {errorCode, data}`."""
     path, node = [], body
     while isinstance(node, dict) and len(path) < 4:
-        path.append("{" + keys(node) + "}")
+        path.append("{" + ", ".join(sorted(str(k) for k in node)[:25]) + "}")
         node = node.get("data")
-    return "no list found; response is " + (" > ".join(path) if path else type(body).__name__)
+    return " > ".join(path) if path else type(body).__name__
 
 
 class YounitClient:
@@ -376,6 +406,83 @@ class YounitClient:
                     yield {"q": quotes, "i": indices}
         except stream.StreamError as exc:
             raise YounitError(f"Younit live stream: {exc}") from None
+
+    # ---- the brokerage account (read-only) --------------------------------
+    def account_holder(self) -> dict:
+        """Whose account the credentials open: {"name", "account_code"}.
+
+        The profile also carries an email address and a phone number; they are not kept.
+        """
+        data = _object(self._get("/api/account-utils/GetAccountInfo"))
+        if not isinstance(data, dict):
+            return {"name": None, "account_code": None}
+        name = str(_first(data, "clientName", "name") or "").strip()
+        code = _first(data, "accountCode")
+        return {"name": name[:120] or None, "account_code": str(code).strip()[:40] if code is not None else None}
+
+    def account_summary(self) -> dict:
+        """Cash, the value of the holdings and their total, as the broker states them.
+
+        A figure the broker leaves out is None, never zero. The market must be named in the
+        request: without it the broker answers with every balance at zero.
+        """
+        body = self._get("/api/portfolio/GetPortfolioSummary", {"marketId": EGX_MARKET_ID})
+        data = _object(body)
+        if not isinstance(data, dict) or not any(k in data for k in ("totalCash", "totalStocks", "totalBalance")):
+            # Say what came back (field names only, never values) so the mismatch can be fixed.
+            raise YounitError(f"Younit account summary could not be read: response is {_outline(body)}")
+        return {"cash": _opt(data.get("totalCash")), "stocks": _opt(data.get("totalStocks")),
+                "total": _opt(data.get("totalBalance")), "realized": _opt(data.get("realizedProfit")),
+                "unrealized": _opt(data.get("unRealizedProfit")),
+                "unrealized_pct": _opt(data.get("unRealizedProfitPercentage")),
+                "currency": str(data.get("currencyShortName") or "EGP").strip()[:8] or "EGP"}
+
+    def account_positions(self) -> dict:
+        """What the account holds: {"positions": [...], "stocks_value": the broker's own total or None}.
+
+        Each position: stock_id, symbol (None when the broker sends no usable code, as it does for
+        funds), name, qty, available (free to sell now), unsettled, frozen, avg_cost, cost, price,
+        value, unrealized, unrealized_pct, suspended. An account that holds nothing gives an empty list.
+        """
+        body = self._get("/api/portfolio/GetStocksPortfolio", {"MarketId": EGX_MARKET_ID})
+        data = _object(body)
+        if data is None:
+            return {"positions": [], "stocks_value": None}
+        rows = data.get("stocks") if isinstance(data, dict) else data
+        if rows is None and isinstance(data, dict):
+            return {"positions": [], "stocks_value": _opt(data.get("stocksValue"))}
+        if not isinstance(rows, list):
+            raise YounitError(f"Younit holdings could not be read: {_shape(body, [])}")
+        out = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            qty = _count(raw.get("quantity"))
+            if qty <= 0:
+                continue
+            symbol = str(_first(raw, "ReuterID", "reuterID", "reuterCode", "symbol") or "").split(".")[0].strip().upper()
+            symbol = symbol if SYMBOL.fullmatch(symbol) else None
+            try:
+                stock_id = int(_first(raw, "securityID", "securityId", "stockId"))
+            except (TypeError, ValueError):
+                stock_id = None
+            avg = _opt(raw.get("averageCost"))
+            cost = avg * qty if avg is not None else _opt(raw.get("totalValue"))
+            out.append({
+                "stock_id": stock_id, "symbol": symbol,
+                "name": str(_first(raw, "shortNameE", "shortNameA") or symbol or "Unnamed holding").strip()[:120],
+                # "quantiy" is the broker's own spelling; the correct one is read too, for the day it is fixed
+                "qty": qty, "available": _count(_first(raw, "quantiyValidForSale", "quantityValidForSale")),
+                "unsettled": _count(raw.get("unSettledQty")), "frozen": _count(raw.get("frozenQty")),
+                "avg_cost": avg, "cost": cost, "price": _opt(raw.get("marketPrice")), "value": _opt(raw.get("holdingValue")),
+                "unrealized": _opt(raw.get("unRealizedProfit")), "unrealized_pct": _opt(raw.get("unRealizedProfitPercentage")),
+                "suspended": raw.get("isSuspended") is True,
+            })
+        if rows and not out and any(isinstance(r, dict) for r in rows):
+            first = next(r for r in rows if isinstance(r, dict))
+            if "quantity" not in first:
+                raise YounitError(f"Younit holdings could not be read: {_shape(body, rows)}")
+        return {"positions": out, "stocks_value": _opt(data.get("stocksValue")) if isinstance(data, dict) else None}
 
     def daily_history(self, stock_id: int, date_from: date, date_to: date) -> list[list]:
         """Daily bars [[YYYY-MM-DD, open, high, low, close, volume], ...], oldest first."""

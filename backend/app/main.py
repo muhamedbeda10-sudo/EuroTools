@@ -1,4 +1,6 @@
-"""EGX Intelligence API. Paper trading only: nothing in this service can send an order to a broker."""
+"""EGX Intelligence API. Paper trading only: nothing in this service can send an order to a broker.
+
+The owner's real brokerage account can be looked at (app/broker.py), never traded."""
 from __future__ import annotations
 
 import csv
@@ -18,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, orders, paper
+from . import assistant, broker, orders, paper
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -130,7 +132,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         """Build the per-request application object for the signed-in user."""
         if not firestore:
             feed = Feed(StoreDocs(local_store)) if younit else None
-            return App(local_store, settings, caches.setdefault("local", {}), feed, younit).bootstrap()
+            core = App(local_store, settings, caches.setdefault("local", {}), feed, younit).bootstrap()
+            core.real_account_allowed = broker.may_view(settings, None, signed_in=False)
+            return core
         header = request.headers.get("authorization", "")
         if not header.lower().startswith("bearer "):
             raise AuthError("sign in to use the app")
@@ -141,6 +145,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {},
                    Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
         core.bootstrap()
+        # Only now is the uid proven: the read above was refused unless the token is genuine.
+        core.real_account_allowed = broker.may_view(settings, uid, signed_in=True)
         core.cache = caches.setdefault(uid, {})
         core.market.cache = core.cache.setdefault("market", {})
         caches.move_to_end(uid)
@@ -167,6 +173,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.exception_handler(NotFound)
     async def _not_found(_: Request, exc: NotFound):
         return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @api.exception_handler(broker.NotAllowed)
+    async def _not_the_owner(_: Request, exc: broker.NotAllowed):
+        return JSONResponse({"detail": str(exc)}, status_code=403)
 
     @api.exception_handler(YounitError)
     async def _feed_down(_: Request, exc: YounitError):
@@ -222,12 +232,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.get("/api/v1/status")
     def status(core: App = Depends(get_core)):
         core.store.warm(gets=[("settings", "fees")], lists=["instruments", "bars"])
+        real = broker.access(core)
         return {
             "trading_mode": "paper",
             "live_trading_enabled": False,
             "broker_connected": False,
-            "broker_note": ("Younit is connected for market data only (read-only). This release cannot send orders to any broker."
+            "broker_note": ("Younit is connected for market data, and this sign-in can look at the real brokerage account. "
+                            "Both are read-only: this release cannot send orders to any broker." if real["allowed"]
+                            else "Younit is connected for market data only (read-only). This release cannot send orders to any broker."
                             if younit else "Younit is not connected. This release cannot send orders to any broker."),
+            "real_account": real,
             "provider": core.provider_status(),
             "data": core.market.status(),
             "storage": settings.store_backend,
@@ -460,6 +474,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         out = paper.process_runs(core)
         done = orders.process(core)
         return {**out, "orders": done["filled"]}
+
+    # ---- the real brokerage account (read-only) ----------------------------
+    @api.get("/api/v1/real-account")
+    def real_account(core: App = Depends(get_core), *, fresh: bool = False):
+        """Cash and holdings of the owner's real brokerage account, with the checks made on them.
+
+        Looks only. Refused (403) for every sign-in except the ones named on the server.
+        """
+        return broker.view(core, fresh=fresh)
 
     # ---- protective orders ------------------------------------------------
     @api.get("/api/v1/orders")

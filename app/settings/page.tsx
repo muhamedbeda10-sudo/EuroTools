@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { api, request } from "@/lib/api";
@@ -271,6 +272,7 @@ export default function Settings() {
   const status = useApi("/api/v1/status");
   const feed = useFeedUpdate();
   const pv = status.data?.provider;
+  const real = status.data?.real_account;
   const [tab, setTab] = useState<(typeof TABS)[number][0]>("fees");
   useEffect(() => { if (feed.state.done) window.dispatchEvent(new Event(DATA_UPDATED)); }, [feed.state.done, feed.state.changed]);
   return (
@@ -322,10 +324,22 @@ export default function Settings() {
                 <dt>Sectors / indices from the feed</dt><dd>{pv.live.sectors} stocks classified · {pv.live.indices} indices</dd>
               </>
             )}
+            <dt>Real brokerage account</dt>
+            <dd>
+              {!real?.connected ? "Not connected"
+                : real.allowed ? <>Shown to this sign-in, read-only · <Link href="/account">open</Link></>
+                : "Not enabled for this sign-in"}
+            </dd>
             <dt>Live order execution</dt><dd>Disabled — not part of this release</dd>
             <dt>Fundamental data</dt><dd>Not connected</dd>
           </dl>
           {status.data && <p className="foot-note" style={{ marginTop: 14 }}>{status.data.broker_note}</p>}
+          {real?.connected && !real.allowed && real.user_id && (
+            <div className="note info" style={{ marginTop: 8 }}>
+              The real brokerage account is shown only to its owner. If that is you, add this sign-in&apos;s user ID to{" "}
+              <code>BROKER_ACCOUNT_UIDS</code> on the server: <code style={{ userSelect: "all" }}>{real.user_id}</code>
+            </div>
+          )}
           {pv?.live?.errors?.length > 0 && <div className="note" style={{ marginTop: 8 }}>Live feed notes: {pv.live.errors.join("; ")}</div>}
           {pv?.fields?.length > 0 && (
             <details style={{ margin: "8px 0 12px" }}>

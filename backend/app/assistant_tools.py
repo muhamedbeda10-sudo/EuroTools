@@ -5,6 +5,7 @@ use, so the assistant follows exactly the rules a person does: the same fee
 schedule, the same ledger checks, the same paper-only limits. There is no tool
 for real orders, because no such code exists in this application, and none for
 sign-in accounts or passwords, which stay a manual, administrator-only task.
+One tool looks at the owner's real brokerage account; it reads, for the owner only.
 
 `kind` decides how a call is treated under each access level:
   read    - looks only
@@ -27,7 +28,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import orders, paper
+from . import broker, orders, paper
 from .assistant_prefs import check_trade, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
@@ -44,7 +45,7 @@ KNOWLEDGE_MATCHES = 8
 CANDLE_PATTERNS_SHOWN = 12   # the latest patterns a stock report carries
 PAGES = {
     "dashboard": "/", "market": "/market", "stock": "/stock", "watchlist": "/watchlist", "portfolio": "/portfolio",
-    "trades": "/trades", "strategies": "/strategies", "simulator": "/simulator", "research": "/research",
+    "account": "/account", "trades": "/trades", "strategies": "/strategies", "simulator": "/simulator", "research": "/research",
     "journal": "/journal", "alerts": "/alerts", "guide": "/guide", "settings": "/settings",
 }
 
@@ -294,6 +295,26 @@ def _portfolio(core: App, a: NoArgs) -> dict:
     return {"mode": "paper", "summary": p["summary"], "holdings": p["holdings"], "sector_allocation": p["sector_allocation"],
             "cash_weight_pct": p["cash_weight_pct"], "warnings": p["warnings"],
             "value_history_recent": p["history"]["curve"][-20:]}
+
+
+REAL_HOLDING = ("symbol", "name", "sector", "in_app", "qty", "available", "unsettled", "frozen", "avg_cost", "cost",
+                "price", "value", "weight_pct", "unrealized", "unrealized_pct", "app_price", "app_price_as_of",
+                "price_gap_pct", "suspended")
+
+
+def _real_account(core: App, a: NoArgs) -> dict:
+    if not broker.access(core)["allowed"]:
+        return {"available": False,
+                "reason": "The real brokerage account is not connected, or it is not enabled for this sign-in: only its "
+                          "owner can see it. Everything else in the app is the paper portfolio."}
+    v = broker.view(core)
+    return {"available": True, "account": "REAL brokerage account (EFG Hermes), not the paper portfolio",
+            "read_only": "You can look only. Nothing in this app can buy or sell in this account, and paper trades never change it.",
+            "as_of_cairo": v["as_of"], "market_open_now": v["market_open"], "currency": v["currency"],
+            "summary": v["summary"], "holdings": [pick(h, *REAL_HOLDING) for h in v["holdings"]],
+            "checks": v["checks"], "notes": v["notes"],
+            "fields": "avg_cost, cost, price, value and unrealized are the broker's figures; app_price is the app's own latest "
+                      "price for the same stock; available = shares free to sell now; unsettled = bought but not settled yet."}
 
 
 class Trades(Args):
@@ -854,7 +875,7 @@ def _knowledge_label(a: Knowledge) -> str:
 
 
 class OpenPage(Args):
-    page: Literal["dashboard", "market", "stock", "watchlist", "portfolio", "trades", "strategies", "simulator",
+    page: Literal["dashboard", "market", "stock", "watchlist", "portfolio", "account", "trades", "strategies", "simulator",
                   "research", "journal", "alerts", "guide", "settings"]
     symbol: str | None = Field(default=None, max_length=12, description="Needed for the stock page")
 
@@ -897,6 +918,11 @@ TOOLS: list[Tool] = [
          label=lambda a: "Reading the portfolio"),
     Tool("trades", "The paper ledger: the latest transactions with price, fees, cash movement and realized profit, and "
          "the totals.", Trades, _trades, label=lambda a: "Reading the trade ledger"),
+    Tool("real_account", "The user's REAL brokerage account at EFG Hermes, which is separate from the paper portfolio: "
+         "cash, total value, each holding with its cost, the broker's price, profit and the shares free to sell, and "
+         "the checks the app made on those figures. Read-only: it cannot be traded from this app. Only the "
+         "account's owner can see it; for anyone else it reports that it is unavailable.", NoArgs, _real_account,
+         label=lambda a: "Reading the real brokerage account"),
     Tool("preview_trade", "What a paper order would cost before placing it: fill price, every fee line, total cash, and "
          "whether it would be accepted.", TradeArgs, _preview_trade,
          label=lambda a: f"Pricing a {a.side.lower()} of {a.qty} {a.symbol.upper()}"),

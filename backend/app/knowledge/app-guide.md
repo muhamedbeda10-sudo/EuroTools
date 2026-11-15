@@ -3,8 +3,8 @@ A screen-by-screen description of the app, the rules behind its numbers and the 
 
 ## Purpose
 EGX Intelligence is a personal workspace for following the Egyptian Exchange and practising with a paper
-portfolio. Nothing in it can send an order to a broker. The market feed (Younit, from EFG Hermes) is
-connected for reading prices only.
+portfolio. Nothing in it can send an order to a broker. The connection to Younit (EFG Hermes) only reads:
+market prices for everyone, and the real brokerage account for its owner.
 
 ## Screens
 - **Dashboard**: paper portfolio value and net profit, indices, market breadth, top gainers, losers and most
@@ -20,6 +20,10 @@ connected for reading prices only.
 - **Watchlist**: watched stocks and custom lists.
 - **Portfolio**: holdings, cost, market value, gross profit, estimated net profit after fees, allocation by
   sector, concentration warnings (one stock above 25%, one sector above 40%) and the value history.
+- **Real account**: the owner's brokerage account at EFG Hermes, read-only, shown only to the sign-in the
+  server names as its owner (the page is not in anyone else's menu). Total value, cash, each holding with its
+  quantity, the shares free to sell, unsettled shares, average cost, the broker's price next to the app's own
+  price, value, weight and unrealized profit, and the checks made on the reading. Nothing on it is stored.
 - **Trades**: the ledger. Every paper trade with its price, each fee line, cash movement and realized profit.
   The ledger is append-only: entries are never edited or deleted. It can be exported as CSV.
 - **Strategies**: saved rule sets. Types: moving-average crossover, RSI mean reversion, MACD signal
@@ -38,6 +42,23 @@ connected for reading prices only.
   management, fees, sectors and honest strategy testing.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
   sign-in accounts (administrators only), and the activity log.
+
+## The paper portfolio and the real account
+- They are two separate things and their figures are never mixed or added together.
+- The paper portfolio is the simulation: every trade, protective order, automatic run, backtest and profit
+  figure in the app belongs to it.
+- The real account is read from the broker when its page opens or is refreshed. The app cannot place, change
+  or cancel a real order, and no paper trade changes the real account.
+- Figures on the Real account page (cost, price, value, profit) are the broker's, before selling fees. The
+  "app price" beside them is the latest price in the app's own market data.
+- "Free to sell" is what can be sold now. Shares bought settle two sessions later (T+2) and show as unsettled
+  until then.
+- Each reading carries three checks: the holdings add up to the broker's own total; the total equals cash
+  plus stocks; the broker's price for each holding is within 1% of the app's. After the close a small gap is
+  normal, because the broker may use the official closing price and the app shows the last trade.
+- Holdings the app does not follow (funds, for example) are listed at the broker's price, without analysis.
+- Who may look is set on the server (BROKER_ACCOUNT_UIDS). Settings, Market data, Connections shows whether
+  the current sign-in may, and its user ID.
 
 ## Accounting rules
 - Average cost excludes fees; fees are tracked separately.

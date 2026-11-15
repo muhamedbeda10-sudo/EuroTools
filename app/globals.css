@@ -281,6 +281,15 @@ a.badge:hover { text-decoration: none; background: var(--accent-soft); color: va
 .badge.leg { font-weight: 680; letter-spacing: 0.03em; min-width: 44px; justify-content: center; }
 .tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
+/* checks on a reading: a mark, what was compared, and what came of it */
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.checks li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; font-size: 13px; }
+.checks li > svg { margin-top: 2px; }
+.checks li.ok > svg { color: var(--up); }
+.checks li.warn > svg { color: var(--warn); }
+.checks strong { display: block; font-weight: 620; color: var(--text); }
+.checks span { color: var(--text-2); }
+
 /* ───────────────────────── tables ───────────────────────── */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }

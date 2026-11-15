@@ -482,3 +482,49 @@ def test_the_assistant_is_for_administrators_and_keeps_its_conversations_in_the_
         mine = c.post("/api/v1/assistant/chats", headers=hm)
         assert mine.status_code == 201
         assert c.get(f"/api/v1/assistant/chats/{chat}", headers=hm).status_code == 404     # the admin's conversation is not there
+
+
+# ---- the real brokerage account on the deployed store --------------------------------------
+def test_the_real_account_is_shown_to_its_named_owner_and_to_nobody_else(monkeypatch):
+    from app import broker
+    from app.config import Settings
+    from app.data.feed import Feed
+    from app.main import create_app
+    from tests.test_broker import FakeBroker
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    Feed.reset()
+    broker.reset()
+    owner, admin = ("u-" + uuid.uuid4().hex[:10] for _ in range(2))
+    provision(owner)
+    provision(admin)                                # an administrator too, but not named as the account's owner
+    ho, ha = ({"Authorization": f"Bearer {token(u)}"} for u in (owner, admin))
+    fake = FakeBroker()
+    fake.hold((1, "COMI", "Commercial Bank", 10, 10, 80.0, 82.0))
+
+    named = Settings(store_backend="firestore", firebase_project_id=PROJECT, broker_account_uids=f"someone-else,{owner}")
+    with TestClient(create_app(named, younit=fake)) as c:
+        assert c.get("/api/v1/status", headers=ha).json()["real_account"] == {"connected": True, "allowed": False, "user_id": admin}
+        refused = c.get("/api/v1/real-account", headers=ha)
+        assert refused.status_code == 403 and fake.reads == []          # refused before the broker is asked anything
+        assert c.get("/api/v1/real-account").status_code == 401         # signed out
+
+        assert c.get("/api/v1/status", headers=ho).json()["real_account"] == {"connected": True, "allowed": True, "user_id": owner}
+        mine = c.get("/api/v1/real-account", headers=ho)
+        assert mine.status_code == 200 and mine.json()["summary"]["cash"] == 5000.25
+        assert mine.json()["holdings"][0]["qty"] == 10
+        # nothing about the real account was written to anybody's data
+        for h in (ho, ha):
+            audit = c.get("/api/v1/audit", headers=h).json()
+            assert not [a for a in audit if "real" in a["entity"] or "broker" in a["entity"]]
+            assert c.get("/api/v1/portfolio", headers=h).json()["holdings"] == []
+
+    # nobody is named on the server: nobody sees the account, administrators included
+    fake.reads.clear()
+    broker.reset()
+    with TestClient(create_app(Settings(store_backend="firestore", firebase_project_id=PROJECT), younit=fake)) as c:
+        for h in (ho, ha):
+            assert c.get("/api/v1/status", headers=h).json()["real_account"]["allowed"] is False
+            assert c.get("/api/v1/real-account", headers=h).status_code == 403
+        assert fake.reads == []
+    Feed.reset()
+    broker.reset()
