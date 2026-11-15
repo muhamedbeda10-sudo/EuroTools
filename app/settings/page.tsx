@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
-import { useApi } from "@/lib/useApi";
+import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import { useFeedUpdate } from "@/components/Shell";
 import { State } from "@/components/ui";
 
@@ -249,7 +249,7 @@ export default function Settings() {
   const status = useApi("/api/v1/status");
   const feed = useFeedUpdate();
   const pv = status.data?.provider;
-  useEffect(() => { if (feed.state.done) status.reload(); }, [feed.state.done]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (feed.state.done) window.dispatchEvent(new Event(DATA_UPDATED)); }, [feed.state.done, feed.state.changed]);
   return (
     <>
       <div className="page-head">

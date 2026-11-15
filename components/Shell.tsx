@@ -1,11 +1,11 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
-import { useApi } from "@/lib/useApi";
+import { DATA_UPDATED, useApi } from "@/lib/useApi";
 
 const NAV = [
   ["/", "Dashboard"],
@@ -78,15 +78,17 @@ let feedUpdateStarted = false; // once per page load, however many times the she
 
 /** Pulls the day's prices from the feed in short batches and says what it is doing. */
 export function useFeedUpdate() {
-  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean }>({ running: false });
+  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean; changed?: number }>({ running: false });
   const run = async () => {
     setState({ running: true });
     let failures = 0;
+    let changed = 0;
     for (let i = 0; i < 60; i++) {
       try {
         const r = await api("/api/v1/data/refresh", { method: "POST" });
         failures = 0;
-        if (r.remaining === 0) return setState({ running: false, done: true, total: r.total });
+        changed += r.updated;
+        if (r.remaining === 0) return setState({ running: false, done: true, total: r.total, changed });
         if (r.stalled) return setState({ running: false, error: r.errors?.[0] ?? "The data feed returned nothing." });
         setState({ running: true, left: r.remaining, total: r.total });
       } catch (e: any) {
@@ -103,19 +105,38 @@ export function useFeedUpdate() {
   return { state, run };
 }
 
+const RECHECK_MS = 15 * 60 * 1000;
+
 function FeedUpdater({ provider }: { provider: any }) {
   const { state, run } = useFeedUpdate();
+  const [notice, setNotice] = useState(false);
   const first = provider.with_history === 0;
+  const running = useRef(false);
+  running.current = state.running;
+
+  // Once when the page opens if the data is not from today, then every 15 minutes
+  // while the tab is open and visible, so prices stay current through a session.
   useEffect(() => {
     if (provider.refresh_due && !feedUpdateStarted) {
       feedUpdateStarted = true;
       run();
     }
-  }, [provider.refresh_due]); // eslint-disable-line react-hooks/exhaustive-deps
+    const timer = setInterval(() => {
+      if (!running.current && document.visibilityState === "visible") run();
+    }, RECHECK_MS);
+    return () => clearInterval(timer);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // New data saved: tell every screen to re-read it. No reload, nothing to click.
   useEffect(() => {
-    if (state.done && first) window.location.reload(); // nothing was on screen yet: show the data
-  }, [state.done, first]);
-  if (state.running)
+    if (!state.done || !state.changed) return; // a check that found nothing new changes nothing on screen
+    window.dispatchEvent(new Event(DATA_UPDATED));
+    setNotice(true);
+    const t = setTimeout(() => setNotice(false), 4000);
+    return () => clearTimeout(t);
+  }, [state.done, state.changed]);
+
+  if (state.running && (first || (state.left ?? 0) > 0))
     return (
       <div className="banner" role="status">
         <strong>{first ? "Loading market data for the first time." : "Updating market data."}</strong>{" "}
@@ -125,12 +146,7 @@ function FeedUpdater({ provider }: { provider: any }) {
     );
   if (state.error)
     return <div className="banner danger" role="alert"><strong>Market data was not updated.</strong> {state.error}</div>;
-  if (state.done && !first)
-    return (
-      <div className="banner" role="status">
-        Market data updated. <button className="small" onClick={() => window.location.reload()}>Reload to see it</button>
-      </div>
-    );
+  if (notice) return <div className="banner" role="status">Market data updated.</div>;
   return null;
 }
 
