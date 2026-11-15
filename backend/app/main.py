@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import time
 from collections import OrderedDict
 from datetime import date
 from decimal import Decimal
 from typing import Literal
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -139,8 +142,21 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     # ---- system ----------------------------------------------------------
     @api.get("/health")
-    def health():
-        return {"status": "ok", "environment": settings.app_env}
+    def health(probe: bool = False):
+        out = {"status": "ok", "environment": settings.app_env, "region": os.environ.get("VERCEL_REGION")}
+        if probe and firestore:
+            # How far is the database from this server? Timed with requests that carry no
+            # credentials and are refused, so nothing is read.
+            url = (f"https://firestore.googleapis.com/v1/projects/{settings.firebase_project_id}"
+                   "/databases/(default)/documents/egxMarket/meta")
+            times = []
+            with httpx.Client(timeout=10.0) as client:
+                for _ in range(6):
+                    started = time.monotonic()
+                    client.get(url)
+                    times.append(round((time.monotonic() - started) * 1000))
+            out["database_ms"] = {"first": times[0], "then": sorted(times[1:])}
+        return out
 
     @api.get("/api/v1/status")
     def status(core: App = Depends(get_core)):

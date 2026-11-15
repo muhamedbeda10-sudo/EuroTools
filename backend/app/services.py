@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -63,7 +64,11 @@ class App:
         On the deployed app this first read is also the authentication check:
         the database refuses it unless the caller's sign-in token is valid.
         """
-        cfg = self.store.get("settings", "app")
+        # The two reads every request needs are independent: do them at the same time.
+        with ThreadPoolExecutor(1) as pool:
+            feed_state = pool.submit(self.feed.load) if self.feed is not None else None
+            cfg = self.store.get("settings", "app")
+            feed_state = feed_state.result() if feed_state is not None else None
         if cfg is None:
             try:
                 with self.store.transaction():
@@ -84,7 +89,7 @@ class App:
         self.market = MarketData(self.store, self.cache.setdefault("market", {}),
                                  data_version=int(self._app_settings.get("data_version", 0)),
                                  sample=self.settings.seed_sample_data,
-                                 feed=self.feed.load() if self.feed is not None else None)
+                                 feed=feed_state)
         return self
 
     def provider_status(self) -> dict:

@@ -17,6 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 import httpx
+import pandas as pd
 
 from ..store.errors import AuthError
 from .calendar import is_trading_day
@@ -89,44 +90,64 @@ def empty_index() -> dict:
     return {"version": 0, "instruments": [], "last_dates": {}, "checked": {}, "updated_at": None, "errors": []}
 
 
-class Feed:
-    """In-memory view of the shared cache for one server instance (shared by all users)."""
+def _frame(rows: list) -> pd.DataFrame:
+    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
+    df["date"] = pd.to_datetime(df["date"])
+    return df.set_index("date").sort_index()
 
-    _state: dict = {"version": None, "index": None, "bars": {}}
+
+def _meta(index: dict) -> dict:
+    """The few numbers every request needs, kept apart from the large index document."""
+    dates = [d for d in index["last_dates"].values() if d]
+    return {"version": index["version"], "updated_at": index.get("updated_at"),
+            "symbols": len(index["instruments"]), "with_history": len(dates),
+            "latest_bar_date": max(dates) if dates else None, "errors": index.get("errors", [])[:5]}
+
+
+class Feed:
+    """In-memory view of the shared cache for one server instance (shared by all users).
+
+    A request reads one small document (`meta`) to learn the current version. The
+    large documents are downloaded, and the price tables built, only when that
+    version changes, once per server instance rather than once per user.
+    """
+
+    _state: dict = {"version": None, "meta": None, "instruments": [], "frames": {}}
 
     def __init__(self, docs: SharedDocs):
         self.docs = docs
 
     def load(self) -> dict:
-        index = self.docs.get("index") or empty_index()
+        meta = self.docs.get("meta")
+        if meta is None:  # written by an earlier release that had no meta document
+            index = self.docs.get("index")
+            meta = _meta(index) if index else _meta(empty_index())
         st = Feed._state
-        if st["version"] != index["version"] or st["index"] is None:
-            bars: dict[str, list] = {}
-            names = sorted({chunk_of(i["symbol"]) for i in index["instruments"]})
-            if names:
-                with ThreadPoolExecutor(8) as pool:
-                    for doc in pool.map(self.docs.get, names):
-                        bars.update((doc or {}).get("bars", {}))
-            Feed._state = {"version": index["version"], "index": index, "bars": bars}
+        if st["version"] == meta["version"] and st["meta"] is not None:
+            st["meta"] = meta
+            return st
+        index = self.docs.get("index") or empty_index()
+        frames: dict[str, pd.DataFrame] = {}
+        names = sorted({chunk_of(i["symbol"]) for i in index["instruments"]})
+        if names:
+            with ThreadPoolExecutor(12) as pool:
+                for doc in pool.map(self.docs.get, names):
+                    for symbol, rows in (doc or {}).get("bars", {}).items():
+                        if rows:
+                            frames[symbol] = _frame(rows)
+        Feed._state = {"version": meta["version"], "meta": meta, "instruments": index["instruments"], "frames": frames}
         return Feed._state
 
     @staticmethod
     def reset() -> None:
-        Feed._state = {"version": None, "index": None, "bars": {}}
+        Feed._state = {"version": None, "meta": None, "instruments": [], "frames": {}}
 
     def summary(self, today: date) -> dict:
-        index = self.load()["index"]
-        updated = index.get("updated_at")
-        dates = [d for d in index["last_dates"].values() if d]
+        meta = self.load()["meta"]
+        updated = meta.get("updated_at")
         fresh_today = bool(updated) and updated[:10] == _now().date().isoformat()
-        return {
-            "symbols": len(index["instruments"]),
-            "with_history": len(dates),
-            "latest_bar_date": max(dates) if dates else None,
-            "updated_at": updated,
-            "refresh_due": not fresh_today or len(dates) < len(index["instruments"]),
-            "errors": index.get("errors", [])[:5],
-        }
+        return {**{k: meta[k] for k in ("symbols", "with_history", "latest_bar_date", "updated_at", "errors")},
+                "refresh_due": not fresh_today or meta["with_history"] < meta["symbols"]}
 
     def refresh(self, client: YounitClient, *, today: date, budget_seconds: float = 18.0) -> dict:
         """Update as many symbols as fit in the time budget. Call again while `remaining` > 0."""
@@ -210,6 +231,7 @@ class Feed:
         index["updated_at"] = stamp
         index["version"] = int(index.get("version", 0)) + 1
         self.docs.put("index", index)
+        self.docs.put("meta", _meta(index))  # last: readers switch to the new version only once it is all there
         Feed.reset()
         remaining = sum(1 for s in stocks if due(s["symbol"]))
         return {"updated": done, "remaining": remaining, "total": len(stocks), "errors": errors[:5],

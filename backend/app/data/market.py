@@ -44,7 +44,7 @@ class MarketData:
         self.store = store
         self.cache = cache
         self.data_version = data_version
-        self.feed = feed  # {"version", "index", "bars"} from the shared Younit cache, or None
+        self.feed = feed  # Feed.load() state from the shared Younit cache, or None
         # Synthetic prices are never mixed with a real feed.
         self.sample = sample and feed is None
         self.today = today or date.today()
@@ -70,7 +70,7 @@ class MarketData:
             # list's classification is used where the symbol is known.
             sector = {i["symbol"]: i["sector"] for i in _SEED if i["type"] == "stock"}
             base = [{"symbol": i["symbol"], "name": i["name"], "type": "stock",
-                     "sector": sector.get(i["symbol"], UNCLASSIFIED)} for i in self.feed["index"]["instruments"]]
+                     "sector": sector.get(i["symbol"], UNCLASSIFIED)} for i in self.feed["instruments"]]
         else:
             base = list(_SEED)
         listed = {i["symbol"] for i in base}
@@ -88,9 +88,9 @@ class MarketData:
             for symbol, rows in sample.generate([i for i in instruments if i["symbol"] not in imported], self.today).items():
                 frames[symbol], sources[symbol] = frame(rows), "sample"
         if self.feed is not None:
-            for symbol, rows in self.feed["bars"].items():
-                if rows and symbol not in imported:
-                    frames[symbol], sources[symbol] = frame(rows), "younit"
+            for symbol, df in self.feed["frames"].items():  # built once per server instance, shared by reference
+                if symbol not in imported:
+                    frames[symbol], sources[symbol] = df, "younit"
         for symbol, rows in imported.items():
             frames[symbol], sources[symbol] = frame(rows), "csv"
         self.cache.clear()

@@ -112,9 +112,9 @@ def test_incremental_refresh_merges_and_keeps_history(tmp_path):
     out = feed.refresh(fake, today=date.today())
     assert out["updated"] == 3
     assert all(c[1] > date.today() - timedelta(days=30) for c in fake.calls)   # asked only for the recent tail
-    bars = feed.load()["bars"]["COMI"]
-    assert len(bars) >= 100 and [b[0] for b in bars] == sorted({b[0] for b in bars})
-    assert bars[-1][0] == days(1)[0]
+    bars = feed.load()["frames"]["COMI"]
+    assert len(bars) >= 100 and bars.index.is_monotonic_increasing and bars.index.is_unique
+    assert bars.index[-1].strftime("%Y-%m-%d") == days(1)[0]
 
 
 def test_batches_respect_the_time_budget_and_report_failures(tmp_path):
@@ -256,5 +256,26 @@ def test_a_large_market_is_loaded_in_bounded_batches(tmp_path):
             break
     assert seen == [40, 40, 15] and max(seen) <= feed_module.MAX_PER_BATCH
     state = feed.load()
-    assert len(state["bars"]) == 95 and all(len(b) == 30 for b in state["bars"].values())
+    assert len(state["frames"]) == 95 and all(len(b) == 30 for b in state["frames"].values())
     assert feed.summary(date.today())["refresh_due"] is False
+
+
+def test_a_request_reads_one_small_document_when_nothing_changed(tmp_path):
+    store = Store(tmp_path / "f.sqlite3")
+    docs = StoreDocs(store)
+    reads = []
+    original = docs.get
+    docs.get = lambda id: (reads.append(id), original(id))[1]
+    feed = Feed(docs)
+    feed.refresh(FakeYounit(n=40), today=date.today())
+    reads.clear()
+    feed.load()                      # first load on this instance: meta + index + chunks
+    assert reads[0] == "meta" and "index" in reads and any(r.startswith("chunk_") for r in reads)
+    reads.clear()
+    frames = feed.load()["frames"]
+    assert reads == ["meta"]         # every later request: one small read
+    assert feed.load()["frames"] is frames   # and the same tables, not rebuilt
+    # a database written by the release before `meta` existed still loads
+    store.delete("egxMarket", "meta")
+    Feed.reset()
+    assert len(feed.load()["frames"]) == 3
