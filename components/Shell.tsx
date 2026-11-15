@@ -7,21 +7,31 @@ import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
 import { LiveProvider } from "@/lib/live";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
+import {
+  Bell, BookOpen, Briefcase, CandlestickChart, Check, FlaskConical, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
+  Receipt, Settings, SlidersHorizontal, Star, Sun, X, type LucideIcon,
+} from "lucide-react";
+import MarketStrip from "./MarketStrip";
+import SymbolSearch from "./SymbolSearch";
 
-const NAV = [
-  ["/", "Dashboard"],
-  ["/market", "Market & Categories"],
-  ["/watchlist", "Watchlist"],
-  ["/portfolio", "Portfolio"],
-  ["/trades", "Trades & Transactions"],
-  ["/simulator", "Strategy Simulator"],
-  ["/strategies", "Strategy Management"],
-  ["/research", "Research & News"],
-  ["/journal", "Journal"],
-  ["/alerts", "Alerts"],
-  ["/guide", "Guide"],
-  ["/settings", "Settings"],
-] as const;
+const NAV: { label: string; items: [string, string, LucideIcon][] }[] = [
+  { label: "Markets", items: [["/", "Dashboard", LayoutDashboard], ["/market", "Market", CandlestickChart], ["/watchlist", "Watchlist", Star]] },
+  { label: "Trading", items: [["/portfolio", "Portfolio", Briefcase], ["/trades", "Trades", Receipt], ["/simulator", "Simulator", FlaskConical],
+                             ["/strategies", "Strategies", SlidersHorizontal]] },
+  { label: "Research", items: [["/research", "Research & News", Newspaper], ["/journal", "Journal", NotebookPen], ["/alerts", "Alerts", Bell],
+                              ["/guide", "Guide", BookOpen]] },
+  { label: "System", items: [["/settings", "Settings", Settings]] },
+];
+
+function Logo({ size = 30 }: { size?: number }) {
+  return (
+    <span className="brand-mark" style={{ width: size, height: size }} aria-hidden="true">
+      <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 17l5-6 4 3 8-9" /><path d="M15 5h5v5" />
+      </svg>
+    </span>
+  );
+}
 
 const ThemeCtx = createContext<"light" | "dark">("light");
 export const useTheme = () => useContext(ThemeCtx);
@@ -51,19 +61,32 @@ function SignIn() {
     }
   };
   return (
-    <main style={{ maxWidth: 380, margin: "12vh auto", padding: "0 16px" }}>
-      <form className="card" onSubmit={submit}>
-        <h1>EGX Intelligence</h1>
-        <p className="sub" style={{ marginBottom: 16 }}>Sign in with your account to continue.</p>
-        <div className="field"><label htmlFor="si-email">Email</label>
-          <input id="si-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
-        <div className="field"><label htmlFor="si-pass">Password</label>
-          <input id="si-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
-        {error && <div className="note danger" role="alert">{error}</div>}
-        <button className="primary" type="submit" disabled={busy} style={{ width: "100%" }}>{busy ? "Signing in…" : "Sign in"}</button>
-        <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>Paper trading only. Accounts are created by the administrator.</p>
-      </form>
-    </main>
+    <div className="auth">
+      <div className="pitch">
+        <div className="brand" style={{ padding: 0, color: "#fff" }}><Logo size={34} />EGX Intelligence</div>
+        <div>
+          <h1>Study the Egyptian market. Test ideas without risking money.</h1>
+          <ul>
+            <li><Check size={18} />Live prices, order-book depth and every EGX stock by sector</li>
+            <li><Check size={18} />Strategies backtested on real history, after fees and slippage</li>
+            <li><Check size={18} />A paper portfolio where every profit is shown gross and net</li>
+          </ul>
+        </div>
+        <p className="fine">Paper trading only. This application cannot send an order to a broker.</p>
+      </div>
+      <div className="form">
+        <form onSubmit={submit}>
+          <h2>Sign in</h2>
+          <p className="sub" style={{ marginBottom: 20 }}>Use the account your administrator created for you.</p>
+          <div className="field"><label htmlFor="si-email">Email</label>
+            <input id="si-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+          <div className="field"><label htmlFor="si-pass">Password</label>
+            <input id="si-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+          {error && <div className="note danger" role="alert">{error}</div>}
+          <button className="primary" type="submit" disabled={busy} style={{ width: "100%", height: 40 }}>{busy ? "Signing in…" : "Sign in"}</button>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -74,7 +97,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     if (!firebaseConfigured) return;
     return onAuthStateChanged(clientAuth(), setUser);
   }, []);
-  if (firebaseConfigured && user === undefined) return <div className="empty" style={{ padding: 24 }}>Loading…</div>;
+  if (firebaseConfigured && user === undefined)
+    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }} aria-busy="true" aria-label="Loading"><Logo size={44} /></div>;
   if (firebaseConfigured && !user) return <SignIn />;
   return <Frame email={user?.email ?? null}>{children}</Frame>;
 }
@@ -255,9 +279,10 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   // instead of rendering every screen full of the same error.
   if (email && httpStatus === 401) {
     return (
-      <main style={{ maxWidth: 440, margin: "12vh auto", padding: "0 16px" }}>
-        <div className="card">
-          <h1>No access</h1>
+      <main style={{ maxWidth: 440, margin: "14vh auto", padding: "0 16px" }}>
+        <div className="card" style={{ padding: 24 }}>
+          <Logo size={36} />
+          <h1 style={{ marginTop: 14 }}>No access</h1>
           <p style={{ margin: "10px 0 16px" }}>
             <strong>{email}</strong> is not allowed to use EGX Intelligence. The account may have been deactivated, or it was never
             given access. Ask the administrator.
@@ -273,37 +298,53 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
       <div className="shell">
         <aside className={`side ${open ? "open" : ""}`}>
           <div className="brand">
-            EGX Intelligence<small>Analysis &amp; paper trading</small>
+            <Logo />
+            <span>EGX Intelligence<small>Analysis &amp; paper trading</small></span>
           </div>
           <nav className="nav" aria-label="Main">
-            {NAV.map(([href, label]) => (
-              <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
-                {label}
-              </Link>
+            {NAV.map((group) => (
+              <div key={group.label} role="group" aria-label={group.label}>
+                <div className="nav-label">{group.label}</div>
+                {group.items.map(([href, label, Icon]) => (
+                  <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
+                    <Icon size={16} aria-hidden="true" />{label}
+                  </Link>
+                ))}
+              </div>
             ))}
-
           </nav>
+          <div className="side-foot">
+            <span className="avatar" aria-hidden="true">{(email ?? "L")[0].toUpperCase()}</span>
+            <span className="who"><strong title={email ?? undefined}>{email ?? "Local session"}</strong><span>Paper account</span></span>
+            {email && (
+              <button className="icon-btn ghost" onClick={() => signOut(clientAuth())} aria-label={`Sign out ${email}`} title="Sign out"><LogOut size={16} /></button>
+            )}
+          </div>
         </aside>
         <div className="main">
           <div className="topbar">
-            <button className="menu-btn" onClick={() => setOpen(!open)} aria-expanded={open}>
-              Menu
+            <button className="menu-btn icon-btn ghost" onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Close menu" : "Open menu"}>
+              {open ? <X size={18} /> : <Menu size={18} />}
             </button>
-            {d && (
-              <span className={`badge ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`}>
-                Data: {d.mode === "sample" ? "sample (synthetic)" : d.mode === "mixed" ? "imported + sample" : d.mode === "imported" ? "imported CSV" : d.mode === "younit" ? (d.is_live ? "Younit, live" : "Younit, daily") : "none"}
-                {d.is_live ? ` · ${String(d.live_as_of).slice(11, 16)} Cairo` : d.latest_bar_date ? ` · as of ${d.latest_bar_date}` : ""}
+            <SymbolSearch />
+            <span className="spacer" />
+            {status?.provider?.configured && (
+              <span className={`pill hide-sm ${status.provider.market_open ? "live" : ""}`} title="EGX trades Sunday to Thursday, 10:00 to 14:30 Cairo time">
+                <span className="dot" />{status.provider.market_open ? "Market open" : "Market closed"}
               </span>
             )}
-            <span className="badge">{status?.provider?.configured ? "Younit: market data only · orders off" : "Broker: not connected"}</span>
-            <span className="badge paper">PAPER TRADING</span>
-            <button onClick={toggle} aria-label="Toggle light or dark theme">
-              {theme === "dark" ? "Light" : "Dark"} theme
-            </button>
-            {email && (
-              <button onClick={() => signOut(clientAuth())} title={email} aria-label={`Sign out ${email}`}>Sign out</button>
+            {d && (
+              <span className={`pill hide-sm ${d.mode === "sample" || d.mode === "mixed" ? "warn" : ""}`}>
+                {d.mode === "sample" ? "Sample data" : d.mode === "mixed" ? "Imported + sample data" : d.mode === "imported" ? "Imported data"
+                  : d.mode === "younit" ? (d.is_live ? `Live · ${String(d.live_as_of).slice(11, 16)} Cairo` : `Close of ${d.latest_bar_date}`) : "No data"}
+              </span>
             )}
+            <span className="pill paper" title="Simulated orders only. Nothing is sent to a broker.">Paper trading</span>
+            <button className="icon-btn ghost" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title="Theme">
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
           </div>
+          <MarketStrip />
           {error && <div className="banner danger" role="alert">{error}</div>}
           {d?.has_sample_data && (
             <div className="banner" role="status">
@@ -319,6 +360,10 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             </div>
           )}
           <main className="content">{children}</main>
+          <footer className="foot">
+            <span>Paper trading only. Figures are for study, not investment advice.</span>
+            <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
+          </footer>
         </div>
       </div>
       </LiveProvider>

@@ -5,7 +5,7 @@ import { download } from "@/lib/api";
 import { egp, int, num, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import TradeTicket from "@/components/TradeTicket";
-import { Kpi, Profit, SourceTag, State } from "@/components/ui";
+import { Kpi, Profit, State } from "@/components/ui";
 
 export default function Trades() {
   const { data, loading, error, reload } = useApi("/api/v1/trades");
@@ -61,9 +61,9 @@ export default function Trades() {
               </div>
             </div>
 
-            <div className="card section">
-              <div className="toolbar" style={{ justifyContent: "space-between" }}>
-                <h2 style={{ margin: 0 }}>Ledger ({rows.length})</h2>
+            <div className="card flush section">
+              <div className="toolbar" style={{ justifyContent: "space-between", padding: "14px 18px 0" }}>
+                <h2 style={{ margin: 0 }}>Ledger <span className="muted" style={{ fontWeight: 500 }}>· {rows.length} entries</span></h2>
                 <select aria-label="Filter by type" value={type} onChange={(e) => setType(e.target.value)}>
                   <option value="">All types</option><option>BUY</option><option>SELL</option><option>DEPOSIT</option>
                 </select>
@@ -80,7 +80,7 @@ export default function Trades() {
                         <tr>
                           <td>{r.seq}</td><td>{r.trade_date ?? r.ts.slice(0, 10)}</td>
                           <td className={`l ${r.type === "BUY" ? "up" : r.type === "SELL" ? "down" : ""}`}><strong>{r.type}</strong>{String(r.origin ?? "").startsWith("strategy:") && <span className="badge" title="Placed by an automatic paper-trading run" style={{ marginLeft: 6 }}>auto</span>}</td>
-                          <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}>{r.symbol}</Link> : "—"} <SourceTag source={r.price_source} /></td>
+                          <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link> : "—"}</td>
                           <td>{r.qty ? int(r.qty) : "—"}</td><td>{num(r.price)}</td><td>{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>
                           <td className={tone(r.cash_delta)}>{num(r.cash_delta)}</td>
                           <td className={tone(r.realized_gross)}>{r.realized_gross == null ? "—" : num(r.realized_gross)}</td>
@@ -94,7 +94,7 @@ export default function Trades() {
                               <div className="grid cols-3">
                                 <dl className="kv">
                                   <dt>Gross value</dt><dd>{egp(r.gross)}</dd>
-                                  {r.fees.map((f: any) => <span key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></span>)}
+                                  {r.fees.map((f: any) => <div key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></div>)}
                                   <dt className="total">{r.type === "BUY" ? "Total cash paid" : "Net cash received"}</dt><dd className="total">{egp(Math.abs(r.cash_delta))}</dd>
                                 </dl>
                                 {r.type === "SELL" && (
@@ -107,7 +107,7 @@ export default function Trades() {
                                   </dl>
                                 )}
                                 <div>
-                                  <div className="muted">Recorded {r.ts}{r.fees_verified === false ? " · fee schedule unverified at the time" : ""}</div>
+                                  <div className="muted">Recorded {r.ts} · price source: {r.price_source ?? "—"}{r.fees_verified === false ? " · fee schedule unverified at the time" : ""}</div>
                                   <div style={{ marginTop: 6 }}>{r.note || <span className="muted">No note.</span>}</div>
                                   <div style={{ marginTop: 8 }}><Link className="btn small" href={`/journal?symbol=${r.symbol}&trade=${r.seq}&date=${r.trade_date}`}>Write a journal entry for this trade</Link></div>
                                 </div>

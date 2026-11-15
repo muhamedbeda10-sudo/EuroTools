@@ -1,10 +1,11 @@
 "use client";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api";
-import { big, pct, tone } from "@/lib/format";
+import { big, pct } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import StockTable from "@/components/StockTable";
-import { Chg, Kpi, State } from "@/components/ui";
+import Treemap, { HeatScale } from "@/components/Treemap";
+import { CardHead, Chg, Kpi, State } from "@/components/ui";
 
 export default function Market() {
   const [sector, setSector] = useState("");
@@ -21,6 +22,8 @@ export default function Market() {
     return p.toString();
   }, [sector, category, q]);
   const stocks = useApi(`/api/v1/stocks${params ? `?${params}` : ""}`);
+  const all = useApi("/api/v1/stocks"); // the map always shows the whole market
+  const [view, setView] = useState<"map" | "sectors">("map");
   const [newCat, setNewCat] = useState({ name: "", symbols: "" });
   const [catError, setCatError] = useState<string | null>(null);
   const b = ov.data?.breadth;
@@ -46,63 +49,70 @@ export default function Market() {
     <>
       <div className="page-head">
         <div>
-          <h1>Market &amp; Categories</h1>
-          <p className="sub">EGX stocks by official sector, plus your own custom groups.</p>
+          <h1>Market</h1>
+          <p className="sub">Every EGX stock by sector, with your own custom groups.</p>
+        </div>
+        <div className="seg" role="group" aria-label="View">
+          <button className={view === "map" ? "on" : ""} aria-pressed={view === "map"} onClick={() => setView("map")}>Market map</button>
+          <button className={view === "sectors" ? "on" : ""} aria-pressed={view === "sectors"} onClick={() => setView("sectors")}>Sectors</button>
         </div>
       </div>
 
       {b && (
         <div className="grid cols-4">
-          <Kpi label="Stocks covered" value={String(b.covered)} hint="Seed list; add more by CSV import in Settings" />
-          <Kpi label="Rising / falling" value={`${b.advancers} / ${b.decliners}`} hint={`${b.unchanged} unchanged`} />
+          <Kpi label="Stocks covered" value={String(b.covered)} hint={`${all.data?.filter((r: any) => r.volume > 0).length ?? "—"} traded today`} />
+          <Kpi label="Rising / falling" value={<><span className="up">{b.advancers}</span> <span className="muted">/</span> <span className="down">{b.decliners}</span></>} hint={`${b.unchanged} unchanged`} />
           <Kpi label="Average move today" value={pct(b.avg_change_pct)} toneOf={b.avg_change_pct} />
-          <Kpi label="Trading activity" value={big(b.volume)} hint={`shares · turnover ≈ EGP ${big(b.turnover_approx)}`} />
+          <Kpi label="Value traded" value={`EGP ${big(b.turnover_approx)}`} hint={`${big(b.volume)} shares · approximate`} />
         </div>
       )}
 
-      <div className="card section">
-        <h2>Sector performance</h2>
-        <State loading={sectors.loading} error={sectors.error}>
-          {sectors.data && (
-            <div className="heat">
-              {sectors.data.map((s: any) => (
-                <button key={s.sector} className={sector === s.sector ? "on" : ""} aria-pressed={sector === s.sector}
-                  onClick={() => (setSector(sector === s.sector ? "" : s.sector), setCategory(""))}>
-                  <div className="n" title={s.sector}>{s.sector}</div>
-                  <div className={tone(s.day_pct)}>{pct(s.day_pct)} <span className="muted">today</span></div>
-                  <div className="muted" style={{ fontSize: 12 }}>{s.stocks} stocks · month {pct(s.month_pct)}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </State>
-        {sectors.data && (
-          <div className="table-wrap" style={{ marginTop: 14 }}>
-            <table>
-              <thead>
-                <tr><th>Sector</th><th>Stocks</th><th>Day</th><th>Week</th><th>Month</th><th>Avg volume (20d)</th><th>Best today</th><th>Worst today</th><th>Strength vs market (1m)</th></tr>
-              </thead>
-              <tbody>
-                {sectors.data.map((s: any) => (
-                  <tr key={s.sector} className="clickable" onClick={() => (setSector(s.sector), setCategory(""))}>
-                    <td>{s.sector}</td><td>{s.stocks}</td><td><Chg v={s.day_pct} /></td><td><Chg v={s.week_pct} /></td><td><Chg v={s.month_pct} /></td>
-                    <td>{big(s.avg_volume)}</td>
-                    <td>{s.best ? <>{s.best.symbol} <Chg v={s.best.change_pct} /></> : "—"}</td>
-                    <td>{s.worst ? <>{s.worst.symbol} <Chg v={s.worst.change_pct} /></> : "—"}</td>
-                    <td><Chg v={s.relative_strength} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Sector figures are equal-weight averages of the covered stocks, not official sector indices.</p>
-      </div>
+      {view === "map" ? (
+        <div className="card section">
+          <CardHead title="Market map"><HeatScale /></CardHead>
+          <State loading={all.loading} error={all.error} skeleton={<span className="skel" style={{ height: 460 }} />}>
+            {all.data && <Treemap rows={all.data} />}
+          </State>
+          <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+            Each tile is a stock, grouped by sector. A larger tile traded more value today (on a compressed scale, so small stocks stay visible);
+            colour shows the day&apos;s change. Select a tile to open the stock.
+          </p>
+        </div>
+      ) : (
+        <div className="card flush section">
+          <div className="card-head" style={{ padding: "16px 18px 0" }}><h2>Sector performance</h2></div>
+          <State loading={sectors.loading} error={sectors.error}>
+            {sectors.data && (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Sector</th><th>Stocks</th><th>Day</th><th>Week</th><th>Month</th><th>Avg volume (20d)</th><th>Best today</th><th>Worst today</th><th>Vs market (1m)</th></tr>
+                  </thead>
+                  <tbody>
+                    {sectors.data.map((s: any) => (
+                      <tr key={s.sector} className="clickable" onClick={() => (setSector(s.sector), setCategory(""))} aria-selected={sector === s.sector}>
+                        <td><strong>{s.sector}</strong></td><td>{s.stocks}</td><td><Chg v={s.day_pct} /></td><td><Chg v={s.week_pct} /></td><td><Chg v={s.month_pct} /></td>
+                        <td>{big(s.avg_volume)}</td>
+                        <td>{s.best ? <>{s.best.symbol} <Chg v={s.best.change_pct} /></> : "—"}</td>
+                        <td>{s.worst ? <>{s.worst.symbol} <Chg v={s.worst.change_pct} /></> : "—"}</td>
+                        <td><Chg v={s.relative_strength} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </State>
+          <p className="muted" style={{ fontSize: 12, padding: "10px 18px 14px", margin: 0 }}>Sector figures are equal-weight averages of the covered stocks, not official sector indices. Select a row to filter the list below.</p>
+        </div>
+      )}
 
-      <div className="card section">
-        <h2>{selected ? `${selected.sector} — ${selected.stocks} stocks` : category ? "Custom category" : "All stocks"}</h2>
-        <div className="toolbar">
-          <input aria-label="Search by symbol or company" placeholder="Search symbol or company" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="card flush section">
+        <div className="card-head" style={{ padding: "16px 18px 0" }}>
+          <h2>{selected ? `${selected.sector} · ${selected.stocks} stocks` : category ? "Custom category" : "All stocks"}{stocks.data ? <span className="muted" style={{ fontWeight: 500 }}> · {stocks.data.length} shown</span> : null}</h2>
+        </div>
+        <div className="toolbar" style={{ padding: "0 18px" }}>
+          <input aria-label="Search by symbol or company" placeholder="Filter by ticker or company" value={q} onChange={(e) => setQ(e.target.value)} />
           <select aria-label="Sector" value={sector} onChange={(e) => (setSector(e.target.value), setCategory(""))}>
             <option value="">All sectors</option>
             {sectors.data?.map((s: any) => <option key={s.sector}>{s.sector}</option>)}
@@ -111,7 +121,7 @@ export default function Market() {
             <option value="">No custom category</option>
             {cats.data?.map((c: any) => <option key={c.id} value={c.id}>{c.name} ({c.symbols.length})</option>)}
           </select>
-          {(sector || category || q) && <button onClick={() => (setSector(""), setCategory(""), setQ(""))}>Clear filters</button>}
+          {(sector || category || q) && <button className="ghost" onClick={() => (setSector(""), setCategory(""), setQ(""))}>Clear filters</button>}
         </div>
         <State loading={stocks.loading} error={stocks.error}>
           {stocks.data && <StockTable rows={stocks.data} onChange={stocks.reload} empty="No stocks match these filters." />}

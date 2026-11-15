@@ -12,7 +12,7 @@ export function LiveLast({ symbol, last }: { symbol: string; last?: number | nul
 export function LiveChg({ symbol, value }: { symbol: string; value?: number | null }) {
   const tick = useTick(symbol);
   const v = tick?.[1] ?? value;
-  return <span className={tone(v)}>{pct(v)}</span>;
+  return <span className={tone(v)}><span aria-hidden="true" style={{ fontSize: "0.72em" }}>{v == null || v === 0 ? "" : v > 0 ? "▲ " : "▼ "}</span>{pct(v)}</span>;
 }
 
 export function LiveVolume({ symbol, value }: { symbol: string; value?: number | null }) {

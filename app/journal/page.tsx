@@ -85,7 +85,7 @@ function Journal() {
               </div>
               <dl className="kv" style={{ gridTemplateColumns: "minmax(140px, 220px) 1fr", marginTop: 8 }}>
                 {QUESTIONS.filter(([k]) => e[k]).map(([k, label]) => (
-                  <span key={k} style={{ display: "contents" }}><dt>{label}</dt><dd style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{e[k]}</dd></span>
+                  <div key={k} style={{ display: "contents" }}><dt>{label}</dt><dd style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{e[k]}</dd></div>
                 ))}
               </dl>
               {e.status === "open" && !e.outcome && <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Outcome not recorded yet.</p>}

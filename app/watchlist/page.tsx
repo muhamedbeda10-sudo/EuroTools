@@ -15,7 +15,7 @@ export default function Watchlist() {
         </div>
         <Link className="btn" href="/market">Browse all stocks</Link>
       </div>
-      <div className="card">
+      <div className="card flush">
         <State loading={wl.loading} error={wl.error}>
           {wl.data && <StockTable rows={wl.data} onChange={wl.reload} empty="Your watchlist is empty. Use the Watch button on the Market page or on any stock." />}
         </State>

@@ -71,7 +71,7 @@ export default function TradeTicket({ symbol, onDone }: { symbol: string; onDone
           <dt>Fill price (close of {preview.trade_date})</dt><dd>{num(preview.price)}</dd>
           <dt>Gross value</dt><dd>{egp(preview.gross)}</dd>
           {preview.fees.map((f: any) => (
-            <span key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></span>
+            <div key={f.code} style={{ display: "contents" }}><dt>{f.name}</dt><dd>{num(f.amount)}</dd></div>
           ))}
           <dt>Total fees{preview.fees_verified ? "" : " (unverified schedule)"}</dt><dd>{egp(preview.fees_total)}</dd>
           <dt className="total">{side === "BUY" ? "Total cash paid" : "Net cash received"}</dt>
