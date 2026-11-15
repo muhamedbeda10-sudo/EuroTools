@@ -22,4 +22,23 @@ class MovingYounit(FakeYounit):
             time.sleep(0.7)
 
 
+    def follow_market(self, stocks, index_ids=(), max_seconds=240.0):
+        started, n = time.monotonic(), 0
+        base = {s["symbol"]: 10.0 * s["stock_id"] for s in stocks}
+        yield {"q": {sym: [p, 0.0, 1000.0] for sym, p in base.items()}, "i": {"1": [31000.0, 0.4]}}
+        while time.monotonic() - started < min(max_seconds, 8):
+            n += 1
+            sym = sorted(base)[n % len(base)]
+            base[sym] = round(base[sym] + (0.05 if n % 3 else -0.02), 3)
+            yield {"q": {sym: [base[sym], round(n * 0.3 - 1, 2), 1000.0 + n * 50]}, "i": {"1": [31000.0 + n, 0.4 + n / 100]}}
+            time.sleep(0.5)
+
+
+# The browser test must not depend on the hour it is run at.
+import app.data.feed as _feed  # noqa: E402
+import app.main as _main  # noqa: E402
+import app.services as _services  # noqa: E402
+
+_feed.market_open = _services.market_open = _main.market_open = lambda *a, **k: True
+
 app = create_app(Settings(), younit=MovingYounit())

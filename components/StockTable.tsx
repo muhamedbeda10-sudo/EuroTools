@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { big, num } from "@/lib/format";
+import { LiveChg, LiveLast, LiveVolume } from "./LiveCells";
 import { Chg, SourceTag, Spark } from "./ui";
 
 export default function StockTable({ rows, onChange, empty = "No stocks to show." }: { rows: any[]; onChange?: () => void; empty?: string }) {
@@ -25,11 +25,11 @@ export default function StockTable({ rows, onChange, empty = "No stocks to show.
               <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
               <td className="l">{r.name}</td>
               <td className="l muted">{r.sector}</td>
-              <td>{num(r.last)}</td>
-              <td><Chg v={r.change_pct} /></td>
+              <td><LiveLast symbol={r.symbol} last={r.last} /></td>
+              <td><LiveChg symbol={r.symbol} value={r.change_pct} /></td>
               <td><Chg v={r.week_pct} /></td>
               <td><Chg v={r.month_pct} /></td>
-              <td>{big(r.volume)}</td>
+              <td><LiveVolume symbol={r.symbol} value={r.volume} /></td>
               <td><Spark data={r.spark} /></td>
               <td>{r.as_of} <SourceTag source={r.source} live={r.live} /></td>
               <td>

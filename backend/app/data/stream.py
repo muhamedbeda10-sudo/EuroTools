@@ -100,9 +100,11 @@ def snapshot(url: str, adapter_set: str, groups: list[dict], *, user: str | None
     return {"values": values, "errors": errors[:5], "status": state["status"]}
 
 
-def follow(url: str, adapter_set: str, group: dict, *, user: str | None = None, password: str | None = None,
+def follow(url: str, adapter_set: str, group: dict | list[dict], *, user: str | None = None, password: str | None = None,
            max_seconds: float = 240.0, heartbeat: float = 15.0, settle: float = 0.25):
-    """Stay subscribed to one group and yield {item: {field: value}} every time something changes.
+    """Stay subscribed to one or more groups and yield {item: {field: value}} every time something changes.
+
+    Only the fields that changed are yielded for an item (its first message carries them all).
 
     Yields None when `heartbeat` seconds pass in silence (so the caller can keep
     its own connection alive) and stops after `max_seconds`. Bursts of updates
@@ -119,33 +121,45 @@ def follow(url: str, adapter_set: str, group: dict, *, user: str | None = None, 
         def onServerError(self, code, message):  # noqa: N802
             events.put(StreamError(f"streaming server refused the connection ({code}: {message})"))
 
-    class Sub(_Quiet):
-        def onItemUpdate(self, update):  # noqa: N802
-            row = {}
-            for field in group["fields"]:
-                value = update.getValue(field)
-                if value is not None:
-                    row[field] = value
-            events.put((update.getItemName(), row))
+    groups = [group] if isinstance(group, dict) else list(group)
+    refused = {"count": 0}
 
-        def onSubscriptionError(self, code, message):  # noqa: N802
-            events.put(StreamError(f"subscription refused ({code}: {message})"))
+    def listener(g: dict):
+        class Sub(_Quiet):
+            def onItemUpdate(self, update):  # noqa: N802
+                row = {}
+                for field in g["fields"]:
+                    value = update.getValue(field)
+                    if value is not None:
+                        row[field] = value
+                events.put((update.getItemName(), row))
+
+            def onSubscriptionError(self, code, message):  # noqa: N802
+                refused["count"] += 1
+                # One refused group among several is survivable; all of them is not.
+                if g.get("required", True) and refused["count"] >= sum(1 for x in groups if x.get("required", True)):
+                    events.put(StreamError(f"subscription refused ({code}: {message})"))
+        return Sub()
 
     client = LightstreamerClient(url, adapter_set)
     if user is not None:
         client.connectionDetails.setUser(user)
         client.connectionDetails.setPassword(password)
     client.addListener(Connection())
-    sub = Subscription("MERGE", group["items"], group["fields"])
-    if group.get("data_adapter"):
-        sub.setDataAdapter(group["data_adapter"])
-    sub.setRequestedSnapshot("yes")
-    sub.addListener(Sub())
+    subs = []
+    for g in groups:
+        sub = Subscription("MERGE", g["items"], g["fields"])
+        if g.get("data_adapter"):
+            sub.setDataAdapter(g["data_adapter"])
+        sub.setRequestedSnapshot("yes")
+        sub.addListener(listener(g))
+        subs.append(sub)
     deadline = time.monotonic() + max_seconds
     state: dict[str, dict] = {}
     try:
         client.connect()
-        client.subscribe(sub)
+        for sub in subs:
+            client.subscribe(sub)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -155,19 +169,23 @@ def follow(url: str, adapter_set: str, group: dict, *, user: str | None = None, 
             except queue.Empty:
                 yield None
                 continue
-            changed: set[str] = set()
+            changed: dict[str, dict] = {}
             end = time.monotonic() + settle
             while True:
                 if isinstance(event, Exception):
                     raise event
                 item, row = event
-                state.setdefault(item, {}).update(row)
-                changed.add(item)
+                known = state.setdefault(item, {})
+                delta = {k: v for k, v in row.items() if known.get(k) != v}
+                if delta:
+                    known.update(delta)
+                    changed.setdefault(item, {}).update(delta)
                 try:
                     event = events.get(timeout=max(end - time.monotonic(), 0))
                 except queue.Empty:
                     break
-            yield {item: dict(state[item]) for item in changed}
+            if changed:
+                yield {item: {"changed": delta, "row": dict(state[item])} for item, delta in changed.items()}
     finally:
         try:
             client.disconnect()

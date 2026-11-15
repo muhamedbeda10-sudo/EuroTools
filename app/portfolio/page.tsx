@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { egp, int, num, pct } from "@/lib/format";
+import { egp, int, num, pct, price } from "@/lib/format";
+import { Flash, useTick } from "@/lib/live";
 import { useApi } from "@/lib/useApi";
 import { LinesChart } from "@/components/Charts";
 import { Chg, Kpi, Profit, SourceTag, State } from "@/components/ui";
@@ -21,6 +22,28 @@ function Alloc({ rows, label }: { rows: { name: string; weight: number; value: n
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** One holding. Last price, market value and gross P/L follow the live tick; the net estimate
+ *  (which needs the fee schedule) stays the server's figure until the next refresh. */
+function HoldingRow({ h }: { h: any }) {
+  const tick = useTick(h.symbol);
+  const last = tick?.[0] ?? h.last;
+  const value = tick ? last * h.qty : h.market_value;
+  const gross = tick ? value - h.cost : h.unrealized_gross;
+  const grossPct = tick && h.cost ? (gross / h.cost) * 100 : h.unrealized_gross_pct;
+  return (
+    <tr>
+      <td><Link href={`/stock?symbol=${h.symbol}`}><strong>{h.symbol}</strong></Link></td>
+      <td className="l muted">{h.sector}</td><td>{int(h.qty)}</td><td>{price(h.avg_price)}</td>
+      <td><Flash value={last}>{price(last)}</Flash></td>
+      <td>{egp(value)}</td><td>{num(h.weight_pct)}%</td>
+      <td className={gross > 0 ? "up" : gross < 0 ? "down" : ""}>{egp(gross)}</td>
+      <td><Chg v={grossPct} /></td>
+      <td className={h.unrealized_net_est > 0 ? "up" : h.unrealized_net_est < 0 ? "down" : ""}>{egp(h.unrealized_net_est)}</td>
+      <td>{h.as_of} <SourceTag source={h.source} live={!!tick} /></td>
+    </tr>
   );
 }
 
@@ -61,17 +84,7 @@ export default function Portfolio() {
                         <th>Gross P/L</th><th>Gross %</th><th>Net P/L est.</th><th>As of</th></tr>
                     </thead>
                     <tbody>
-                      {data.holdings.map((h: any) => (
-                        <tr key={h.symbol}>
-                          <td><Link href={`/stock?symbol=${h.symbol}`}><strong>{h.symbol}</strong></Link></td>
-                          <td className="l muted">{h.sector}</td><td>{int(h.qty)}</td><td>{num(h.avg_price)}</td><td>{num(h.last)}</td>
-                          <td>{egp(h.market_value)}</td><td>{num(h.weight_pct)}%</td>
-                          <td className={h.unrealized_gross > 0 ? "up" : h.unrealized_gross < 0 ? "down" : ""}>{egp(h.unrealized_gross)}</td>
-                          <td><Chg v={h.unrealized_gross_pct} /></td>
-                          <td className={h.unrealized_net_est > 0 ? "up" : h.unrealized_net_est < 0 ? "down" : ""}>{egp(h.unrealized_net_est)}</td>
-                          <td>{h.as_of} <SourceTag source={h.source} /></td>
-                        </tr>
-                      ))}
+                      {data.holdings.map((h: any) => <HoldingRow key={h.symbol} h={h} />)}
                     </tbody>
                   </table>
                 </div>

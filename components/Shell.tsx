@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
+import { LiveProvider } from "@/lib/live";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 
 const NAV = [
@@ -212,6 +213,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
   }
   return (
     <ThemeCtx.Provider value={theme}>
+      <LiveProvider enabled={!!status?.provider?.configured && !!status?.provider?.market_open}>
       <div className="shell">
         <aside className={`side ${open ? "open" : ""}`}>
           <div className="brand">
@@ -262,6 +264,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           <main className="content">{children}</main>
         </div>
       </div>
+      </LiveProvider>
     </ThemeCtx.Provider>
   );
 }

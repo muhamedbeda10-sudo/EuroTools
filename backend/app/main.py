@@ -200,6 +200,29 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
                category: str | None = None):
         return core.stock_rows(sector, q, category)
 
+    def sse(ticks, hello: dict):
+        """Server-sent events from a generator of ticks (None = keep-alive)."""
+        def events():
+            yield f"event: hello\ndata: {json.dumps(hello)}\n\n"
+            try:
+                for tick in ticks:
+                    if tick is None:
+                        yield ": keep-alive\n\n"
+                    else:
+                        yield f"data: {json.dumps(clean(tick), separators=(',', ':'))}\n\n"
+                yield "event: end\ndata: {}\n\n"
+            except YounitError as exc:
+                yield f"event: failed\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            finally:
+                ticks.close()  # hang up on the feed as soon as the page stops listening
+        return StreamingResponse(events(), media_type="text/event-stream", headers=NO_BUFFERING)
+
+    @api.get("/api/v1/market/stream")
+    def market_stream(core: App = Depends(get_core)):
+        """Server-sent events: the latest price of every stock, as trades happen."""
+        ticks, indices = core.follow_market(STREAM_SECONDS)
+        return sse(ticks, {"market_open": market_open(), "indices": {str(k): v for k, v in indices.items()}})
+
     @api.get("/api/v1/stocks/{symbol}/stream")
     def stock_stream(core: App = Depends(get_core), *, symbol: str):
         """Server-sent events: one message per change in the stock's price or order book.
@@ -209,22 +232,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         limit; the page simply opens the next one.
         """
         ticks = core.follow(symbol, STREAM_SECONDS)  # validates the symbol before any bytes are sent
-
-        def events():
-            yield f"event: hello\ndata: {json.dumps({'market_open': market_open()})}\n\n"
-            try:
-                for tick in ticks:
-                    if tick is None:
-                        yield ": keep-alive\n\n"
-                    else:
-                        yield f"data: {json.dumps(clean(tick))}\n\n"
-                yield "event: end\ndata: {}\n\n"
-            except YounitError as exc:
-                yield f"event: failed\ndata: {json.dumps({'detail': str(exc)})}\n\n"
-            finally:
-                ticks.close()  # hang up on the feed as soon as the page stops listening
-
-        return StreamingResponse(events(), media_type="text/event-stream", headers=NO_BUFFERING)
+        return sse(ticks, {"market_open": market_open()})
 
     @api.get("/api/v1/stocks/{symbol}/depth")
     def stock_depth(core: App = Depends(get_core), *, symbol: str):

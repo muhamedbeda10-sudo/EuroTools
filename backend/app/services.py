@@ -131,6 +131,16 @@ class App:
             raise NotFound(f"{symbol} is not in the live feed")
         return self.younit.follow_stock(stock["stock_id"], max_seconds=max_seconds)
 
+    def follow_market(self, max_seconds: float):
+        """Tick-by-tick prices of every tracked stock and the indices."""
+        if self.feed is None or self.younit is None:
+            raise NotFound("live streaming needs the market-data feed")
+        state = self.market.feed
+        tracked = [i for i in state["instruments"] if i["symbol"] in state["frames"]] or state["instruments"]
+        indices = {i["id"]: i["name"] for i in (state.get("live") or {}).get("indices") or []}
+        ticks = self.younit.follow_market(tracked, list(indices), max_seconds=max_seconds)
+        return ticks, indices
+
     def poll_live(self) -> dict:
         """Latest prices for the running session. Does nothing while the market is closed."""
         if self.feed is None or self.younit is None:

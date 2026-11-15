@@ -35,6 +35,7 @@ DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m
                 "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
 TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_TradedValue",
                              "m_TradesCount", "m_LastTradeVolume", "m_Change", "m_PercentChange", "m_LastUpdated"]
+MARKET_TICK_FIELDS = ["m_LastTradePrice", "m_PercentChange", "m_TradedVolume"]
 INDEX_FIELDS = ["m_IndexName", "m_EnglishName", "m_IndexValue", "m_IndexClose", "m_PrecentChange"]
 SYMBOL = re.compile(r"[A-Z0-9_]{1,12}")
 
@@ -279,9 +280,48 @@ class YounitClient:
                 if update is None:
                     yield None
                     continue
-                row = update.get(item)
+                row = (update.get(item) or {}).get("row")
                 if row:
                     yield {"quote": tick_quote(row), "depth": depth.build(row)}
+        except stream.StreamError as exc:
+            raise YounitError(f"Younit live stream: {exc}") from None
+
+    def follow_market(self, stocks: list[dict], index_ids: list[int] = (), *, max_seconds: float = 240.0):
+        """Live feed of the whole market.
+
+        Yields {"q": {symbol: [last, change_pct, volume]}, "i": {index id: [value, change_pct]}} holding only
+        what changed since the previous message, and None on heartbeats.
+        """
+        from . import stream
+        token = self._authorization().split(" ", 1)[-1]
+        by_item = {f"sy{s['stock_id']}": s["symbol"] for s in stocks}
+        items = sorted(by_item)
+        groups = [{"items": items[i:i + STREAM_CHUNK], "fields": MARKET_TICK_FIELDS, "data_adapter": STREAM_ADAPTER}
+                  for i in range(0, len(items), STREAM_CHUNK)]
+        groups += [{"items": [f"ix{int(i)}"], "fields": ["m_IndexValue", "m_PrecentChange"], "data_adapter": STREAM_ADAPTER,
+                    "required": False} for i in index_ids]
+        try:
+            for update in stream.follow(STREAM_URL, STREAM_ADAPTER, groups, user=self._trading_id, password=token,
+                                        max_seconds=max_seconds, settle=0.4):
+                if update is None:
+                    yield None
+                    continue
+                quotes, indices = {}, {}
+                for item, change in update.items():
+                    row = change["row"]
+                    if item in by_item:
+                        last = _num(row.get("m_LastTradePrice"))
+                        if last > 0:
+                            pct = row.get("m_PercentChange")
+                            quotes[by_item[item]] = [last, _num(pct) if pct not in (None, "") else None,
+                                                     _num(row.get("m_TradedVolume")) or None]
+                    elif item.startswith("ix"):
+                        value = _num(row.get("m_IndexValue"))
+                        if value > 0:
+                            pct = row.get("m_PrecentChange")
+                            indices[item[2:]] = [value, _num(pct) if pct not in (None, "") else None]
+                if quotes or indices:
+                    yield {"q": quotes, "i": indices}
         except stream.StreamError as exc:
             raise YounitError(f"Younit live stream: {exc}") from None
 

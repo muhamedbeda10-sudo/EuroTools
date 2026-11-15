@@ -125,3 +125,9 @@ dl.kv .total { font-weight: 700; border-top: 1px solid var(--border); padding-to
   .topbar, .banner { padding-left: 14px; padding-right: 14px; }
   .cols-2 { grid-template-columns: 1fr; }
 }
+
+/* a price that just moved: a brief wash of colour, then back */
+.tick-up, .tick-down { border-radius: 4px; transition: background-color 0.6s ease-out; }
+.tick-up { background-color: color-mix(in srgb, var(--up) 30%, transparent); transition: none; }
+.tick-down { background-color: color-mix(in srgb, var(--down) 30%, transparent); transition: none; }
+@media (prefers-reduced-motion: reduce) { .tick-up, .tick-down { background-color: transparent; } }

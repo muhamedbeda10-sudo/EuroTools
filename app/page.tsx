@@ -1,8 +1,32 @@
 "use client";
 import Link from "next/link";
+import { useMemo } from "react";
 import { big, egp, num, pct } from "@/lib/format";
+import { useLiveState } from "@/lib/live";
 import { useApi } from "@/lib/useApi";
+import { LiveChg, LiveIndex, LiveLast, LiveVolume } from "@/components/LiveCells";
 import { Chg, Kpi, Profit, Spark, State } from "@/components/ui";
+
+/** While prices are streaming, the three lists are ranked again in the browser on every tick. */
+function useLiveMovers(server: any) {
+  const { state, version, quotes } = useLiveState();
+  return useMemo(() => {
+    // wait until the stream has delivered a fair share of the market before ranking from it
+    const enough = Math.min(10, server?.breadth?.covered ?? 10);
+    if (state !== "live" || quotes.size < enough || !server?.gainers) return { ...server, streaming: false };
+    const rows = Array.from(quotes, ([symbol, [last, change_pct, volume]]) => ({ symbol, last, change_pct, volume }));
+    const moved = rows.filter((r) => r.change_pct != null);
+    const by = (key: "change_pct" | "volume", dir: 1 | -1) => [...moved].sort((a, b) => dir * ((b[key] ?? 0) - (a[key] ?? 0))).slice(0, 5);
+    return {
+      ...server, streaming: true,
+      gainers: by("change_pct", 1).filter((r) => (r.change_pct ?? 0) > 0),
+      losers: by("change_pct", -1).filter((r) => (r.change_pct ?? 0) < 0),
+      most_active: by("volume", 1),
+      live_breadth: { up: moved.filter((r) => r.change_pct! > 0).length, down: moved.filter((r) => r.change_pct! < 0).length,
+                      flat: moved.filter((r) => r.change_pct === 0).length },
+    };
+  }, [state, version, server]); // eslint-disable-line react-hooks/exhaustive-deps
+}
 
 function Movers({ title, rows }: { title: string; rows: any[] }) {
   return (
@@ -14,9 +38,9 @@ function Movers({ title, rows }: { title: string; rows: any[] }) {
             {rows.map((r) => (
               <tr key={r.symbol}>
                 <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
-                <td>{num(r.last)}</td>
-                <td><Chg v={r.change_pct} /></td>
-                <td className="muted">{big(r.volume)}</td>
+                <td><LiveLast symbol={r.symbol} last={r.last} /></td>
+                <td><LiveChg symbol={r.symbol} value={r.change_pct} /></td>
+                <td className="muted"><LiveVolume symbol={r.symbol} value={r.volume} /></td>
               </tr>
             ))}
           </tbody>
@@ -34,6 +58,7 @@ export default function Dashboard() {
   const st = useApi("/api/v1/status");
   const s = pf.data?.summary;
   const b = ov.data?.breadth;
+  const mv = useLiveMovers(ov.data);
   const d = st.data?.data;
 
   return (
@@ -45,9 +70,11 @@ export default function Dashboard() {
         </div>
         {ov.data?.as_of && (
           <span className="badge">
-            {d?.is_live
-              ? `Live prices · ${String(d.live_as_of).slice(11, 16)} Cairo · updated every 15 seconds while the market is open`
-              : `Market data as of ${ov.data.as_of} · end of day, not live`}
+            {mv.streaming
+              ? "● Live · streaming, prices move as trades happen"
+              : d?.is_live
+                ? `Live prices · ${String(d.live_as_of).slice(11, 16)} Cairo · updated every 15 seconds while the market is open`
+                : `Market data as of ${ov.data.as_of} · end of day, not live`}
           </span>
         )}
       </div>
@@ -65,15 +92,19 @@ export default function Dashboard() {
               {ov.data.indices.map((i: any) => (
                 <div className="card kpi" key={i.symbol}>
                   <div className="label">{i.symbol}{i.source === "sample" ? " · sample" : i.source === "younit" ? (i.live ? " · live" : ` · ${i.as_of}`) : ""}</div>
-                  <div className="value">{num(i.last)}</div>
-                  <div className="hint"><Chg v={i.change_pct} /> <Spark data={i.spark} /></div>
+                  {i.source === "younit" ? <LiveIndex name={i.symbol} last={i.last} changePct={i.change_pct} /> : (
+                    <>
+                      <div className="value">{num(i.last)}</div>
+                      <div className="hint"><Chg v={i.change_pct} /> <Spark data={i.spark} /></div>
+                    </>
+                  )}
                 </div>
               ))}
               {b && (
                 <div className="card kpi">
                   <div className="label">Market breadth ({b.covered} stocks covered)</div>
                   <div className="value">
-                    <span className="up">{b.advancers}</span> / <span className="down">{b.decliners}</span> / <span className="flat">{b.unchanged}</span>
+                    <span className="up">{mv.live_breadth?.up ?? b.advancers}</span> / <span className="down">{mv.live_breadth?.down ?? b.decliners}</span> / <span className="flat">{mv.live_breadth?.flat ?? b.unchanged}</span>
                   </div>
                   <div className="hint">Up / down / unchanged · volume {big(b.volume)} · turnover ≈ EGP {big(b.turnover_approx)}</div>
                 </div>
@@ -103,9 +134,9 @@ export default function Dashboard() {
 
       {ov.data?.gainers && (
         <div className="grid cols-3 section">
-          <Movers title="Top gainers" rows={ov.data.gainers} />
-          <Movers title="Top losers" rows={ov.data.losers} />
-          <Movers title="Highest volume" rows={ov.data.most_active} />
+          <Movers title="Top gainers" rows={mv.gainers} />
+          <Movers title="Top losers" rows={mv.losers} />
+          <Movers title="Highest volume" rows={mv.most_active} />
         </div>
       )}
 
@@ -119,8 +150,8 @@ export default function Dashboard() {
                   {wl.data.map((r: any) => (
                     <tr key={r.symbol}>
                       <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
-                      <td>{num(r.last)}</td>
-                      <td><Chg v={r.change_pct} /></td>
+                      <td><LiveLast symbol={r.symbol} last={r.last} /></td>
+                      <td><LiveChg symbol={r.symbol} value={r.change_pct} /></td>
                       <td><Spark data={r.spark} /></td>
                     </tr>
                   ))}

@@ -71,6 +71,15 @@ class FakeYounit:
         finally:
             self.hung_up = True
 
+    def follow_market(self, stocks, index_ids=(), max_seconds=240.0):
+        self.market_followed = ([s["symbol"] for s in stocks], list(index_ids))
+        try:
+            yield {"q": {"COMI": [80.5, 1.2, 1000.0], "TMGH": [60.0, -0.5, 500.0]}, "i": {"1": [31000.0, 0.4]}}
+            yield None
+            yield {"q": {"COMI": [80.6, 1.3, 1100.0]}, "i": {}}
+        finally:
+            self.market_hung_up = True
+
     def snapshot(self):
         self.snapshots = getattr(self, "snapshots", 0) + 1
         return {"fields": ["id", "name", "reuterCode"],   # like the real list: no prices in it
@@ -447,3 +456,18 @@ def test_stock_stream_reports_a_feed_failure_as_an_event(env):
     events = sse(c.get("/api/v1/stocks/COMI/stream"))
     assert [e for e, _ in events] == ["hello", "message", "failed"]
     assert "subscription refused" in events[-1][1]["detail"] and fake.hung_up is True
+
+
+def test_market_stream_pushes_only_what_changed(env, monkeypatch):
+    c, fake = env
+    c.post("/api/v1/data/refresh")
+    import app.services as services
+    monkeypatch.setattr(services, "market_open", lambda: True)
+    c.post("/api/v1/data/live")                       # learns which indices exist
+    events = sse(c.get("/api/v1/market/stream"))
+    assert [e for e, _ in events] == ["hello", "message", "comment", "message", "end"]
+    assert events[0][1]["indices"] == {"1": "EGX 30"}
+    assert events[1][1] == {"q": {"COMI": [80.5, 1.2, 1000.0], "TMGH": [60.0, -0.5, 500.0]}, "i": {"1": [31000.0, 0.4]}}
+    assert events[3][1] == {"q": {"COMI": [80.6, 1.3, 1100.0]}, "i": {}}
+    assert (sorted(fake.market_followed[0]), fake.market_followed[1]) == (["COMI", "NEWCO", "TMGH"], [1])
+    assert fake.market_hung_up is True
