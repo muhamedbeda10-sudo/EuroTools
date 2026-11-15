@@ -71,7 +71,15 @@ def run_backtest(
             window[s] = w
     if not window:
         raise BacktestError("no price data inside the selected period")
-    dates = sorted(set().union(*(w.index for w in window.values())))
+    # One plain lookup per session instead of a table query per stock per day:
+    # by_date[day][symbol] = (open, high, low, close, entry signal, exit signal).
+    by_date: dict = {}
+    for s, w in window.items():
+        marks = sig[s].reindex(w.index)
+        for row in zip(w.index, w["open"].to_numpy(), w["high"].to_numpy(), w["low"].to_numpy(), w["close"].to_numpy(),
+                       marks["entry"].to_numpy(), marks["exit"].to_numpy(), strict=True):
+            by_date.setdefault(row[0], {})[s] = row[1:]
+    dates = sorted(by_date)
     if len(dates) < 2:
         raise BacktestError("the selected period has fewer than 2 sessions")
 
@@ -114,12 +122,12 @@ def run_backtest(
         del open_pos[pos.symbol]
 
     for date in dates:
-        today = {s: w.loc[date] for s, w in window.items() if date in w.index}
+        today = by_date[date]
 
         # 1) fill orders decided at the previous close
         for s in sorted(pending_sell):
             if s in open_pos and s in today:
-                close_position(open_pos[s], date, D(today[s]["open"]), "signal")
+                close_position(open_pos[s], date, D(today[s][0]), "signal")
         pending_sell = {s for s in pending_sell if s in open_pos}  # no bar today: retry next session
         eq = equity()
         reserve = eq * D(risk.cash_reserve_pct) / 100
@@ -132,7 +140,7 @@ def run_backtest(
                 continue
             if len(open_pos) >= risk.max_open_positions:
                 continue
-            price = money(D(today[s]["open"]) * (1 + slip))
+            price = money(D(today[s][0]) * (1 + slip))
             budget = min(eq * D(risk.max_alloc_pct) / 100, cash - reserve)
             qty = int(budget // price) if price > 0 else 0
             while qty > 0:
@@ -154,7 +162,7 @@ def run_backtest(
             if s not in today:
                 continue
             bar = today[s]
-            o, hi, lo = D(bar["open"]), D(bar["high"]), D(bar["low"])
+            o, hi, lo = D(bar[0]), D(bar[1]), D(bar[2])
             if risk.stop_loss_pct is not None:
                 stop = pos.entry_price * (1 - D(risk.stop_loss_pct) / 100)
                 if lo <= stop:
@@ -167,12 +175,11 @@ def run_backtest(
 
         # 3) mark to market and read signals at the close
         for s, bar in today.items():
-            last_close[s] = D(bar["close"])
-            row = sig[s].loc[date]
+            last_close[s] = D(bar[3])
             if s in open_pos:
-                if row["exit"]:
+                if bar[5]:
                     pending_sell.add(s)
-            elif row["entry"] and s not in pending_buy:
+            elif bar[4] and s not in pending_buy:
                 pending_buy.append(s)
         if open_pos:
             days_invested += 1

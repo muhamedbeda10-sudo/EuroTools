@@ -475,7 +475,7 @@ class App:
         for r in state.rows:
             rows.append(clean({
                 **{k: r.get(k) for k in ("seq", "ts", "type", "symbol", "qty", "trade_date", "note", "price_source",
-                                         "fees_verified", "remaining_qty")},
+                                         "fees_verified", "remaining_qty", "origin")},
                 "price": D(r["price"]) if "price" in r else None,
                 "gross": D(r["gross"]) if "gross" in r else D(r.get("amount", 0)),
                 "fees": [{**i, "amount": D(i["amount"])} for i in r.get("fees", [])],
@@ -651,6 +651,26 @@ class App:
             self.audit("run", "backtest", {"id": doc["id"], "strategy": cfg.name, "symbols": len(result["symbols"]),
                                            "period": result["period"], "net_profit": doc["metrics"]["net_profit"]})
         return doc
+
+    def compare(self, strategy_ids: list[str], *, symbols: list[str] | None, start: str | None, end: str | None,
+                capital: Decimal | None) -> dict:
+        """Backtest several strategies over the same stocks, period, capital and fees, side by side."""
+        docs = []
+        for sid in strategy_ids:
+            doc = self.store.get("strategies", sid)
+            if doc is None:
+                raise NotFound("strategy not found")
+            docs.append(doc)
+        # One shared universe: the stocks given, or every stock, never each strategy's own scope.
+        universe = symbols or [i["symbol"] for i in self.market.instruments()]
+        runs = []
+        for doc in docs:
+            cfg = StrategyConfig.model_validate({k: doc[k] for k in StrategyConfig.model_fields})
+            run = self.backtest(cfg, strategy_id=doc["id"], symbols=universe, start=start, end=end, capital=capital)
+            runs.append({k: run[k] for k in ("id", "strategy_id", "period", "metrics", "warnings", "equity_curve")}
+                        | {"name": doc["name"], "stocks": len(run["symbols"])})
+        return {"runs": runs, "benchmark": None, "same": {"stocks": runs[0]["stocks"], "period": runs[0]["period"],
+                                                          "capital": runs[0]["metrics"]["starting_capital"]}}
 
     def backtests(self) -> list[dict]:
         docs = sorted(self.store.list("backtests"), key=lambda d: d["ts"], reverse=True)

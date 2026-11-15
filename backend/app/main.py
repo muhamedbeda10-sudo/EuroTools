@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import paper
 from .accounts import AccountError, Accounts
 from .config import Settings, get_settings
 from .data.calendar import market_open
@@ -27,6 +28,7 @@ from .domain.backtest import BacktestError
 from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
+from .extras import AlertIn, Extras, JournalIn, ResearchIn
 from .services import App, NotFound, clean
 from .store.errors import AuthError, ConflictError
 from .store.firestore_store import FirestoreStore, uid_from_token
@@ -54,6 +56,24 @@ class CategoryIn(BaseModel):
 class AppSettingsIn(BaseModel):
     starting_capital: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
     benchmark: str | None = Field(default=None, max_length=12)
+
+
+class CompareIn(BaseModel):
+    strategy_ids: list[str] = Field(min_length=2, max_length=4)
+    symbols: list[str] | None = Field(default=None, max_length=400)
+    start: date | None = None
+    end: date | None = None
+    capital: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
+
+
+class PaperRunIn(BaseModel):
+    strategy_id: str = Field(min_length=1, max_length=40)
+    capital: Decimal = Field(gt=0, le=Decimal("1000000000"))
+    symbols: list[str] | None = Field(default=None, max_length=400)
+
+
+class PaperRunStatusIn(BaseModel):
+    status: Literal["active", "paused", "stopped"]
 
 
 class AccountIn(BaseModel):
@@ -386,6 +406,88 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def refresh_market_data(core: App = Depends(get_core)):
         """Pull the next batch of prices from the feed. The page calls this until `remaining` is 0."""
         return core.refresh_feed()
+
+    # ---- strategy comparison & automatic paper trading -------------------
+    @api.post("/api/v1/backtests/compare", status_code=201)
+    def compare_strategies(body: CompareIn, core: App = Depends(get_core)):
+        return core.compare(body.strategy_ids, symbols=body.symbols, start=iso(body.start), end=iso(body.end),
+                            capital=body.capital)
+
+    @api.get("/api/v1/paper-runs")
+    def list_paper_runs(core: App = Depends(get_core)):
+        return paper.runs_view(core)
+
+    @api.post("/api/v1/paper-runs", status_code=201)
+    def start_paper_run(body: PaperRunIn, core: App = Depends(get_core)):
+        return paper.start_run(core, body.strategy_id, body.capital, body.symbols)
+
+    @api.put("/api/v1/paper-runs/{id}")
+    def change_paper_run(id: str, body: PaperRunStatusIn, core: App = Depends(get_core)):
+        return paper.set_status(core, id, body.status)
+
+    @api.post("/api/v1/paper-runs/process")
+    def process_paper_runs(core: App = Depends(get_core)):
+        """Fill the orders of every active run up to the latest completed session."""
+        return paper.process_runs(core)
+
+    # ---- research, journal, alerts --------------------------------------
+    @api.get("/api/v1/research")
+    def list_research(core: App = Depends(get_core), *, symbol: str | None = None, sector: str | None = None,
+                      category: str | None = None, strategy_id: str | None = None,
+                      q: str | None = Query(default=None, max_length=80)):
+        return Extras(core).research(symbol=symbol, sector=sector, category=category, strategy_id=strategy_id, q=q)
+
+    @api.post("/api/v1/research", status_code=201)
+    def create_research(body: ResearchIn, core: App = Depends(get_core)):
+        return Extras(core).save_research(body)
+
+    @api.put("/api/v1/research/{id}")
+    def update_research(id: str, body: ResearchIn, core: App = Depends(get_core)):
+        return Extras(core).save_research(body, id)
+
+    @api.delete("/api/v1/research/{id}")
+    def delete_research(id: str, core: App = Depends(get_core)):
+        Extras(core).delete_research(id)
+        return {"deleted": id}
+
+    @api.get("/api/v1/journal")
+    def list_journal(core: App = Depends(get_core), *, symbol: str | None = None, status: str | None = None):
+        return Extras(core).journal(symbol=symbol, status=status)
+
+    @api.post("/api/v1/journal", status_code=201)
+    def create_journal(body: JournalIn, core: App = Depends(get_core)):
+        return Extras(core).save_journal(body)
+
+    @api.put("/api/v1/journal/{id}")
+    def update_journal(id: str, body: JournalIn, core: App = Depends(get_core)):
+        return Extras(core).save_journal(body, id)
+
+    @api.delete("/api/v1/journal/{id}")
+    def delete_journal(id: str, core: App = Depends(get_core)):
+        Extras(core).delete_journal(id)
+        return {"deleted": id}
+
+    @api.get("/api/v1/alerts")
+    def list_alerts(core: App = Depends(get_core)):
+        return Extras(core).alerts()
+
+    @api.post("/api/v1/alerts", status_code=201)
+    def create_alert(body: AlertIn, core: App = Depends(get_core)):
+        return Extras(core).save_alert(body)
+
+    @api.put("/api/v1/alerts/{id}")
+    def update_alert(id: str, body: AlertIn, core: App = Depends(get_core)):
+        return Extras(core).save_alert(body, id)
+
+    @api.delete("/api/v1/alerts/{id}")
+    def delete_alert(id: str, core: App = Depends(get_core)):
+        Extras(core).delete_alert(id)
+        return {"deleted": id}
+
+    @api.post("/api/v1/alerts/check")
+    def check_alerts(core: App = Depends(get_core)):
+        """Evaluate the active alerts against the latest prices. The page calls this as prices update."""
+        return Extras(core).check_alerts()
 
     # ---- accounts --------------------------------------------------------
     def accounts_for(request: Request, core: App) -> Accounts | None:
