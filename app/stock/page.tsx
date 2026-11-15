@@ -8,7 +8,7 @@ import { big, int, num, pct, price, signed, tone } from "@/lib/format";
 import { Flash } from "@/lib/live";
 import { useApi } from "@/lib/useApi";
 import { useStockStream } from "@/lib/useStockStream";
-import { MacdChart, PriceChart, RsiChart, SMA_VARS } from "@/components/Charts";
+import { MacdChart, PriceChart, RsiChart, SMA_VARS, type Pattern } from "@/components/Charts";
 import PriceDepth from "@/components/PriceDepth";
 import { ResearchItem } from "@/components/ResearchItem";
 import TradeTicket from "@/components/TradeTicket";
@@ -24,6 +24,51 @@ function RelatedResearch({ symbol }: { symbol: string }) {
       <CardHead title="Research & news"><Link className="more" href={`/research?symbol=${symbol}`}>Add or view all</Link></CardHead>
       {data?.length ? data.slice(0, 4).map((item: any) => <ResearchItem key={item.id} item={item} />)
         : <div className="empty">Nothing saved for this stock or its sector yet.</div>}
+    </div>
+  );
+}
+
+const STATE: Record<Pattern["state"], { label: string; tone: string; hint: string }> = {
+  forming: { label: "forming", tone: "warn", hint: "The candle is not complete yet; its shape can still change." },
+  pending: { label: "awaiting next session", tone: "", hint: "No later session yet to confirm or reject it." },
+  confirmed: { label: "confirmed", tone: "ok", hint: "The next session closed beyond the pattern, in its direction." },
+  unconfirmed: { label: "not confirmed", tone: "", hint: "The next session did not close beyond the pattern." },
+  failed: { label: "failed", tone: "bad", hint: "A later session closed through the level the pattern defends." },
+  open: { label: "window open", tone: "ok", hint: "No close has gone back through the gap." },
+};
+const PERIOD = { d: "session", w: "week", m: "month" } as const;
+const PATTERNS_LISTED = 8;
+
+/** The candle patterns of the latest bars, newest first: what was seen, where it stands and the price it defends. */
+function CandlePatterns({ patterns, tf }: { patterns: Pattern[]; tf: "d" | "w" | "m" }) {
+  const latest = [...patterns].reverse().slice(0, PATTERNS_LISTED);
+  return (
+    <div className="card">
+      <CardHead title="Candle patterns"><Link className="more" href="/guide#candles">How to read them</Link></CardHead>
+      {latest.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th className="l">Pattern</th><th className="l">Status</th><th>Level</th></tr></thead>
+            <tbody>
+              {latest.map((x) => (
+                <tr key={x.date + x.pattern}>
+                  <td>{x.date}</td>
+                  <td className="l">
+                    <span className={`badge ${x.direction === "bullish" ? "ok" : "bad"}`} style={{ marginInlineEnd: 8 }}>{x.direction === "bullish" ? "▲ up" : "▼ down"}</span>
+                    {x.name}{x.volume_ratio != null && x.volume_ratio >= 1.5 ? <span className="muted"> · volume {num(x.volume_ratio)}×</span> : null}
+                  </td>
+                  <td className="l"><span className={`badge ${STATE[x.state].tone}`} title={STATE[x.state].hint}>{STATE[x.state].label}</span></td>
+                  <td>{price(x.level)} <span className="muted">{x.level_role}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="empty">No candle pattern in the latest {tf === "d" ? "sessions" : tf === "w" ? "weeks" : "months"}.</div>}
+      <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
+        Found by fixed rules on the {PERIOD[tf]} candles. A pattern is a warning that the mood may be changing, not a forecast: weigh it with the trend,
+        volume and support or resistance. The level is the pattern&apos;s own low (support) or high (resistance); a close through it says the pattern failed.
+      </p>
     </div>
   );
 }
@@ -47,7 +92,7 @@ function DayRange({ low, high, last, open }: { low?: number | null; high?: numbe
 function StockView() {
   const symbol = (useSearchParams().get("symbol") || "").toUpperCase();
   const [tf, setTf] = useState<"d" | "w" | "m">("d");
-  const [show, setShow] = useState({ sma20: true, sma50: true, sma200: false, volume: true });
+  const [show, setShow] = useState({ sma20: true, sma50: true, sma200: false, volume: true, patterns: true });
   const { data, error, loading, reload } = useApi(symbol ? `/api/v1/stocks/${symbol}?timeframe=${tf}` : null);
 
   // Tick-by-tick price and order book while this page is open (feed stocks only).
@@ -134,11 +179,13 @@ function StockView() {
                           </button>
                         ))}
                         <button className={show.volume ? "on" : ""} aria-pressed={show.volume} onClick={() => setShow({ ...show, volume: !show.volume })}>Volume</button>
+                        <button className={show.patterns ? "on" : ""} aria-pressed={show.patterns} onClick={() => setShow({ ...show, patterns: !show.patterns })}>Patterns</button>
                       </div>
                     </div>
-                    <PriceChart bars={data.bars} show={show} support={tf === "d" ? a.support : undefined} resistance={tf === "d" ? a.resistance : undefined} />
+                    <PriceChart bars={data.bars} show={show} patterns={show.patterns ? data.patterns : undefined} support={tf === "d" ? a.support : undefined} resistance={tf === "d" ? a.resistance : undefined} />
                     <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                       Dashed lines mark support {price(a.support)} and resistance {price(a.resistance)}: the low and high of the last {a.window} sessions.
+                      {show.patterns && data.patterns?.length ? " Arrows mark candle patterns: below the candle pointing up, above it pointing down, grey once failed; they are named in the card below." : ""}
                     </p>
                     <h3 style={{ marginTop: 18 }}>RSI (14)</h3>
                     <RsiChart bars={data.bars} />
@@ -168,6 +215,8 @@ function StockView() {
                     </div>
                   </div>
 
+                  <CandlePatterns patterns={data.patterns ?? []} tf={tf} />
+
                   <RelatedResearch symbol={symbol} />
 
                   <div className="card">
@@ -178,7 +227,7 @@ function StockView() {
                       prices are used unadjusted.
                     </p>
                   </div>
-                  <p className="muted" style={{ fontSize: 12, margin: 0 }}>The technical and momentum reads are rule-based descriptions of the price history. They are not investment advice.</p>
+                  <p className="muted" style={{ fontSize: 12, margin: 0 }}>The technical, momentum and candle-pattern reads are rule-based descriptions of the price history. They are not investment advice.</p>
                 </div>
 
                 <div className="rail">

@@ -1,5 +1,6 @@
 """The in-app assistant, driven by a scripted stand-in for the model: no network, no cost."""
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -295,6 +296,10 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     assert run("find_stocks", sector="Banks", sort_by="change_pct", descending=True)["total_matching"] >= 2
     report = run("stock_report", symbol="comi", bars=5)
     assert len(report["candles"]["rows"]) == 5 and report["assessment"]["trend"] and report["holding"] is None
+    assert report["candle_patterns"]["timeframe"] == "d" and isinstance(report["candle_patterns"]["latest"], list)
+    scan = run("candle_scan", sessions=10, limit=5)
+    assert scan["total_matching"] >= len(scan["matches"]) >= 1 and scan["matches"][0]["company"]
+    assert all(m["direction"] == "bearish" for m in run("candle_scan", direction="bearish", sessions=10)["matches"])
     assert run("preview_trade", side="BUY", symbol="COMI", qty=10)["error"] is None
     run("place_trade", side="BUY", symbol="COMI", qty=10, note="x")
     assert run("portfolio")["holdings"][0]["symbol"] == "COMI" and run("trades", symbol="COMI")["matching"] == 1
@@ -333,6 +338,19 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     assert "Accounting rules" in run("knowledge", name="app-guide")["text"]
     assert run("knowledge", name="App-Guide.md", sections=[2])["sections"][0]["title"] == "Screens"
     assert run("knowledge", query="fee schedule placeholder")["matches"][0]["title"] == "Accounting rules"
+    # the trading references: each has a title and a summary to choose by, and its sections can be read and searched
+    names = [r["name"] for r in refs]
+    assert {"candlesticks", "chart-patterns", "trend-and-stages", "momentum-indicators", "growth-stock-method",
+            "trend-following", "price-action", "risk-and-position-sizing"} <= set(names)
+    assert all(r["title"] and len(r["about"]) > 60 and r["sections"] >= 5 for r in refs)
+    for r in refs:
+        read = run("knowledge", name=r["name"], sections=list(range(1, r["sections"] + 1))[:12])
+        text = "\n".join(part["text"] for part in read["sections"])
+        for other in re.findall(r"`([a-z]+(?:-[a-z]+)+)`", text):   # a reference named in the text must exist
+            assert other in names, f"{r['name']} points to a missing reference {other}"
+    hits = run("knowledge", query="hammer lower shadow")["matches"]
+    assert hits and hits[0]["name"] == "candlesticks"
+    assert run("knowledge", query="risk of ruin expectancy")["matches"][0]["name"] == "risk-and-position-sizing"
     assert run("open_page", page="stock", symbol="comi") == {"opened": "/stock?symbol=COMI"}
     # without the live feed the order book says so instead of failing
     tool, parsed, _ = parse("price_depth", {"symbol": "COMI"})

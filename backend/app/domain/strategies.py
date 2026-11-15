@@ -11,6 +11,7 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, Field, model_validator
 
+from . import candles
 from . import indicators as ind
 
 STRATEGY_TYPES: dict[str, dict] = {
@@ -55,6 +56,17 @@ STRATEGY_TYPES: dict[str, dict] = {
             "lookback": {"label": "Breakout lookback (days)", "default": 20, "min": 5, "max": 250},
             "exit_lookback": {"label": "Exit lookback (days)", "default": 10, "min": 2, "max": 250},
             "volume_mult": {"label": "Volume vs 20-day average (x)", "default": 1.5, "min": 0, "max": 10},
+        },
+    },
+    "candle_reversal": {
+        "family": "technical",
+        "label": "Candlestick reversal",
+        "description": "Enter on a bullish reversal candle pattern after a decline (hammer, engulfing, piercing, morning star, "
+                       "harami, three white soldiers); exit on a bearish reversal pattern or a close below the entry pattern's low.",
+        "available": True,
+        "params": {
+            "confirm": {"label": "Wait for a confirming close (1 = yes, 0 = no)", "default": 1, "min": 0, "max": 1},
+            "trend_sma": {"label": "Only above this moving average (days, 0 = off)", "default": 0, "min": 0, "max": 400},
         },
     },
     "fundamental_value": {
@@ -147,6 +159,13 @@ def signals(cfg: StrategyConfig, df: pd.DataFrame) -> pd.DataFrame:
         avg_vol = df["volume"].rolling(20).mean().shift(1)
         entry = (close > prior_high) & (df["volume"] >= p["volume_mult"] * avg_vol)
         exit_ = close < prior_low
+    elif cfg.type == "candle_reversal":
+        s = candles.reversal_signals(df, confirm=p["confirm"] >= 0.5)
+        entry = s["bull"]
+        if p["trend_sma"] >= 2:  # trade the pattern only in the direction of the longer trend
+            entry = entry & (close > ind.sma(close, int(p["trend_sma"])))
+        broken = close < s["stop"]  # a close under the low of the pattern that was bought: it failed
+        exit_ = s["bear"] | (broken & ~broken.shift(1, fill_value=False))
     else:  # pragma: no cover - guarded by StrategyConfig validation
         raise ValueError(cfg.type)
     return pd.DataFrame({"entry": entry.fillna(False).astype(bool), "exit": exit_.fillna(False).astype(bool)})

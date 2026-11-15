@@ -7,7 +7,7 @@ import math
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pandas as pd
@@ -15,6 +15,7 @@ import pandas as pd
 from .config import Settings
 from .data.calendar import cairo_now, market_open
 from .data.market import BUILD_LOCK, MarketData
+from .domain import candles
 from .domain import indicators as ind
 from .domain.backtest import run_backtest
 from .domain.fees import DEFAULT_FEE_SCHEDULE, FeeSchedule, compute_fees
@@ -28,6 +29,8 @@ _DEPTH_CACHE: dict[str, tuple[float, dict]] = {}
 DEPTH_CACHE_SECONDS = 5.0
 
 
+CANDLE_LOOKBACK = 120          # bars of the chart that candle patterns are reported for
+CANDLE_CONTEXT = 80            # bars a market-wide scan reads per stock: enough for every pattern's context
 MAX_STORED_TRADES = 400        # per saved backtest; the totals always cover every trade
 MAX_BACKTEST_BYTES = 800_000   # a stored document may not exceed 1 MiB
 
@@ -70,6 +73,19 @@ def clean(obj):
     if hasattr(obj, "item"):  # numpy scalar
         return clean(obj.item())
     return obj
+
+
+def _period_open(last: pd.Timestamp, timeframe: str) -> bool:
+    """Whether the week or month of the latest bar is still running (EGX weeks end on Thursday).
+    A holiday on the last day keeps the answer at "open", which errs on the careful side."""
+    if timeframe == "w":
+        return last.dayofweek != 3
+    if timeframe == "m":
+        nxt = last.date() + timedelta(days=1)
+        while nxt.weekday() in (4, 5):  # Friday, Saturday
+            nxt += timedelta(days=1)
+        return nxt.month == last.month
+    return False
 
 
 class App:
@@ -389,6 +405,7 @@ class App:
             "timeframe": timeframe,
             "bars": self._records(frame),
             "assessment": ind.assess(daily),
+            "patterns": self._candle_patterns(symbol, daily, df, timeframe),
             "fundamentals": {
                 "available": False,
                 "reason": "No verified fundamental data source is connected yet (financial statements, EPS, P/E, dividends).",
@@ -401,6 +418,48 @@ class App:
                           else "Daily prices from Younit, as of the date shown. Not a live quote." if quote["source"] == "younit"
                           else None),
         })
+
+    def _candle_patterns(self, symbol: str, daily: pd.DataFrame, df: pd.DataFrame, timeframe: str) -> list[dict]:
+        """Candle patterns of the chart's latest bars. A pattern on a candle that is not complete yet
+        (today's session still running, or a week or month that has not ended) is marked `forming`:
+        its shape can still change."""
+        found = candles.patterns(df, last=CANDLE_LOOKBACK)
+        settled = self.market.bars(symbol, settled=True)
+        last = df.index[-1]
+        if settled is None or len(settled) < len(daily) or _period_open(last, timeframe):
+            stamp = last.strftime("%Y-%m-%d")
+            for p in found:
+                if p["date"] == stamp:
+                    p["state"] = "forming"
+        return found
+
+    def candle_scan(self, direction: str | None = None, sessions: int = 1, sector: str | None = None,
+                    watched_only: bool = False, reversals_only: bool = False) -> dict:
+        """Candle patterns completed in the latest `sessions` completed sessions, across the market.
+
+        Like the strategy signals, a stock whose last bar is older than the latest completed session
+        is left out: a pattern on a stale bar is not news.
+        """
+        latest = self.market.latest_settled()
+        out: list[dict] = []
+        if latest is None:
+            return {"as_of": None, "sessions": sessions, "stocks_read": 0, "matches": out}
+        read = 0
+        for row in self.stock_rows(sector):
+            if watched_only and not row.get("watched"):
+                continue
+            df = self.market.bars(row["symbol"], settled=True)
+            if df is None or len(df) < 30 or df.index[-1] != latest:
+                continue
+            read += 1
+            for p in candles.patterns(df.tail(CANDLE_CONTEXT), last=sessions):
+                if direction and p["direction"] != direction:
+                    continue
+                if reversals_only and p["kind"] != "reversal":
+                    continue
+                out.append({"symbol": row["symbol"], "company": row.get("name"), "sector": row.get("sector"), **p})
+        out.sort(key=lambda m: (m["date"], m["symbol"]), reverse=True)
+        return {"as_of": latest.strftime("%Y-%m-%d"), "sessions": sessions, "stocks_read": read, "matches": out}
 
     # ---- watchlist & categories -----------------------------------------
     def set_watch(self, symbol: str, on: bool) -> None:

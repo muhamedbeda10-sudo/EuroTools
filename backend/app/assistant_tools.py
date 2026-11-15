@@ -41,6 +41,7 @@ MAX_RESULT_CHARS = 30_000
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 KNOWLEDGE_PART = 24_000   # the most reference text one call returns, in characters
 KNOWLEDGE_MATCHES = 8
+CANDLE_PATTERNS_SHOWN = 12   # the latest patterns a stock report carries
 PAGES = {
     "dashboard": "/", "market": "/market", "stock": "/stock", "watchlist": "/watchlist", "portfolio": "/portfolio",
     "trades": "/trades", "strategies": "/strategies", "simulator": "/simulator", "research": "/research",
@@ -143,6 +144,9 @@ def _stock_report(core: App, a: StockReport) -> dict:
                           for b in d["bars"][-a.bars:]] if a.bars else []},
         holding=({"qty": held.qty, "avg_price": float(held.avg_price), "cost": float(held.cost)}
                  if held is not None and held.qty else None),
+        candle_patterns={"timeframe": a.timeframe, "latest": d["patterns"][-CANDLE_PATTERNS_SHOWN:],
+                         "note": "Detected by the app from the candles of this timeframe. `level` is the price the "
+                                 "pattern defends; `state` says what the following sessions did with it."},
         signals=[s for s in core.active_signals() if s["symbol"] == symbol],
         saved_research_items=len(Extras(core).research(symbol=symbol)),
         fundamentals="not available: no verified source of financial statements is connected",
@@ -255,6 +259,23 @@ def _size(core: App, a: Size) -> dict:
         out.update(cost_with_fees=cost["gross"] + cost["fees_total"], loss_if_stopped=round(shares * (last - stop), 2),
                    loss_pct_of_portfolio=round(shares * (last - stop) / equity * 100, 3) if equity else None)
     return out
+
+
+class CandleScan(Args):
+    direction: Literal["bullish", "bearish"] | None = Field(default=None, description="Leave out for both")
+    sessions: int = Field(default=1, ge=1, le=10, description="How many of the latest completed sessions to cover")
+    sector: str | None = Field(default=None, max_length=80)
+    watched_only: bool = False
+    reversals_only: bool = Field(default=False, description="Leave out windows (gaps), which are continuation signals")
+    limit: int = Field(default=40, ge=1, le=80)
+
+
+def _candle_scan(core: App, a: CandleScan) -> dict:
+    found = core.candle_scan(a.direction, a.sessions, a.sector, a.watched_only, a.reversals_only)
+    keep = ("symbol", "company", "sector", "date", "pattern", "name", "direction", "kind", "state", "needs_confirmation",
+            "level", "level_role", "close", "volume_ratio")
+    return {"as_of": found["as_of"], "sessions": a.sessions, "stocks_read": found["stocks_read"],
+            "total_matching": len(found["matches"]), "matches": [pick(m, *keep) for m in found["matches"][:a.limit]]}
 
 
 class SymbolArg(Args):
@@ -862,8 +883,13 @@ TOOLS: list[Tool] = [
          "high. Use it to find candidates before looking at any single stock.", Screen, _screen,
          label=lambda a: "Screening the market"),
     Tool("stock_report", "Everything known about one stock: quote, technical and momentum read (trend, RSI, moving "
-         "averages, support and resistance, returns), recent candles, the user's holding in it, active strategy signals.",
+         "averages, support and resistance, returns), recent candles and the candle patterns detected in them, the user's "
+         "holding in it, active strategy signals.",
          StockReport, _stock_report, label=lambda a: f"Looking at {a.symbol.upper()}"),
+    Tool("candle_scan", "Japanese candlestick patterns the app detected across the market in the latest completed "
+         "sessions (hammer, engulfing, stars, harami, doji, windows and more), with the level each defends and whether "
+         "the next session confirmed it. Read the `candlesticks` reference before judging them.", CandleScan, _candle_scan,
+         label=lambda a: f"Scanning for {a.direction + ' ' if a.direction else ''}candle patterns"),
     Tool("price_depth", "The live order book of one stock (best bids and asks with sizes). Needs the live market feed.",
          SymbolArg, _price_depth, label=lambda a: f"Reading the order book of {a.symbol.upper()}"),
     Tool("portfolio", "The paper portfolio: cash, holdings with cost and market value, gross and net profit, fees, "

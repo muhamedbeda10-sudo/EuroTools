@@ -37,6 +37,13 @@ export type Bar = {
   rsi: number | null; macd: number | null; macd_signal: number | null; macd_hist: number | null;
 };
 
+/** A candle pattern the server detected: the bar that completes it, which way it points and what followed. */
+export type Pattern = {
+  date: string; pattern: string; name: string; direction: "bullish" | "bearish"; kind: "reversal" | "continuation";
+  bars: number; needs_confirmation: boolean; state: "pending" | "forming" | "confirmed" | "unconfirmed" | "failed" | "open";
+  level: number; level_role: "support" | "resistance"; close: number; volume_ratio: number | null;
+};
+
 const line = (bars: Bar[], key: keyof Bar) =>
   bars.filter((b) => b[key] != null).map((b) => ({ time: b.time as Time, value: b[key] as number }));
 
@@ -45,8 +52,8 @@ export const SMA_KEYS = ["sma20", "sma50", "sma200"] as const;
 export const SMA_VARS = { sma20: "var(--series-1)", sma50: "var(--series-2)", sma200: "var(--series-3)" };
 export const SMA_COLORS = SMA_VARS;
 
-export function PriceChart({ bars, support, resistance, show = { sma20: true, sma50: true, sma200: true, volume: true }, height = 420 }: {
-  bars: Bar[]; support?: number; resistance?: number; height?: number;
+export function PriceChart({ bars, support, resistance, patterns, show = { sma20: true, sma50: true, sma200: true, volume: true }, height = 420 }: {
+  bars: Bar[]; support?: number; resistance?: number; height?: number; patterns?: Pattern[];
   show?: { sma20: boolean; sma50: boolean; sma200: boolean; volume: boolean };
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -61,6 +68,19 @@ export function PriceChart({ bars, support, resistance, show = { sma20: true, sm
       if (!show[k]) return;
       chart.addLineSeries({ color: p.series[i], lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }).setData(line(bars, k));
     });
+    if (patterns?.length) {
+      // One arrow per bar and no text: names collide on a chart of hundreds of bars, and the card below lists them.
+      const shown = new Set(bars.map((b) => b.time));
+      const byBar = new Map<string, Pattern[]>();
+      patterns.filter((x) => shown.has(x.date)).forEach((x) => byBar.set(x.date, [...(byBar.get(x.date) ?? []), x]));
+      candles.setMarkers([...byBar.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([time, hits]) => {
+        const bullish = hits[0].direction === "bullish";
+        return {
+          time: time as Time, position: bullish ? "belowBar" as const : "aboveBar" as const, shape: bullish ? "arrowUp" as const : "arrowDown" as const,
+          color: hits.every((x) => x.state === "failed") ? p.text : bullish ? p.up : p.down,
+        };
+      }));
+    }
     if (support) candles.createPriceLine({ price: support, color: p.text, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "support", axisLabelVisible: true });
     if (resistance) candles.createPriceLine({ price: resistance, color: p.text, lineStyle: LineStyle.Dashed, lineWidth: 1, title: "resistance", axisLabelVisible: true });
     if (show.volume) {
@@ -70,8 +90,8 @@ export function PriceChart({ bars, support, resistance, show = { sma20: true, sm
     }
     chart.timeScale().fitContent();
     return () => chart.remove();
-  }, [bars, support, resistance, theme, height, show.sma20, show.sma50, show.sma200, show.volume]);
-  return <div ref={ref} className="chart" role="img" aria-label="Candlestick price chart with moving averages and volume" />;
+  }, [bars, support, resistance, patterns, theme, height, show.sma20, show.sma50, show.sma200, show.volume]);
+  return <div ref={ref} className="chart" role="img" aria-label="Candlestick price chart with moving averages, volume and candle pattern markers" />;
 }
 
 export function RsiChart({ bars }: { bars: Bar[] }) {

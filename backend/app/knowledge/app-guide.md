@@ -14,7 +14,8 @@ connected for reading prices only.
   trade in the latest session shows the date it last traded instead of a day change.
 - **Stock page**: price with day range, candlestick chart (daily, weekly, monthly) with 20/50/200-day
   averages, RSI and MACD, a rule-based technical and momentum read, support and resistance (low and high of the
-  last 60 sessions), the live order book ("price depth") when the feed is connected, saved research, and the
+  last 60 sessions), candle patterns (arrows on the chart and a "Candle patterns" card with each pattern's
+  direction, status and the level it defends, for the chosen candle period), the live order book ("price depth") when the feed is connected, saved research, and the
   order ticket for a paper trade.
 - **Watchlist**: watched stocks and custom lists.
 - **Portfolio**: holdings, cost, market value, gross profit, estimated net profit after fees, allocation by
@@ -22,7 +23,9 @@ connected for reading prices only.
 - **Trades**: the ledger. Every paper trade with its price, each fee line, cash movement and realized profit.
   The ledger is append-only: entries are never edited or deleted. It can be exported as CSV.
 - **Strategies**: saved rule sets. Types: moving-average crossover, RSI mean reversion, MACD signal
-  crossover, volume-confirmed breakout. Each has parameters and risk settings (stop-loss, take-profit, largest
+  crossover, volume-confirmed breakout, candlestick reversal (buys a bullish reversal candle pattern after a
+  decline, optionally only once the next close confirms it and only above a chosen moving average; sells on a
+  bearish reversal pattern or a close under the bought pattern's low). Each has parameters and risk settings (stop-loss, take-profit, largest
   position as a share of equity, most open positions, cash reserve, slippage).
 - **Simulator**: backtests of a strategy on history, side-by-side comparison of up to four strategies, and
   automatic paper trading ("runs").
@@ -31,7 +34,7 @@ connected for reading prices only.
   the lesson.
 - **Alerts**: price above or below a level, day change, volume against the average of the 20 sessions before,
   RSI level, or a strategy signal. An alert fires at most once per trading session.
-- **Guide**: short explanations of indicators, order-book reading, financial statements and ratios, risk
+- **Guide**: short explanations of indicators, candle patterns, order-book reading, financial statements and ratios, risk
   management, fees, sectors and honest strategy testing.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
   sign-in accounts (administrators only), and the activity log.
@@ -77,3 +80,14 @@ connected for reading prices only.
 Splits, bonus shares and dividends; partial fills, price limits and trading halts; the official closing price
 (a volume-weighted average) versus the last trade used here; EGX same-day selling rules; companies delisted in
 the past; public holidays; an index benchmark (the feed has no index history); fundamentals of any kind.
+
+## Candle patterns
+The app finds Japanese candlestick patterns by fixed rules on daily, weekly or monthly candles: hammer, inverted
+hammer, hanging man, shooting star, bullish and bearish engulfing, piercing pattern, dark-cloud cover, harami and
+harami cross, morning and evening star (and their doji forms), a doji after a decline or an advance, three white
+soldiers, three black crows, and rising and falling windows (gaps). A reversal shape counts only after a real move
+in the opposite direction. Each pattern has a level (its own low if it points up, its high if it points down, the
+far edge of a gap for a window) and a status: forming (the candle is not complete), awaiting the next session,
+confirmed, not confirmed, failed (a close through the level within five sessions) or, for a window, open. The
+`candlesticks` reference explains how to read them. A strategy signal alert on a saved candlestick-reversal
+strategy is the way to be told when one appears.

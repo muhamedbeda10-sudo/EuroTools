@@ -12,16 +12,16 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | --- | --- |
 | Dashboard | Indices, breadth, movers (re-ranked live), paper portfolio (gross vs net), watchlist, signals, latest research, data status |
 | Market & Categories | Sector performance, all stocks, search/filters, custom categories |
-| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, live price and order book (price depth), related research, simulated order ticket |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
-| Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout), risk limits |
+| Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
 | Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
 | Journal | Why each decision was made, what was expected, what happened, what was learned |
 | Alerts | Price, day change, volume, RSI and strategy-signal alerts, shown in the app and as desktop notifications |
-| Guide | Indicators, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
+| Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
 Not built yet: order execution, fundamentals (no verified source), corporate actions, AI analysis
@@ -110,6 +110,30 @@ An assistant built into every screen (the **Assistant** button in the top bar). 
 market and the account's own data and operates the app through tools: it can read everything the screens show
 and do everything they do (paper trades, strategies, backtests, automatic runs, alerts, research, journal,
 settings). It has no tool for sign-in accounts or passwords, and none for real orders: no such code exists.
+
+### What the assistant knows about trading
+
+Besides the live data it reads through its tools, the assistant has a reference library in
+`backend/app/knowledge/` (one Markdown file per subject, read on demand through its `knowledge` tool):
+
+| File | Subject |
+|---|---|
+| `app-guide.md` | How the app works, screen by screen, and the rules behind its numbers |
+| `candlesticks.md` | Japanese candlestick patterns and how the app's detector reads them |
+| `chart-patterns.md` | Reversal and continuation formations, breakouts, targets and stops |
+| `trend-and-stages.md` | Trend, support and resistance, moving averages, volume, the four-stage model |
+| `momentum-indicators.md` | RSI, MACD and how to read any oscillator |
+| `growth-stock-method.md` | Bases, breakouts and sell rules of the leading-stock approach |
+| `trend-following.md` | Systematic trend following |
+| `price-action.md` | Reading trends, channels and trading ranges bar by bar |
+| `risk-and-position-sizing.md` | Risk of ruin, expectancy, position sizing, discipline |
+
+The trading references are written for this app, in its own words, from the methods of well-known books (each
+file names its sources). They hold no text from those books. To add a subject, add a Markdown file: the first line
+is its title and the second a one-sentence summary the assistant chooses by.
+
+Candle patterns are not left to the model's eye: `backend/app/domain/candles.py` detects them from the prices, and
+the assistant gets the result (`stock_report`, `candle_scan`).
 
 | Setting (server environment) | Meaning |
 |---|---|
