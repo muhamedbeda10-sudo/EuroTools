@@ -400,7 +400,10 @@ def _repair(chat: dict) -> None:
 
 
 def status(core: App, model: AssistantModel | None, *, allowed: bool, daily_limit: float) -> dict:
+    check = getattr(model, "check", None)
     return {"configured": model is not None, "allowed": allowed, "model": model.name if model else None,
+            # set when the saved key is refused or has no access to the model, so the user hears it before typing
+            "problem": check() if check and allowed else None,
             "access": access_level(core) if model else None, "access_levels": list(ACCESS_LEVELS),
             "spent_today_usd": round(spent_today(core), 4) if model else 0.0, "daily_limit_usd": daily_limit,
             "tools": len(BY_NAME), "chats": chats(core) if model and allowed else []}

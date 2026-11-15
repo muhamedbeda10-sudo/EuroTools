@@ -193,7 +193,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     # ---- system ----------------------------------------------------------
     @api.get("/health")
     def health(probe: bool = False):
-        out = {"status": "ok", "environment": settings.app_env, "region": os.environ.get("VERCEL_REGION")}
+        out = {"status": "ok", "environment": settings.app_env, "region": os.environ.get("VERCEL_REGION"),
+               "assistant": assistant_model is not None}  # whether a key is saved; never the key
         if probe and firestore:
             # How far is the database from this server? Timed with requests that carry no
             # credentials and are refused, so nothing is read.

@@ -125,6 +125,7 @@ class ClaudeModel:
         self.name = model if model in SUPPORTED_MODELS else DEFAULT_MODEL
         self.effort = effort if effort in EFFORTS else "medium"
         self._api_key, self._client = api_key, client
+        self._checked: tuple[float, str | None] | None = None
         self.plain = False  # set when the optional beta features are refused, and kept for this server instance
 
     @property
@@ -135,6 +136,25 @@ class ClaudeModel:
             import anthropic
             self._client = anthropic.Anthropic(api_key=self._api_key, max_retries=2, timeout=240.0)
         return self._client
+
+    def check(self) -> str | None:
+        """Is the key accepted and the model available? None when all is well, else what is wrong.
+
+        Asks the API to describe the model, which uses no tokens and costs nothing. A good
+        answer is remembered for the life of this server instance; a bad one for a minute.
+        """
+        import anthropic
+        if self._checked is not None and (self._checked[1] is None or time.monotonic() - self._checked[0] < 60):
+            return self._checked[1]
+        try:
+            self.client.models.retrieve(self.name)
+            problem = None
+        except anthropic.APIStatusError as exc:
+            problem = _explain(exc)
+        except anthropic.APIConnectionError:
+            problem = "Could not reach Claude from the server."
+        self._checked = (time.monotonic(), problem)
+        return problem
 
     def turn(self, *, system: str, tools: list[dict], messages: list[dict]) -> Iterator[dict]:
         import anthropic
@@ -217,6 +237,8 @@ def _explain(exc) -> str:
         return "Claude rejected the API key saved on the server. Check ANTHROPIC_API_KEY in the hosting settings."
     if isinstance(exc, anthropic.PermissionDeniedError):
         return f"The Claude API key is not allowed to do this: {detail}"
+    if isinstance(exc, anthropic.NotFoundError):
+        return "This Claude API account cannot use the chosen model. Check ASSISTANT_MODEL in the hosting settings."
     if status in (402,) or "credit balance" in detail.lower():
         return "The Claude API account has no credit left. Add credit in the Anthropic Console, then try again."
     if status in (500, 502, 503, 504, 529):

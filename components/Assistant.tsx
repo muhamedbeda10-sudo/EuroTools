@@ -10,7 +10,7 @@ type ToolChip = { id: string; label: string; state: "running" | "ok" | "failed" 
 type Item = { role: "user" | "assistant" | "note"; text: string; tools?: ToolChip[] };
 type Pending = { id: string; label: string };
 type Status = {
-  configured: boolean; allowed: boolean; model: string | null; access: "full" | "confirm" | "read" | null;
+  configured: boolean; allowed: boolean; model: string | null; access: "full" | "confirm" | "read" | null; problem?: string | null;
   spent_today_usd: number; daily_limit_usd: number; chats: { id: string; title: string; updated_at: string }[];
 };
 
@@ -308,6 +308,7 @@ function Panel({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
               )}
+              {status.problem && !busy && <div className="note danger" role="alert"><strong>Claude is not answering yet.</strong> {status.problem}</div>}
               {busy && <div className="as-working" role="status"><Loader size={14} className="spin" aria-hidden="true" /><span dir="auto">{progress || "Working…"}</span></div>}
               {error && <div className="note danger" role="alert">{error}</div>}
             </div>

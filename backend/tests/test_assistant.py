@@ -428,3 +428,29 @@ def test_the_request_to_claude_and_the_retry_without_optional_features():
     broke = ClaudeModel("key", "claude-haiku-5-5", "low", client=SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=no_credit))))
     with pytest.raises(AssistantError, match="no credit left"):
         list(broke.turn(system="SYS", tools=[], messages=history))
+
+
+def test_the_key_is_checked_for_free_and_a_bad_one_is_named(tmp_path):
+    import anthropic
+    import httpx2
+
+    asked = []
+
+    def rejected(model_id):
+        asked.append(model_id)
+        response = httpx2.Response(401, request=httpx2.Request("GET", "https://api.anthropic.com/v1/models/x"))
+        raise anthropic.AuthenticationError("invalid x-api-key", response=response, body=None)
+
+    bad = ClaudeModel("key", client=SimpleNamespace(models=SimpleNamespace(retrieve=rejected)))
+    assert "rejected the API key" in bad.check() and "rejected the API key" in bad.check()
+    assert asked == ["claude-opus-5-5"]                      # a failure is remembered for a minute, not asked again each time
+    good = ClaudeModel("key", "claude-sonnet-5-5", client=SimpleNamespace(models=SimpleNamespace(retrieve=lambda m: asked.append(m))))
+    assert good.check() is None and good.check() is None and asked == ["claude-opus-5-5", "claude-sonnet-5-5"]
+    # the panel is told, and the public health check says only whether a key is saved
+    with TestClient(create_app(Settings(data_dir=tmp_path), Store(tmp_path / "t.sqlite3"), assistant_model=bad)) as c:
+        assert "rejected the API key" in c.get("/api/v1/assistant").json()["problem"]
+        assert c.get("/health").json()["assistant"] is True
+    with app_with(tmp_path / "b", Script()) as c:
+        assert c.get("/api/v1/assistant").json()["problem"] is None
+    with TestClient(create_app(Settings(data_dir=tmp_path / "c"), Store(tmp_path / "c" / "t.sqlite3"))) as c:
+        assert c.get("/health").json()["assistant"] is False
