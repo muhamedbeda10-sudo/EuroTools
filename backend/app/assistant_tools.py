@@ -14,12 +14,16 @@ sign-in accounts or passwords, which stay a manual, administrator-only task.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import math
+import re
+import unicodedata
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -35,7 +39,8 @@ from .services import App, NotFound, clean
 
 MAX_RESULT_CHARS = 30_000
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
-KNOWLEDGE_PART = 24_000
+KNOWLEDGE_PART = 24_000   # the most reference text one call returns, in characters
+KNOWLEDGE_MATCHES = 8
 PAGES = {
     "dashboard": "/", "market": "/market", "stock": "/stock", "watchlist": "/watchlist", "portfolio": "/portfolio",
     "trades": "/trades", "strategies": "/strategies", "simulator": "/simulator", "research": "/research",
@@ -641,35 +646,190 @@ def _audit(core: App, a: Audit) -> dict:
     return {"entries": core.store.recent("audit", a.limit)}
 
 
-def knowledge_index() -> list[dict]:
-    """The reference notes shipped with the app: one Markdown file each, title on the first line."""
+# ---- the reference library ----------------------------------------------------------------
+@dataclass(frozen=True)
+class Reference:
+    """One Markdown file of the library, cut into the sections the assistant reads."""
+    name: str
+    title: str
+    about: str
+    sections: tuple[tuple[str, str], ...]  # (heading, text) in the file's order
+
+    @property
+    def size(self) -> int:
+        return sum(len(text) for _, text in self.sections)
+
+
+def _cut(heading: str, text: str) -> list[tuple[str, str]]:
+    """A section that fits in one call stays whole; a longer one is cut at blank lines."""
+    if len(text) <= KNOWLEDGE_PART:
+        return [(heading, text)]
+    pieces: list[str] = []
+    current = ""
+    for block in re.split(r"\n[ \t]*\n", text):
+        while len(block) > KNOWLEDGE_PART:  # a single block longer than one call: cut where it falls
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.append(block[:KNOWLEDGE_PART])
+            block = block[KNOWLEDGE_PART:]
+        if current and len(current) + 2 + len(block) > KNOWLEDGE_PART:
+            pieces.append(current)
+            current = ""
+        current = f"{current}\n\n{block}" if current else block
+    if current:
+        pieces.append(current)
+    return [(heading if n == 0 else f"{heading} (continued {n + 1})", piece) for n, piece in enumerate(pieces)]
+
+
+@lru_cache(maxsize=1)
+def library() -> tuple[Reference, ...]:
+    """The references shipped with the app, read once per server instance.
+
+    One Markdown file each: the title on the first line, one line saying what it covers on
+    the second, then the text. `## ` headings divide it into sections; text before the first
+    heading is the section "Overview".
+    """
     out = []
     for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        out.append({"name": path.stem, "title": lines[0].lstrip("# ") if lines else path.stem,
-                    "about": lines[1][:240] if len(lines) > 1 else "", "parts": max(1, -(-len(text) // KNOWLEDGE_PART))})
-    return out
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        filled = [i for i, ln in enumerate(lines) if ln.strip()]
+        title = lines[filled[0]].strip().lstrip("# ").strip() if filled else path.stem
+        described = len(filled) > 1 and not lines[filled[1]].lstrip().startswith("#")
+        about = lines[filled[1]].strip()[:240] if described else ""
+        body = "\n".join(lines[filled[1 if described else 0] + 1:]) if filled else ""
+        sections: list[tuple[str, str]] = []
+        for part in re.split(r"(?m)^(?=## )", body):
+            part = part.strip()
+            if part:
+                heading = part.splitlines()[0].lstrip("# ").strip() if part.startswith("## ") else "Overview"
+                sections += _cut(heading, part)
+        out.append(Reference(path.stem, title, about, tuple(sections)))
+    return tuple(out)
+
+
+def knowledge_index() -> list[dict]:
+    return [{"name": r.name, "title": r.title, "about": r.about, "sections": len(r.sections), "characters": r.size}
+            for r in library()]
+
+
+def trading_references() -> list[str]:
+    """The names of the references that teach a trading method, which is every one but the app's own guide."""
+    return [r.name for r in library() if r.name != "app-guide"]
+
+
+def library_note() -> str:
+    """The list of references as the assistant's instructions carry it. Like the tool list, it is fixed for a release."""
+    return "\n".join(f"- `{r.name}` ({len(r.sections)} sections): {r.title}. {r.about}" for r in library()) or "- (none yet)"
+
+
+_FOLD = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي", "ـ": None, "٫": ".",
+                       **{chr(0x0660 + n): str(n) for n in range(10)}})
+_MARKS = re.compile("[\u064b-\u065f\u0670]")
+
+
+def fold(text: str) -> str:
+    """Text as the search compares it: letter case, Arabic vowel marks and the spelling variants of
+    alef, ya, hamza and ta marbuta are set aside, so a word is found however it was typed."""
+    return _MARKS.sub("", unicodedata.normalize("NFKC", text).lower().translate(_FOLD))
+
+
+_ARTICLE = re.compile(r"^(?:[وبفك]?ال|لل)(?=.{3})")  # "the", alone or joined to and / with / so / like / for
+_FILLER = frozenset("""a an and are as at be by do does for from how in is it me my of on or say says tell that the this to
+what when where which why with about اي ايه ما ماذا هو هي هل كيف ازاي في من على عن الي مع او ثم هذا هذه ده دي ان لو يعني ال""".split())
+
+
+def _terms(query: str) -> list[str]:
+    """The words to look for: no filler words, and an Arabic word without its article so that it
+    matches with and without one."""
+    words = [_ARTICLE.sub("", w) for w in re.findall(r"\d+(?:\.\d+)?|[^\W\d_]+", fold(query))]
+    return list(dict.fromkeys(w for w in words if len(w) > 1 and w not in _FILLER))
+
+
+def search_library(query: str, refs: Sequence[Reference]) -> list[dict]:
+    """The sections that mention the query's words, best first.
+
+    A word counts for more the fewer sections mention it, and more again in a heading, so a
+    section about the subject comes before one that only touches it. Sections that score
+    far below the best one are left out.
+    """
+    terms = _terms(query)
+    rows = [(ref, n, heading, text, fold(heading), fold(text))
+            for ref in refs for n, (heading, text) in enumerate(ref.sections, 1)]
+    spread = {t: sum(t in row[5] for row in rows) for t in terms}
+    found = []
+    for order, (ref, n, heading, text, folded_heading, folded_text) in enumerate(rows):
+        score, rarest = 0.0, None
+        for t in terms:
+            count = folded_text.count(t)
+            if count:
+                rarity = math.log(len(rows) / spread[t]) + 0.1
+                score += rarity * (1 + min(count, 9) / 9 + 2 * (t in folded_heading))
+                if rarest is None or spread[t] < spread[rarest]:
+                    rarest = t
+        if rarest is not None:
+            line = next((ln.strip() for ln in text.splitlines() if rarest in fold(ln)), heading)
+            found.append((-score, order, {"name": ref.name, "section": n, "title": heading, "mentions": line[:220]}))
+    found.sort(key=lambda f: f[:2])
+    return [match for score, _, match in found[:KNOWLEDGE_MATCHES] if score <= found[0][0] / 4]
 
 
 class Knowledge(Args):
-    name: str | None = Field(default=None, max_length=80, description="Leave out to list what the knowledge base holds")
-    part: int = Field(default=1, ge=1, le=200, description="Long references come in parts")
+    name: str | None = Field(default=None, max_length=80, description="A reference's name. With nothing else, gives its "
+                             "outline, or its whole text when it is short. Leave everything out to list the library")
+    sections: list[Annotated[int, Field(ge=1, le=999)]] | None = Field(
+        default=None, max_length=12, description="Section numbers from the reference's outline to read, with its name")
+    query: str | None = Field(default=None, max_length=120, description="Words to look for, in Arabic or English. Searches "
+                              "the whole library, or one reference when a name is given, and returns the sections to read")
 
 
 def _knowledge(core: App, a: Knowledge) -> dict:
-    index = knowledge_index()
-    if not a.name:
-        return {"references": index}
-    entry = next((e for e in index if e["name"] == a.name), None)
-    if entry is None:
-        raise NotFound(f"no reference called {a.name}; available: {', '.join(e['name'] for e in index) or 'none'}")
-    text = (KNOWLEDGE_DIR / f"{entry['name']}.md").read_text(encoding="utf-8")
-    start = (a.part - 1) * KNOWLEDGE_PART
-    if start >= len(text):
-        raise NotFound(f"{a.name} has {entry['parts']} part(s)")
-    return {"name": entry["name"], "title": entry["title"], "part": a.part, "parts": entry["parts"],
-            "text": text[start:start + KNOWLEDGE_PART]}
+    refs = library()
+    ref = None
+    if a.name:
+        wanted = a.name.strip().lower().removesuffix(".md")
+        ref = next((r for r in refs if r.name.lower() == wanted), None)
+        if ref is None:
+            raise NotFound(f"no reference called {a.name}; available: {', '.join(r.name for r in refs) or 'none'}")
+    if a.query and a.query.strip():
+        matches = search_library(a.query, [ref] if ref else refs)
+        note = ("Read the sections that fit with the reference's name and section numbers." if matches else
+                "No section mentions these words. Try other words, in Arabic or English, or read a reference's outline.")
+        return {"query": a.query, "matches": matches, "note": note}
+    if ref is None:
+        if a.sections:
+            raise NotFound("give the reference's name together with the section numbers")
+        return {"references": knowledge_index()}
+    if a.sections:
+        numbers = list(dict.fromkeys(a.sections))
+        if max(numbers) > len(ref.sections):
+            raise NotFound(f"{ref.name} has sections 1 to {len(ref.sections)}")
+        out: list[dict] = []
+        left: list[int] = []
+        used = 0
+        for n in numbers:
+            heading, text = ref.sections[n - 1]
+            if left or (out and used + len(text) > KNOWLEDGE_PART):
+                left.append(n)
+                continue
+            out.append({"section": n, "title": heading, "text": text})
+            used += len(text)
+        result: dict = {"name": ref.name, "title": ref.title, "sections": out}
+        if left:
+            result["not_returned"] = {"sections": left, "note": "These did not fit in one answer. Ask for them in another call."}
+        return result
+    head = {"name": ref.name, "title": ref.title, "about": ref.about}
+    if ref.size <= KNOWLEDGE_PART:
+        return {**head, "text": "\n\n".join(text for _, text in ref.sections)}
+    return {**head, "outline": [{"section": n, "title": heading, "characters": len(text)}
+                                for n, (heading, text) in enumerate(ref.sections, 1)],
+            "note": "Too long to return whole. Read the sections you need by number, several in one call if they are related."}
+
+
+def _knowledge_label(a: Knowledge) -> str:
+    if a.query and a.query.strip():
+        return f"Searching the references for “{a.query.strip()[:40]}”"
+    return f"Consulting the reference “{a.name}”" if a.name else "Checking the reference library"
 
 
 class OpenPage(Args):
@@ -782,9 +942,10 @@ TOOLS: list[Tool] = [
          "longer active.", NoArgs, _reset_portfolio, kind="confirm", label=lambda a: "Reset the paper portfolio"),
     Tool("audit_log", "The record of what was changed in this account and when.", Audit, _audit,
          label=lambda a: "Reading the activity log"),
-    Tool("knowledge", "The app's reference library: how the app works, and trading references added to it. Call it "
-         "with no name to see what it holds, then read what is relevant.", Knowledge, _knowledge,
-         label=lambda a: f"Consulting the reference “{a.name}”" if a.name else "Checking the reference library"),
+    Tool("knowledge", "The app's reference library: how the app works, and the owner's trading references (books and "
+         "notes). With no arguments it lists the references. With a name it gives that reference's outline, or the "
+         "whole text when it is short. With a name and section numbers it returns those sections. With a query it "
+         "finds the sections that mention the words.", Knowledge, _knowledge, label=_knowledge_label),
     Tool("open_page", "Open one of the app's screens for the user.", OpenPage, _open_page, kind="write",
          label=lambda a: f"Open the {a.page} page{f' for {a.symbol.upper()}' if a.symbol else ''}"),
 ]

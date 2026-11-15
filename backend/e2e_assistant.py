@@ -30,6 +30,9 @@ class RuleModel:
             elif "summary" in data:
                 text = (f"**Portfolio** (paper)\n\n| Item | EGP |\n|---|---|\n| Cash | {data['summary']['cash']:,.2f} |\n"
                         f"| Total value | {data['summary']['total_value']:,.2f} |\n\n- Holdings: {len(data['holdings'])}\n- Mode: `paper`")
+            elif "matches" in data:
+                found = "\n".join(f"- `{m['name']}` §{m['section']}: {m['title']}" for m in data["matches"])
+                text = f"The references mention it here:\n\n{found}" if found else "The references do not mention it."
             elif "recorded" in data:
                 r = data["recorded"]
                 text = f"تم: {r['type']} {r['qty']} {r['symbol']} بسعر {r['price']}، والكاش الباقي EGP {data['cash_after']:,.2f}."
@@ -42,10 +45,12 @@ class RuleModel:
             calls = [self._call("open_page", page="stock", symbol="TMGH")]
         elif "watch" in words:
             calls = [self._call("set_watch", symbol="SWDY", watched=True)]
+        elif "book" in words or "كتاب" in words or "مرجع" in words:
+            calls = [self._call("knowledge", query=words[:120])]
         elif "portfolio" in words or "المحفظة" in words:
             calls = [self._call("portfolio")]
         else:
-            text = "I can look things up and act in the app. Try: *review my portfolio*, *buy 10 COMI*."
+            text = "I can look things up and act in the app. Try: *review my portfolio*, *buy 10 COMI*, *what do my books say about fibonacci*."
         yield {"type": "progress", "text": "Thinking about the request"}
         for word in text.split(" ") if text else []:
             time.sleep(0.03)
