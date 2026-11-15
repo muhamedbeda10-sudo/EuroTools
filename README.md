@@ -73,8 +73,9 @@ involved and always the deployed version.
 
 What makes it installable: `public/manifest.webmanifest`, the icons in `public/icons/` and the tags in
 `app/layout.tsx`. `public/sw.js` does one thing: when a page cannot be loaded because the phone is
-offline, it shows `public/offline.html`. It keeps **no copy of the app or its data**, so a price or a
-balance is never shown from a saved copy. The installed app has its own sign-in (once).
+offline, it shows a "No connection" page, which is written inside the worker itself. It keeps
+**nothing on the device**, so a price or a balance is never shown from a saved copy. The installed
+app has its own sign-in (once).
 
 ## Real account (read-only)
 
