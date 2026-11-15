@@ -35,7 +35,7 @@ export default function Portfolio() {
           <h1>Portfolio</h1>
           <p className="sub">The simulated investment. Every figure is derived from the trade ledger.</p>
         </div>
-        <Link className="btn" href="/trades/">View ledger</Link>
+        <Link className="btn" href="/trades">View ledger</Link>
       </div>
       <State loading={loading} error={error}>
         {s && (
@@ -63,7 +63,7 @@ export default function Portfolio() {
                     <tbody>
                       {data.holdings.map((h: any) => (
                         <tr key={h.symbol}>
-                          <td><Link href={`/stock/?symbol=${h.symbol}`}><strong>{h.symbol}</strong></Link></td>
+                          <td><Link href={`/stock?symbol=${h.symbol}`}><strong>{h.symbol}</strong></Link></td>
                           <td className="l muted">{h.sector}</td><td>{int(h.qty)}</td><td>{num(h.avg_price)}</td><td>{num(h.last)}</td>
                           <td>{egp(h.market_value)}</td><td>{num(h.weight_pct)}%</td>
                           <td className={h.unrealized_gross > 0 ? "up" : h.unrealized_gross < 0 ? "down" : ""}>{egp(h.unrealized_gross)}</td>
@@ -76,7 +76,7 @@ export default function Portfolio() {
                   </table>
                 </div>
               ) : (
-                <div className="empty">No holdings. Open a stock from <Link href="/market/">Market</Link> and record a simulated buy.</div>
+                <div className="empty">No holdings. Open a stock from <Link href="/market">Market</Link> and record a simulated buy.</div>
               )}
               <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
                 Net P/L est. = gross P/L − buy fees on the remaining shares − the fees you would pay to sell at the last price.

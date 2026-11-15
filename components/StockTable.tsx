@@ -22,7 +22,7 @@ export default function StockTable({ rows, onChange, empty = "No stocks to show.
         <tbody>
           {rows.map((r) => (
             <tr key={r.symbol}>
-              <td><Link href={`/stock/?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
+              <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
               <td className="l">{r.name}</td>
               <td className="l muted">{r.sector}</td>
               <td>{num(r.last)}</td>

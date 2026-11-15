@@ -8,13 +8,13 @@ import { useApi } from "@/lib/useApi";
 
 const NAV = [
   ["/", "Dashboard"],
-  ["/market/", "Market & Categories"],
-  ["/watchlist/", "Watchlist"],
-  ["/portfolio/", "Portfolio"],
-  ["/trades/", "Trades & Transactions"],
-  ["/simulator/", "Strategy Simulator"],
-  ["/strategies/", "Strategy Management"],
-  ["/settings/", "Settings"],
+  ["/market", "Market & Categories"],
+  ["/watchlist", "Watchlist"],
+  ["/portfolio", "Portfolio"],
+  ["/trades", "Trades & Transactions"],
+  ["/simulator", "Strategy Simulator"],
+  ["/strategies", "Strategy Management"],
+  ["/settings", "Settings"],
 ] as const;
 
 const ThemeCtx = createContext<"light" | "dark">("light");
@@ -103,7 +103,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           </div>
           <nav className="nav" aria-label="Main">
             {NAV.map(([href, label]) => (
-              <Link key={href} href={href} aria-current={path === href || path === href.slice(0, -1) ? "page" : undefined}>
+              <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
                 {label}
               </Link>
             ))}

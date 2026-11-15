@@ -16,7 +16,7 @@ function StockView() {
   const [tf, setTf] = useState<"d" | "w" | "m">("d");
   const { data, error, loading, reload } = useApi(symbol ? `/api/v1/stocks/${symbol}?timeframe=${tf}` : null);
 
-  if (!symbol) return <div className="empty">Pick a stock from <Link href="/market/">Market</Link>.</div>;
+  if (!symbol) return <div className="empty">Pick a stock from <Link href="/market">Market</Link>.</div>;
   const q = data?.quote, a = data?.assessment, ins = data?.instrument;
   const toggleWatch = async () => {
     await api(`/api/v1/watchlist/${symbol}`, { method: data.watched ? "DELETE" : "PUT" });
@@ -39,7 +39,7 @@ function StockView() {
             )}
           </div>
           {!data.has_data ? (
-            <div className="note">No price history for this stock yet. Import a CSV in <Link href="/settings/">Settings</Link>.</div>
+            <div className="note">No price history for this stock yet. Import a CSV in <Link href="/settings">Settings</Link>.</div>
           ) : (
             <>
               {data.data_note && <div className="note">{data.data_note}</div>}

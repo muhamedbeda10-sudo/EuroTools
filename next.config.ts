@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
 
-// Static export: the UI is plain files (Firebase Hosting friendly) that talk to the API.
-const nextConfig: NextConfig = { output: "export", trailingSlash: true, images: { unoptimized: true } };
+// Static export: the UI is plain files; the API is the Python function under /api.
+const nextConfig: NextConfig = { output: "export", images: { unoptimized: true } };
 export default nextConfig;

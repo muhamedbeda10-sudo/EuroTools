@@ -13,7 +13,7 @@ export default function Watchlist() {
           <h1>Watchlist</h1>
           <p className="sub">Stocks you are tracking, independent of what the paper portfolio holds.</p>
         </div>
-        <Link className="btn" href="/market/">Browse all stocks</Link>
+        <Link className="btn" href="/market">Browse all stocks</Link>
       </div>
       <div className="card">
         <State loading={wl.loading} error={wl.error}>

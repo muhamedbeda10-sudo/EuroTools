@@ -56,7 +56,7 @@ export default function Trades() {
                   <dt>Fill price</dt><dd>latest available close</dd>
                 </dl>
                 <p className="muted" style={{ marginTop: 12 }}>
-                  Fees come from the schedule in <Link href="/settings/">Settings</Link> at the moment of each trade and are stored with it, so later changes to the schedule never rewrite history.
+                  Fees come from the schedule in <Link href="/settings">Settings</Link> at the moment of each trade and are stored with it, so later changes to the schedule never rewrite history.
                 </p>
               </div>
             </div>
@@ -80,7 +80,7 @@ export default function Trades() {
                         <tr>
                           <td>{r.seq}</td><td>{r.trade_date ?? r.ts.slice(0, 10)}</td>
                           <td className={`l ${r.type === "BUY" ? "up" : r.type === "SELL" ? "down" : ""}`}><strong>{r.type}</strong></td>
-                          <td className="l">{r.symbol ? <Link href={`/stock/?symbol=${r.symbol}`}>{r.symbol}</Link> : "—"} <SourceTag source={r.price_source} /></td>
+                          <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}>{r.symbol}</Link> : "—"} <SourceTag source={r.price_source} /></td>
                           <td>{r.qty ? int(r.qty) : "—"}</td><td>{num(r.price)}</td><td>{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>
                           <td className={tone(r.cash_delta)}>{num(r.cash_delta)}</td>
                           <td className={tone(r.realized_gross)}>{r.realized_gross == null ? "—" : num(r.realized_gross)}</td>

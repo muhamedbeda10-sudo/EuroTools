@@ -74,7 +74,7 @@ export default function Strategies() {
                         <td className="l wrap">stop {s.risk.stop_loss_pct ?? "none"}% · target {s.risk.take_profit_pct ?? "none"}% · {s.risk.max_alloc_pct}% per trade · max {s.risk.max_open_positions} positions</td>
                         <td className="l wrap">{[...s.symbols, ...s.sectors].join(", ") || "All stocks"}</td>
                         <td>
-                          <Link className="btn" href={`/simulator/?strategy=${s.id}`}>Backtest</Link>{" "}
+                          <Link className="btn" href={`/simulator?strategy=${s.id}`}>Backtest</Link>{" "}
                           <button className="small" onClick={() => (setDraft({ ...s }), setError(null))}>Edit</button>{" "}
                           <button className="small danger" onClick={() => remove(s)}>Delete</button>
                         </td>

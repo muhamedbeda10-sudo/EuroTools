@@ -13,7 +13,7 @@ function Movers({ title, rows }: { title: string; rows: any[] }) {
           <tbody>
             {rows.map((r) => (
               <tr key={r.symbol}>
-                <td><Link href={`/stock/?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
+                <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
                 <td>{num(r.last)}</td>
                 <td><Chg v={r.change_pct} /></td>
                 <td className="muted">{big(r.volume)}</td>
@@ -85,7 +85,7 @@ export default function Dashboard() {
       </State>
       {s && !s.fees_verified && (
         <p className="muted" style={{ marginTop: 8 }}>
-          Net figures use an unverified fee schedule. <Link href="/settings/">Check it against your broker tariff</Link>.
+          Net figures use an unverified fee schedule. <Link href="/settings">Check it against your broker tariff</Link>.
         </p>
       )}
 
@@ -106,7 +106,7 @@ export default function Dashboard() {
                 <tbody>
                   {wl.data.map((r: any) => (
                     <tr key={r.symbol}>
-                      <td><Link href={`/stock/?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
+                      <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
                       <td>{num(r.last)}</td>
                       <td><Chg v={r.change_pct} /></td>
                       <td><Spark data={r.spark} /></td>
@@ -116,7 +116,7 @@ export default function Dashboard() {
               </table>
             </div>
           ) : (
-            <div className="empty">Nothing watched yet. Add stocks from <Link href="/market/">Market</Link>.</div>
+            <div className="empty">Nothing watched yet. Add stocks from <Link href="/market">Market</Link>.</div>
           )}
         </div>
         <div className="card">
@@ -127,7 +127,7 @@ export default function Dashboard() {
                 <tbody>
                   {sg.data.slice(0, 8).map((r: any) => (
                     <tr key={r.strategy_id + r.symbol}>
-                      <td><Link href={`/stock/?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
+                      <td><Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link></td>
                       <td className="l">{r.strategy}</td>
                       <td className={r.signal === "entry" ? "up" : "down"}>{r.signal}</td>
                       <td className="muted">{r.date}</td>
@@ -138,7 +138,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="empty">
-              No signals on the latest bar. Signals come from strategies you save in <Link href="/strategies/">Strategy Management</Link>.
+              No signals on the latest bar. Signals come from strategies you save in <Link href="/strategies">Strategy Management</Link>.
             </div>
           )}
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Signals are informational. They never place orders.</p>

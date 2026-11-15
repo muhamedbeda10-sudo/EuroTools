@@ -129,7 +129,7 @@ function Simulator() {
         <div className="card">
           <h2><span className="badge paper">Mode 1</span> Historical backtesting</h2>
           {strategies.data && !strategies.data.length ? (
-            <div className="empty">Create a strategy first in <Link href="/strategies/">Strategy Management</Link>.</div>
+            <div className="empty">Create a strategy first in <Link href="/strategies">Strategy Management</Link>.</div>
           ) : (
             <>
               <div className="field"><label htmlFor="bt-s">Strategy</label>
