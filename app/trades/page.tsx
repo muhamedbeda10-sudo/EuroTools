@@ -79,7 +79,7 @@ export default function Trades() {
                       <Fragment key={r.seq}>
                         <tr>
                           <td>{r.seq}</td><td>{r.trade_date ?? r.ts.slice(0, 10)}</td>
-                          <td className={`l ${r.type === "BUY" ? "up" : r.type === "SELL" ? "down" : ""}`}><strong>{r.type}</strong></td>
+                          <td className={`l ${r.type === "BUY" ? "up" : r.type === "SELL" ? "down" : ""}`}><strong>{r.type}</strong>{String(r.origin ?? "").startsWith("strategy:") && <span className="badge" title="Placed by an automatic paper-trading run" style={{ marginLeft: 6 }}>auto</span>}</td>
                           <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}>{r.symbol}</Link> : "—"} <SourceTag source={r.price_source} /></td>
                           <td>{r.qty ? int(r.qty) : "—"}</td><td>{num(r.price)}</td><td>{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>
                           <td className={tone(r.cash_delta)}>{num(r.cash_delta)}</td>
@@ -108,7 +108,8 @@ export default function Trades() {
                                 )}
                                 <div>
                                   <div className="muted">Recorded {r.ts}{r.fees_verified === false ? " · fee schedule unverified at the time" : ""}</div>
-                                  <div style={{ marginTop: 6 }}>{r.note || <span className="muted">No journal note.</span>}</div>
+                                  <div style={{ marginTop: 6 }}>{r.note || <span className="muted">No note.</span>}</div>
+                                  <div style={{ marginTop: 8 }}><Link className="btn small" href={`/journal?symbol=${r.symbol}&trade=${r.seq}&date=${r.trade_date}`}>Write a journal entry for this trade</Link></div>
                                 </div>
                               </div>
                             </td>

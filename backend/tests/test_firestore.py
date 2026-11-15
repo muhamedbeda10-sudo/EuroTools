@@ -297,3 +297,46 @@ def test_feed_data_is_shared_between_accounts_and_closed_to_strangers(monkeypatc
         assert httpx.delete(f"{DOCS}/egxMarket/index", headers=h).status_code == 403
         assert api.post("/api/v1/data/refresh", headers=stranger).status_code == 401
     Feed.reset()
+
+
+# ---- phase two on Firestore ---------------------------------------------------
+def test_runs_research_journal_and_alerts_persist_in_firestore(api, user):
+    from tests.test_phase2 import FLAT, UP, csv
+    _, h = user
+
+    def load(closes):
+        text, days = csv(closes)
+        r = api.post("/api/v1/data/bars/import", data={"symbol": "COMI"}, files={"file": ("x.csv", text, "text/csv")}, headers=h)
+        assert r.status_code == 200, r.text
+        return days
+
+    load(FLAT)
+    st = api.post("/api/v1/strategies", headers=h, json={
+        "name": "Fast trend", "type": "sma_cross", "symbols": ["COMI"], "params": {"fast": 2, "slow": 5},
+        "risk": {"stop_loss_pct": None, "max_alloc_pct": 50, "cash_reserve_pct": 0, "slippage_bps": 0}}).json()
+    run = api.post("/api/v1/paper-runs", json={"strategy_id": st["id"], "capital": 20000}, headers=h)
+    assert run.status_code == 201, run.text
+    days = load(FLAT + UP)
+    assert api.post("/api/v1/paper-runs/process", headers=h).json()["fills"] == 1
+    assert api.post("/api/v1/paper-runs/process", headers=h).json()["fills"] == 0
+    buy = api.get("/api/v1/trades", headers=h).json()["transactions"][0]
+    assert buy["type"] == "BUY" and buy["trade_date"] == days[31] and buy["origin"].startswith("strategy:")
+    assert api.get("/api/v1/paper-runs", headers=h).json()[0]["positions"][0]["qty"] == buy["qty"]
+
+    assert api.post("/api/v1/research", json={"title": "Note", "symbols": ["COMI"]}, headers=h).status_code == 201
+    assert api.post("/api/v1/journal", json={"thesis": "Why", "symbol": "COMI"}, headers=h).status_code == 201
+    assert api.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 1}, headers=h).status_code == 201
+    assert len(api.post("/api/v1/alerts/check", headers=h).json()["triggered"]) == 1
+    assert api.post("/api/v1/alerts/check", headers=h).json()["triggered"] == []
+    assert len(api.get("/api/v1/alerts", headers=h).json()["events"]) == 1
+    two = api.post("/api/v1/strategies", json={"name": "Other", "type": "breakout"}, headers=h).json()
+    cmp = api.post("/api/v1/backtests/compare", json={"strategy_ids": [st["id"], two["id"]], "symbols": ["COMI", "TMGH"]}, headers=h)
+    assert cmp.status_code == 201 and len(cmp.json()["runs"]) == 2
+
+    # another account sees none of it
+    other = "o-" + uuid.uuid4().hex[:8]
+    provision(other)
+    ho = {"Authorization": f"Bearer {token(other)}"}
+    for path in ("/api/v1/research", "/api/v1/journal", "/api/v1/paper-runs"):
+        assert api.get(path, headers=ho).json() == []
+    assert api.get("/api/v1/alerts", headers=ho).json()["alerts"] == []

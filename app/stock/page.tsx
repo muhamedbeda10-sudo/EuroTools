@@ -8,10 +8,29 @@ import { useApi } from "@/lib/useApi";
 import { useStockStream } from "@/lib/useStockStream";
 import { MacdChart, PriceChart, RsiChart, SMA_COLORS } from "@/components/Charts";
 import PriceDepth from "@/components/PriceDepth";
+import { ResearchItem } from "@/components/ResearchItem";
 import TradeTicket from "@/components/TradeTicket";
 import { Chg, Kpi, SourceTag, State } from "@/components/ui";
 
 const TF = [["d", "Daily"], ["w", "Weekly"], ["m", "Monthly"]] as const;
+
+function RelatedResearch({ symbol }: { symbol: string }) {
+  const { data } = useApi(`/api/v1/research?symbol=${symbol}`);
+  return (
+    <div className="card section">
+      <div className="toolbar" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>Research &amp; news on {symbol}</h2>
+        <span>
+          <Link className="btn small" href={`/research?symbol=${symbol}`}>Add / view all</Link>{" "}
+          <Link className="btn small" href="/alerts">Set an alert</Link>{" "}
+          <Link className="btn small" href={`/journal?symbol=${symbol}`}>Journal entry</Link>
+        </span>
+      </div>
+      {data?.length ? data.slice(0, 4).map((item: any) => <ResearchItem key={item.id} item={item} />)
+        : <div className="empty">Nothing saved for this stock or its sector yet.</div>}
+    </div>
+  );
+}
 
 function StockView() {
   const symbol = (useSearchParams().get("symbol") || "").toUpperCase();
@@ -119,6 +138,8 @@ function StockView() {
                 </div>
               )}
 
+              <RelatedResearch symbol={symbol} />
+
               <div className="grid cols-2 section">
                 <div className="card">
                   <h2>Simulated order — {symbol}</h2>
@@ -129,7 +150,7 @@ function StockView() {
                   <ul style={{ margin: 0, paddingLeft: 18 }} className="muted">
                     <li>Market cap and shares outstanding.</li>
                     <li>Corporate actions: splits, bonus shares, dividends. Imported prices are used as-is, unadjusted.</li>
-                    <li>AI-generated explanation with cited sources (later phase).</li>
+                    <li>AI-generated explanation with cited sources.</li>
                   </ul>
                 </div>
               </div>

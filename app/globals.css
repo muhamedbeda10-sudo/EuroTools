@@ -131,3 +131,10 @@ dl.kv .total { font-weight: 700; border-top: 1px solid var(--border); padding-to
 .tick-up { background-color: color-mix(in srgb, var(--up) 30%, transparent); transition: none; }
 .tick-down { background-color: color-mix(in srgb, var(--down) 30%, transparent); transition: none; }
 @media (prefers-reduced-motion: reduce) { .tick-up, .tick-down { background-color: transparent; } }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.toast { background: var(--panel); border: 1px solid var(--warn-border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+a.btn { display: inline-block; }
+a.btn:hover { text-decoration: none; background: var(--panel-2); }
+section.card p { margin-bottom: 10px; }

@@ -10,18 +10,22 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 
 | Screen | Contents |
 | --- | --- |
-| Dashboard | Indices, breadth, movers, paper portfolio (gross vs net), watchlist, strategy signals, data status |
+| Dashboard | Indices, breadth, movers (re-ranked live), paper portfolio (gross vs net), watchlist, signals, latest research, data status |
 | Market & Categories | Sector performance, all stocks, search/filters, custom categories |
-| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, technical and momentum read, simulated order ticket |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
 | Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout), risk limits |
-| Strategy Simulator | Historical backtest: return, drawdown, win rate, profit factor, equity curve vs benchmark, run history |
-| Settings | Fee schedule, starting capital, CSV data import, audit trail |
+| Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
+| Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
+| Journal | Why each decision was made, what was expected, what happened, what was learned |
+| Alerts | Price, day change, volume, RSI and strategy-signal alerts, shown in the app and as desktop notifications |
+| Guide | Indicators, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
+| Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
-Not built yet: live streaming quotes, automatic paper trading, order execution, fundamentals, research/news,
-journal, alerts, AI analysis, corporate actions.
+Not built yet: order execution, fundamentals (no verified source), corporate actions, AI analysis
+(needs a paid model key).
 
 ## How it is hosted
 

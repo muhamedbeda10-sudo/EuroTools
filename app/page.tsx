@@ -56,6 +56,7 @@ export default function Dashboard() {
   const wl = useApi("/api/v1/watchlist");
   const sg = useApi("/api/v1/signals");
   const st = useApi("/api/v1/status");
+  const news = useApi("/api/v1/research");
   const s = pf.data?.summary;
   const b = ov.data?.breadth;
   const mv = useLiveMovers(ov.data);
@@ -187,6 +188,26 @@ export default function Dashboard() {
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Signals are informational. They never place orders.</p>
         </div>
         <div className="card">
+          <h2>Latest research &amp; news</h2>
+          {news.data?.length ? (
+            <div className="table-wrap">
+              <table>
+                <tbody>
+                  {news.data.slice(0, 6).map((n: any) => (
+                    <tr key={n.id}>
+                      <td className="wrap">{n.url ? <a href={n.url} target="_blank" rel="noopener noreferrer nofollow">{n.title} ↗</a> : n.title}
+                        <div className="muted" style={{ fontSize: 12 }}>{n.published ?? n.created_at.slice(0, 10)}{n.symbols.length ? ` · ${n.symbols.join(", ")}` : ""}{n.verified ? "" : " · not verified"}</div></td>
+                      <td className={n.sentiment === "positive" ? "up" : n.sentiment === "negative" ? "down" : "muted"}>{n.sentiment}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty">Nothing saved yet. Add links and notes in <Link href="/research">Research &amp; News</Link>.</div>
+          )}
+        </div>
+        <div className="card">
           <h2>Data connection status</h2>
           {d && (
             <dl className="kv">
@@ -196,7 +217,7 @@ export default function Dashboard() {
               <dt>Live prices</dt><dd>{d.is_live ? `On, ${d.live_symbols} stocks, ${String(d.live_as_of).slice(11, 16)} Cairo` : st.data?.provider?.market_open ? "Waiting for the feed" : "Market closed"}</dd>
               <dt>Younit market data</dt><dd>{st.data?.provider?.configured ? "Connected, read-only" : "Not connected"}</dd>
               <dt>Live order execution</dt><dd>Disabled</dd>
-              <dt>News feed</dt><dd>Later phase</dd>
+              <dt>News</dt><dd>Your own library (no automatic feed)</dd>
               <dt>Stocks missing data</dt><dd>{d.symbols_without_data.length}</dd>
               <dt>Stocks behind latest date</dt><dd>{d.symbols_behind_latest.length}</dd>
             </dl>

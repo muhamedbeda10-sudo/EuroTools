@@ -16,6 +16,10 @@ const NAV = [
   ["/trades", "Trades & Transactions"],
   ["/simulator", "Strategy Simulator"],
   ["/strategies", "Strategy Management"],
+  ["/research", "Research & News"],
+  ["/journal", "Journal"],
+  ["/alerts", "Alerts"],
+  ["/guide", "Guide"],
   ["/settings", "Settings"],
 ] as const;
 
@@ -174,6 +178,58 @@ function FeedUpdater({ provider }: { provider: any }) {
   return null;
 }
 
+type Toast = { seq: number; message: string; note?: string; symbol?: string | null };
+const CHECK_MS = 30 * 1000;
+
+/** Work that follows the data: bring automatic paper runs up to date and check the alerts.
+ *  Both are no-ops on the server when there is nothing to do. */
+function Background() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  useEffect(() => {
+    let busy = false, last = 0, stopped = false;
+    const work = async (force = false) => {
+      if (busy || stopped || document.visibilityState !== "visible") return;
+      if (!force && Date.now() - last < 12000) return;
+      busy = true;
+      last = Date.now();
+      try {
+        const runs = await api("/api/v1/paper-runs/process", { method: "POST" });
+        if (runs.fills > 0) window.dispatchEvent(new Event(DATA_UPDATED));
+        const out = await api("/api/v1/alerts/check", { method: "POST" });
+        if (out.triggered.length && !stopped) {
+          setToasts((t) => [...out.triggered, ...t].slice(0, 5));
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            for (const e of out.triggered) new Notification("EGX Intelligence alert", { body: e.message + (e.note ? ` — ${e.note}` : "") });
+          }
+        }
+      } catch {
+        // background work never interrupts the screen; it simply tries again later
+      } finally {
+        busy = false;
+      }
+    };
+    work(true);
+    const onData = () => work();
+    window.addEventListener(DATA_UPDATED, onData);
+    const timer = setInterval(() => work(), CHECK_MS);
+    return () => { stopped = true; window.removeEventListener(DATA_UPDATED, onData); clearInterval(timer); };
+  }, []);
+  if (!toasts.length) return null;
+  return (
+    <div className="toasts" role="alert" aria-live="assertive">
+      {toasts.map((t) => (
+        <div className="toast" key={t.seq}>
+          <div><strong>Alert</strong> · {t.message}{t.note ? <span className="muted"> — {t.note}</span> : null}</div>
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            {t.symbol && <Link className="btn small" href={`/stock?symbol=${t.symbol}`}>Open {t.symbol}</Link>}
+            <button className="small" onClick={() => setToasts((all) => all.filter((x) => x.seq !== t.seq))}>Dismiss</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Frame({ children, email }: { children: React.ReactNode; email: string | null }) {
   const path = usePathname();
   const [open, setOpen] = useState(false);
@@ -225,7 +281,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                 {label}
               </Link>
             ))}
-            <div className="soon">Later phases: Research &amp; News, Guidance &amp; Journal, Alerts, live-data paper trading</div>
+
           </nav>
         </aside>
         <div className="main">
@@ -256,6 +312,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             </div>
           )}
           {status?.provider?.configured && <FeedUpdater provider={status.provider} />}
+          <Background />
           {d && !d.has_sample_data && d.is_stale && (
             <div className="banner" role="status">
               <strong>Stale data.</strong> Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.

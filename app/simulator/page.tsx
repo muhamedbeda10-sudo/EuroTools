@@ -5,6 +5,7 @@ import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { egp, int, num, pct } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { CompareStrategies, PaperRuns } from "@/components/Automation";
 import { LinesChart } from "@/components/Charts";
 import { Chg, Kpi, Profit, State } from "@/components/ui";
 
@@ -121,7 +122,7 @@ function Simulator() {
       <div className="page-head">
         <div>
           <h1>Strategy Simulator</h1>
-          <p className="sub">Test a strategy without risking money. Neither mode can send an order to a broker.</p>
+          <p className="sub">Test a strategy on history, or let it trade the paper portfolio. Neither mode can send an order to a broker.</p>
         </div>
       </div>
 
@@ -150,18 +151,15 @@ function Simulator() {
             </>
           )}
         </div>
-        <div className="card">
-          <h2><span className="badge">Mode 2</span> Paper trading on live data</h2>
-          <div className="note info">Not available yet. Automatic paper trading needs a live market-data feed, which is not connected.</div>
-          <p className="muted">Until then you can record simulated orders by hand from any stock page or from Trades &amp; Transactions. They fill at the latest available close and are charged the same fee schedule.</p>
-          <p className="muted">Live brokerage execution is a separate module and is disabled.</p>
-        </div>
+        <PaperRuns strategies={strategies.data ?? []} />
       </div>
 
       {result && <div className="section"><Result r={result} /></div>}
 
+      <CompareStrategies strategies={strategies.data ?? []} defaultCapital={capital} />
+
       <div className="card section">
-        <h2>Previous runs — compare strategies</h2>
+        <h2>Previous runs</h2>
         <State loading={history.loading} error={history.error}>
           {history.data &&
             (history.data.length ? (
