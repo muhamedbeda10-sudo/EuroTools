@@ -245,10 +245,13 @@ function Audit() {
   );
 }
 
+const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
+
 export default function Settings() {
   const status = useApi("/api/v1/status");
   const feed = useFeedUpdate();
   const pv = status.data?.provider;
+  const [tab, setTab] = useState<(typeof TABS)[number][0]>("fees");
   useEffect(() => { if (feed.state.done) window.dispatchEvent(new Event(DATA_UPDATED)); }, [feed.state.done, feed.state.changed]);
   return (
     <>
@@ -258,12 +261,18 @@ export default function Settings() {
           <p className="sub">The assumptions behind every number in the app.</p>
         </div>
       </div>
-      <div className="grid">
-        <Fees />
-        <Capital />
-        <DataImport />
-        <AccountsCard />
-        <div className="card">
+      <div className="seg" role="tablist" aria-label="Settings sections" style={{ marginBottom: 16 }}>
+        {TABS.map(([key, label]) => (
+          <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>
+        ))}
+      </div>
+      <div className="grid" role="tabpanel" aria-label={TABS.find(([k]) => k === tab)?.[1]}>
+        {tab === "fees" && <Fees />}
+        {tab === "portfolio" && <Capital />}
+        {tab === "data" && <DataImport />}
+        {tab === "accounts" && <AccountsCard />}
+        {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
+        {(tab === "data") && <div className="card">
           <h2>Connections</h2>
           <dl className="kv">
             <dt>Trading mode</dt><dd>Paper only</dd>
@@ -316,8 +325,8 @@ export default function Settings() {
               )}
             </>
           )}
-        </div>
-        <Audit />
+        </div>}
+        {tab === "audit" && <Audit />}
       </div>
     </>
   );
