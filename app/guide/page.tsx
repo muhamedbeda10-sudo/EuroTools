@@ -10,6 +10,20 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <p><strong>Volume.</strong> A move on volume well above the 20-day average has more people behind it than the same move on thin volume.</p>
     </>
   ) },
+  { id: "candles", title: "Candle patterns", body: (
+    <>
+      <p>A candle shows one session: the <strong>body</strong> runs from the open to the close, and the thin <strong>shadows</strong> reach the high and the low. The shape says who won the session. A long body is a clear win for buyers or sellers; a small body, or a <strong>doji</strong> where the open and the close almost meet, is a draw.</p>
+      <p>Each stock&apos;s page marks the patterns it finds on the chart and lists them in the <em>Candle patterns</em> card. They are found by fixed rules, the same way every time:</p>
+      <ul>
+        <li><strong>After a decline, pointing up:</strong> hammer, inverted hammer, bullish engulfing, piercing pattern, bullish harami, morning star, a doji, three white soldiers.</li>
+        <li><strong>After an advance, pointing down:</strong> hanging man, shooting star, bearish engulfing, dark-cloud cover, bearish harami, evening star, a doji, three black crows.</li>
+        <li><strong>Windows:</strong> a gap between two sessions. A gap up tends to act as support and a gap down as resistance, until a close goes back through it.</li>
+      </ul>
+      <p><strong>The same shape means different things in different places.</strong> A hammer matters only after a fall and a shooting star only after a rise, which is why the app looks at the sessions before the pattern. A reversal pattern says the move may be tiring; it does not say the price will turn at once, and in a strong trend most of them fail.</p>
+      <p><strong>Status.</strong> <em>Forming</em>: the candle is not complete, so the shape can still change. <em>Awaiting next session</em>: nothing has followed yet. <em>Confirmed</em>: the next session closed beyond the pattern in its direction. <em>Not confirmed</em>: it did not. <em>Failed</em>: a later session closed through the pattern&apos;s own low (if it points up) or high (if it points down). That price is shown as the <strong>level</strong>, and it is the natural place for a stop.</p>
+      <p>Weigh a pattern with what surrounds it: one that forms at support or resistance, on volume above average, and in the direction of the larger trend deserves more attention than one in the middle of nowhere. In thinly traded stocks single candles are unreliable. To see whether patterns have paid on a stock after fees, test the <em>Candlestick reversal</em> strategy in the <Link href="/simulator">Simulator</Link>.</p>
+    </>
+  ) },
   { id: "depth", title: "Reading price depth", body: (
     <>
       <p>The order book lists buy orders (bids) and sell orders (asks) waiting at each price. The <strong>spread</strong> is the gap between the highest bid and the lowest ask; a wide spread means trading the stock costs more than the fee schedule alone suggests.</p>
@@ -69,6 +83,17 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <p>Use the <Link href="/journal">Journal</Link> to write down why you expect a strategy to work before you see the result.</p>
     </>
   ) },
+  { id: "orders", title: "Stop-loss and take-profit orders", body: (
+    <>
+      <p>On the <Link href="/portfolio">Portfolio</Link> page you can leave a standing instruction on a holding: sell if the price falls to a level (stop-loss) or rises to one (take-profit). The app carries it out by itself and records an ordinary sale in the ledger, with fees.</p>
+      <ul>
+        <li>On a completed session the whole day counts: a stop fills at its price, or at the open if the stock opened below it.</li>
+        <li>While a session is running, and on the day you placed the order, only the latest price the app has seen counts.</li>
+        <li>Orders are checked while the app is open; sessions that completed while it was closed are caught up the next time you open it.</li>
+        <li>One stop and one target per stock; a new one replaces the old. Selling the shares another way cancels them.</li>
+      </ul>
+    </>
+  ) },
   { id: "automatic", title: "How automatic paper trading decides", body: (
     <>
       <p>A run follows one strategy with its own slice of the paper cash. It uses completed sessions only, with the same rules and arithmetic as the simulator: a signal read at a close is filled at the next open, with slippage and fees; stops and targets are checked against each day&apos;s low and high.</p>
@@ -89,6 +114,8 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
         <li><strong>It cannot place a real order</strong> (nothing in the app can) and it does not manage sign-in accounts.</li>
         <li><strong>It is not an adviser.</strong> Its views come from price history and your own notes: there are no company financials in the app, and the simulation has the limits listed below. It can be wrong.</li>
         <li><strong>It has a cost.</strong> It runs on Claude through an API key billed per use; the panel shows an estimate for the conversation and the day.</li>
+        <li><strong>You set it up in <Link href="/settings?tab=assistant">Settings → Assistant</Link>:</strong> which model it uses and how hard it thinks (both change the cost), a daily spending ceiling, and limits on its own trades (largest trade, largest holding, cash always kept, trades per day). The app enforces those limits itself, whatever the assistant decides.</li>
+        <li><strong>Autopilot.</strong> Switched on there, the assistant reviews the portfolio after each close (and, if you choose, during the session), trades inside the limits following the instructions you wrote, and leaves a conversation you can read. It works while the app is open in a browser.</li>
       </ul>
     </>
   ) },

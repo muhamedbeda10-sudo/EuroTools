@@ -250,6 +250,7 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: 
   box-shadow: none; margin: 0 -1px -1px 0; padding: 16px var(--pad); min-width: 0; }
 .statband.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .statband.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.statband.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .dash-top { display: grid; gap: 16px; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
 .statband.tight > * { padding: 12px var(--pad); }
 
@@ -537,6 +538,7 @@ section.card > :last-child { margin-bottom: 0; }
   .dash-top { grid-template-columns: 1fr; }
   .statband.five { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .statband.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .statband.three { grid-template-columns: 1fr; }
   .guide { grid-template-columns: 1fr; }
   .guide .toc { position: static; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 10px; box-shadow: var(--shadow); }
@@ -563,7 +565,7 @@ section.card > :last-child { margin-bottom: 0; }
 }
 @media (max-width: 560px) {
   .statband, .statband.five, .statband.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .statband.wide-cells { grid-template-columns: 1fr; }
+  .statband.three { grid-template-columns: 1fr; }
   dl.qa { grid-template-columns: 1fr; gap: 2px 0; }
   dl.qa dd { margin-bottom: 8px; }
   .kpi .value { font-size: 19px; }
@@ -629,3 +631,8 @@ section.card > :last-child { margin-bottom: 0; }
 @media (min-width: 1280px) { .shell.with-assistant .main { padding-right: 420px; } }
 @media (min-width: 700px) { .with-assistant .toasts { right: 438px; } }
 @media (max-width: 520px) { .as-open span { display: none; } }
+
+/* ---- protective orders form ---- */
+.order-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.card > .table-wrap + .order-form, .card > .table-wrap + .note + .order-form { border-top: 0; padding-top: 0; }
+.order-form .field { margin-bottom: 0; flex: 1 1 160px; max-width: 280px; }

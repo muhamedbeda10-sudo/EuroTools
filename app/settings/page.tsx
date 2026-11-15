@@ -1,8 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
+import AssistantSettings from "@/components/AssistantSettings";
 import { useFeedUpdate } from "@/components/Shell";
 import { CardHead, Empty, State } from "@/components/ui";
 
@@ -256,7 +258,14 @@ function Audit() {
   );
 }
 
-const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
+const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["assistant", "Assistant"], ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
+
+/** Opens the tab named in the address (?tab=assistant), also when the page is already showing. */
+function TabFromAddress({ onTab }: { onTab: (tab: any) => void }) {
+  const wanted = useSearchParams().get("tab");
+  useEffect(() => { if (wanted && TABS.some(([k]) => k === wanted)) onTab(wanted); }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
 
 export default function Settings() {
   const status = useApi("/api/v1/status");
@@ -272,6 +281,7 @@ export default function Settings() {
           <p className="sub">The assumptions behind every number in the app.</p>
         </div>
       </div>
+      <Suspense fallback={null}><TabFromAddress onTab={setTab} /></Suspense>
       <div className="tabs" role="tablist" aria-label="Settings sections">
         {TABS.map(([key, label]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
@@ -281,6 +291,7 @@ export default function Settings() {
         {tab === "fees" && <Fees />}
         {tab === "portfolio" && <Capital />}
         {tab === "data" && <DataImport />}
+        {tab === "assistant" && <AssistantSettings />}
         {tab === "accounts" && <AccountsCard />}
         {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
         {(tab === "data") && <div className="card">

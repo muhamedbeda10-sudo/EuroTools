@@ -12,16 +12,16 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | --- | --- |
 | Dashboard | Indices, breadth, movers (re-ranked live), paper portfolio (gross vs net), watchlist, signals, latest research, data status |
 | Market & Categories | Sector performance, all stocks, search/filters, custom categories |
-| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, live price and order book (price depth), related research, simulated order ticket |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
-| Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout), risk limits |
+| Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
 | Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
 | Journal | Why each decision was made, what was expected, what happened, what was learned |
 | Alerts | Price, day change, volume, RSI and strategy-signal alerts, shown in the app and as desktop notifications |
-| Guide | Indicators, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
+| Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
 Not built yet: order execution, fundamentals (no verified source), corporate actions, AI analysis
@@ -111,6 +111,30 @@ market and the account's own data and operates the app through tools: it can rea
 and do everything they do (paper trades, strategies, backtests, automatic runs, alerts, research, journal,
 settings). It has no tool for sign-in accounts or passwords, and none for real orders: no such code exists.
 
+### What the assistant knows about trading
+
+Besides the live data it reads through its tools, the assistant has a reference library in
+`backend/app/knowledge/` (one Markdown file per subject, read on demand through its `knowledge` tool):
+
+| File | Subject |
+|---|---|
+| `app-guide.md` | How the app works, screen by screen, and the rules behind its numbers |
+| `candlesticks.md` | Japanese candlestick patterns and how the app's detector reads them |
+| `chart-patterns.md` | Reversal and continuation formations, breakouts, targets and stops |
+| `trend-and-stages.md` | Trend, support and resistance, moving averages, volume, the four-stage model |
+| `momentum-indicators.md` | RSI, MACD and how to read any oscillator |
+| `growth-stock-method.md` | Bases, breakouts and sell rules of the leading-stock approach |
+| `trend-following.md` | Systematic trend following |
+| `price-action.md` | Reading trends, channels and trading ranges bar by bar |
+| `risk-and-position-sizing.md` | Risk of ruin, expectancy, position sizing, discipline |
+
+The trading references are written for this app, in its own words, from the methods of well-known books (each
+file names its sources). They hold no text from those books. To add a subject, add a Markdown file: the first line
+is its title and the second a one-sentence summary the assistant chooses by.
+
+Candle patterns are not left to the model's eye: `backend/app/domain/candles.py` detects them from the prices, and
+the assistant gets the result (`stock_report`, `candle_scan`).
+
 | Setting (server environment) | Meaning |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude API key. **Secret.** Without it the assistant is off and nothing is charged. |
@@ -129,10 +153,34 @@ settings). It has no tool for sign-in accounts or passwords, and none for real o
   service methods the screens use, with its input validated before it runs.
 - A conversation is one document in the user's own data and only ever grows: the instructions and tool list
   are fixed and anything that varies (time, current page) is written into the user's message when it is sent.
+- **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): model, thinking effort, access,
+  daily ceiling, the limits on the assistant's own trades, and the autopilot. The environment values above are
+  only the defaults.
+- **Limits on its trades** are enforced in code on every trade the assistant places (`check_trade`): largest
+  single trade and largest holding as a share of the portfolio, cash always kept, trades per day. Its trades are
+  marked `origin: assistant` in the ledger.
+- **Autopilot** (off by default): after each completed session, and optionally every N minutes while the market
+  is open, the page asks the server to run a review. The server decides whether one is due, claims it (so two
+  tabs cannot both run it), builds a briefing from the portfolio and the user's written mandate, and lets the
+  assistant act inside the limits. Each review is a stored conversation. It runs only while the app is open in
+  a browser; with anything less than full access it looks and reports only.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
-  description on the second). The assistant lists and reads them through its `knowledge` tool. Add a file to
-  teach it something; no code change is needed.
+  description on the second, then the text under `## ` headings). `app-guide` describes the app; any other
+  file is one of the owner's trading references. The assistant's instructions list every reference, and its `knowledge` tool reads them: the outline of a
+  reference, chosen sections by number, or a search for words in Arabic or English (spelling variants and
+  vowel marks are ignored). It is told to answer questions of method from these references, in their terms,
+  and to apply them to what the app has: daily candles, long-only paper trades, alerts instead of pending
+  orders. Add a file to teach it something; no code change is needed. A section longer than one answer holds
+  (24,000 characters) is cut at blank lines, so keep one topic per `## ` heading.
 - Try it locally without a key or any cost: `uvicorn e2e_assistant:app` runs the real API with a stand-in model.
+
+## Protective orders
+
+A stop-loss or take-profit on a holding (`backend/app/orders.py`), placed from the Portfolio page or by the
+assistant. The background job carries them out: on a completed session the day's whole range counts (a stop
+fills at the stop, or at the open if the stock gapped through it, as in the backtester); during a running
+session and on the day the order was placed only the latest price counts. A fill is an ordinary SELL in the
+ledger (`origin: order:<id>`) with the usual fees. One stop and one target per stock.
 
 ## Automatic paper trading
 

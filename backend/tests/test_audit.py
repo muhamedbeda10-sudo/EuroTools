@@ -155,7 +155,7 @@ def test_runs_move_through_the_sessions_together(tmp_path):
     load(c, "TMGH", bars(FLAT + [10, 10, 11, 12]))         # rises from session 3: bought at the open of session 4
     assert process(c)["fills"] == 2
     assert [(t["trade_date"], t["type"], t["symbol"]) for t in fills(c)] == [(DAYS[31], "BUY", "COMI"), (DAYS[33], "BUY", "TMGH")]
-    assert process(c) == {"runs": 2, "fills": 0}           # idempotent
+    assert process(c) == {"runs": 2, "fills": 0, "orders": []}           # idempotent
 
 
 def test_a_manual_trade_lets_the_runs_catch_up_first(tmp_path):

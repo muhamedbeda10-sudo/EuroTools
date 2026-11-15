@@ -1,6 +1,8 @@
 "use client";
-import { Briefcase, LineChart, PieChart } from "lucide-react";
+import { Briefcase, LineChart, PieChart, ShieldCheck } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
+import { api } from "@/lib/api";
 import { egp, int, num, pct, price, tone } from "@/lib/format";
 import { Flash, useTick } from "@/lib/live";
 import { useApi } from "@/lib/useApi";
@@ -63,6 +65,77 @@ function HoldingRow({ h }: { h: any }) {
   );
 }
 
+/** Stop-loss and take-profit orders: standing instructions the app carries out by itself when the price is reached. */
+function ProtectiveOrders({ holdings }: { holdings: any[] }) {
+  const { data, reload } = useApi("/api/v1/orders");
+  const [form, setForm] = useState({ symbol: "", kind: "stop", price: "" });
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const symbol = form.symbol || holdings[0]?.symbol || "";
+  const holding = holdings.find((h) => h.symbol === symbol);
+  const add = async () => {
+    setBusy(true); setError(null);
+    try {
+      await api("/api/v1/orders", { method: "POST", json: { symbol, kind: form.kind, price: Number(form.price) } });
+      setForm({ ...form, price: "" });
+      reload();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const cancel = async (id: string) => {
+    try { await api(`/api/v1/orders/${id}`, { method: "DELETE" }); } catch (e: any) { setError(e.message); }
+    reload();
+  };
+  const unprotected = holdings.filter((h) => !(data ?? []).some((o: any) => o.symbol === h.symbol && o.kind === "stop")).map((h) => h.symbol);
+  return (
+    <div className="card section">
+      <div className="card-head"><h2>Stop-loss and take-profit orders{data?.length ? <span className="count">{data.length}</span> : null}</h2><span className="badge paper">paper</span></div>
+      <p className="muted" style={{ marginTop: 0, fontSize: 12.5, maxWidth: "110ch" }}>
+        A standing instruction to sell when a price is reached. The app carries it out by itself while it is open, and catches up on
+        completed sessions the next time it is opened. A new order replaces the old one of the same kind.
+      </p>
+      {data?.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Stock</th><th className="l">Order</th><th>Sell at</th><th>Last</th><th>Distance</th><th>Shares</th><th className="l">Placed by</th><th><span className="sr-only">Cancel</span></th></tr></thead>
+            <tbody>
+              {data.map((o: any) => (
+                <tr key={o.id}>
+                  <td><Link href={`/stock?symbol=${o.symbol}`}><strong>{o.symbol}</strong></Link></td>
+                  <td className="l"><span className={`badge ${o.kind === "stop" ? "bad" : "ok"}`}>{o.name}</span></td>
+                  <td>{price(o.price)}</td><td>{price(o.last)}</td><td><Chg v={o.distance_pct} /></td><td>{int(o.qty)}</td>
+                  <td className="l muted">{o.origin === "assistant" ? "assistant" : "you"}</td>
+                  <td className="actions"><button className="small danger" onClick={() => cancel(o.id)} aria-label={`Cancel the ${o.name} on ${o.symbol}`}>Cancel</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <Empty icon={ShieldCheck} title="No orders yet">
+          {holdings.length ? "Your holdings are not protected by a stop-loss. Add one below." : "Once you hold a stock you can leave a stop-loss or a take-profit on it here."}
+        </Empty>
+      )}
+      {unprotected.length > 0 && !!data?.length && <div className="note" style={{ marginTop: 12 }}><strong>No stop-loss on:</strong> {unprotected.join(", ")}.</div>}
+      {holdings.length > 0 && (
+        <div className="order-form">
+          <div className="field"><label htmlFor="po-symbol">Stock</label>
+            <select id="po-symbol" value={symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })}>
+              {holdings.map((h) => <option key={h.symbol} value={h.symbol}>{h.symbol}</option>)}
+            </select></div>
+          <div className="field"><label htmlFor="po-kind">Order</label>
+            <select id="po-kind" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              <option value="stop">Stop-loss (sell if it falls to)</option><option value="target">Take-profit (sell if it rises to)</option>
+            </select></div>
+          <div className="field"><label htmlFor="po-price">Price{holding ? ` (last ${price(holding.last)})` : ""}</label>
+            <input id="po-price" type="number" min={0} step="any" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></div>
+          <button className="primary" disabled={busy || !symbol || !(Number(form.price) > 0)} onClick={add}>Add order</button>
+        </div>
+      )}
+      {error && <div className="note danger" role="alert" style={{ marginTop: 10 }}>{error}</div>}
+    </div>
+  );
+}
+
 export default function Portfolio() {
   const { data, loading, error } = useApi("/api/v1/portfolio");
   const s = data?.summary;
@@ -80,13 +153,13 @@ export default function Portfolio() {
         {s && (
           <>
             {data.warnings.length > 0 && <div className="note"><ul>{data.warnings.map((w: string) => <li key={w}>{w}</li>)}</ul></div>}
-            <div className="statband">
+            <div className="statband four">
               <Kpi label="Total value" value={egp(s.total_value)} delta={s.return_net_pct} hint={`net, from ${egp(s.starting_capital)}`} />
               <Kpi label="Cash balance" value={egp(s.cash)} hint={`${num(data.cash_weight_pct)}% of portfolio`} />
               <Kpi label="Invested (at cost)" value={egp(s.invested_cost)} hint={`Market value ${egp(s.market_value)}`} />
               <Kpi label="Fees paid" value={egp(s.fees_paid)} hint={`Est. fees to exit all positions ${egp(s.est_exit_fees)}${s.fees_verified ? "" : " · schedule unverified"}`} />
             </div>
-            <div className="statband section" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+            <div className="statband three section">
               <Profit label="Realized" gross={s.realized_gross} net={s.realized_net} />
               <Profit label="Unrealized" gross={s.unrealized_gross} net={s.unrealized_net_est} netLabel="Net est. after exit fees" />
               <Profit label="Total return" gross={s.total_gross} net={s.total_net} pctNet={s.return_net_pct} />
@@ -115,6 +188,8 @@ export default function Portfolio() {
                 Amounts in EGP. Net P/L est. = gross P/L − buy fees on the remaining shares − the fees you would pay to sell at the last price.
               </p>
             </div>
+
+            <ProtectiveOrders holdings={data.holdings} />
 
             <div className="grid cols-2 section">
               <div className="card"><h2>Allocation by stock</h2>

@@ -29,7 +29,7 @@ export default function Trades() {
       <State loading={loading} error={error}>
         {t && (
           <>
-            <div className="statband">
+            <div className="statband four">
               <Kpi label="Buys (gross)" value={egp(t.buys_gross)} />
               <Kpi label="Sales (gross)" value={egp(t.sells_gross)} />
               <Kpi label="Fees paid" value={egp(t.fees_paid)} hint={`${t.count} trade${t.count === 1 ? "" : "s"}`} />
@@ -85,6 +85,8 @@ export default function Trades() {
                           <td className="muted">{r.seq}</td><td className="l">{r.trade_date ?? r.ts.slice(0, 10)}</td>
                           <td className="l"><span className={`badge leg ${r.type === "BUY" ? "ok" : r.type === "SELL" ? "bad" : ""}`}>{r.type === "DEPOSIT" ? "Deposit" : r.type === "BUY" ? "Buy" : "Sell"}</span>
                             {String(r.origin ?? "").startsWith("strategy:") && <span className="badge" title="Placed by an automatic paper-trading run" style={{ marginLeft: 6 }}>auto</span>}
+                            {r.origin === "assistant" && <span className="badge paper" title="Placed by the assistant" style={{ marginLeft: 6 }}>assistant</span>}
+                            {String(r.origin ?? "").startsWith("order:") && <span className="badge" title="A stop-loss or take-profit order carried out by the app" style={{ marginLeft: 6 }}>order</span>}
                             {r.backdated && <span className="badge warn" title="Entered afterwards at a past day's close, with later prices already known" style={{ marginLeft: 6 }}>back-dated</span>}</td>
                           <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link> : "—"}</td>
                           <td>{r.qty ? int(r.qty) : "—"}</td><td>{r.price == null ? "—" : price(r.price)}</td><td>{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>

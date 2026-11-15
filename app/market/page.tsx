@@ -59,7 +59,7 @@ export default function Market() {
       </div>
 
       {b && (
-        <div className="statband">
+        <div className="statband four">
           <Kpi label="Stocks covered" value={String(b.covered)} hint={`${all.data?.filter((r: any) => r.volume > 0).length ?? "—"} traded today`} />
           <Kpi label="Rising / falling" value={<><span className="up">{b.advancers}</span> <span className="muted">/</span> <span className="down">{b.decliners}</span></>} hint={`${b.unchanged} unchanged`} />
           <Kpi label="Average move today" value={pct(b.avg_change_pct)} toneOf={b.avg_change_pct} />
