@@ -1,0 +1,64 @@
+# What's new in EGX Intelligence
+The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
+
+## 0.3.0 · 2026-11-16 · What's new: every update is shown here
+For: everyone
+عربي: «الجديد»: كل تحديث بيظهر هنا
+
+- After an update, the app shows what changed the first time you open it. The whole list stays under "What's new" in the menu.
+  عربي: بعد أي تحديث، التطبيق بيعرض اللي اتغيّر أول ما تفتحه. والقايمة كلها موجودة تحت «What's new» في القايمة الجانبية.
+- The assistant reads the same list: ask it "what is new?", in Arabic or English.
+  عربي: المساعد بيقرا نفس القايمة: اسأله «إيه الجديد؟» بالعربي أو بالإنجليزي.
+
+## 0.3.0 · 2026-11-16 · Automatic real orders, inside a box you set
+For: owner
+Open: /settings?tab=real
+عربي: أوامر حقيقية آلية، جوه صندوق إنت اللي بتحدده
+
+- You can approve in advance: a real order the assistant proposes is sent without asking you, if it fits your box (the stocks you name, the most per order, buys per day, a budget, and a stop-loss on every buy). Everything else still waits for your approval.
+  عربي: تقدر تدّي موافقة مسبقة: الأمر الحقيقي اللي يقترحه المساعد بيتبعت من غير ما يسألك لو كان جوه صندوقك (الأسهم اللي تسميها، أقصى قيمة للأمر، عدد أوامر الشراء في اليوم، ميزانية، ووقف خسارة مع كل شراء). أي حاجة تانية بتفضل مستنية موافقتك.
+- The switch is locked until three real orders you approved yourself were accepted by the broker and at least one of them filled.
+  عربي: زرار التشغيل مقفول لحد ما 3 أوامر حقيقية وافقت عليها بنفسك يتقبلوا عند السمسار وواحد منهم على الأقل يتنفذ.
+- The budget is the most it can lose: what it has lost so far comes off it.
+  عربي: الميزانية هي أقصى خسارة ممكنة: أي خسارة بتتخصم منها.
+- The app watches what it bought and sells it at its stop-loss or take-profit. The stop is the app's, not the broker's, and shares that have not settled (usually two sessions) cannot be sold yet.
+  عربي: التطبيق بيتابع اللي اشتراه ويبيعه عند وقف الخسارة أو جني الربح. وقف الخسارة عند التطبيق مش عند السمسار، والأسهم اللي لسه ما اتسوّتش (غالبًا جلستين) ما تتباعش.
+- Whether a proposal goes out by itself is decided once, when it is written, and shown on it. "Stop automatic orders" on the Real account page stops everything at once.
+  عربي: الاقتراح بيتحدد وقت كتابته: يا يتبعت لوحده يا يستناك، ومكتوب عليه. وزرار «Stop automatic orders» في صفحة الحساب الحقيقي بيوقف كل حاجة فورًا.
+
+## 0.3.0 · 2026-11-16 · Running with the app closed, and notifications
+For: owner
+Open: /settings?tab=real
+عربي: التشغيل والتطبيق مقفول، والإشعارات
+
+- Automatic orders can keep running with the app closed: the server looks once a minute during the session. Set it up in Settings, Real trading, "Running without the app open": create a background key, add it to the server's settings, then switch it on.
+  عربي: الأوامر الآلية تقدر تكمّل والتطبيق مقفول: السيرفر بيتابع مرة كل دقيقة وقت الجلسة. الإعداد من Settings ثم Real trading ثم «Running without the app open»: اعمل مفتاح الخلفية، ضيفه في إعدادات السيرفر، وبعدها شغّله.
+- Turn on notifications on a phone or a computer, and it is told when an automatic order is sent, when a stop-loss sells, or when you are needed. On an iPhone, install the app to the Home Screen first.
+  عربي: فعّل الإشعارات على الموبايل أو الكمبيوتر، وهيوصلك إشعار لما أمر آلي يتبعت، أو وقف خسارة يبيع، أو لما يحتاجك. على آيفون سطّب التطبيق على الشاشة الرئيسية الأول.
+- If the server stops looking during the session, the app says so on the Real account page.
+  عربي: لو السيرفر وقف عن المتابعة وقت الجلسة، التطبيق بيقولك في صفحة الحساب الحقيقي.
+
+## 0.2.0 · 2026-11-15 · Real orders, sent only when you approve each one
+For: owner
+Open: /account
+عربي: أوامر حقيقية، بتتبعت بس لما توافق على كل أمر
+
+- Prepare a real order on the Real account page, or let the assistant propose one. Nothing reaches the broker until you read the last look and press Send.
+  عربي: جهّز أمر حقيقي من صفحة الحساب الحقيقي، أو خلّي المساعد يقترحه. مفيش حاجة بتوصل للسمسار غير لما تقرا المراجعة الأخيرة وتضغط Send.
+- Real orders are off until you switch them on in Settings, Real trading, after writing your limits. Limit orders for the day only.
+  عربي: الأوامر الحقيقية مقفولة لحد ما تشغّلها من Settings ثم Real trading بعد ما تكتب حدودك. أوامر بسعر محدد ولليوم بس.
+
+## 0.2.0 · 2026-11-15 · Your real brokerage account, on its own page
+For: owner
+Open: /account
+عربي: حسابك الحقيقي عند السمسار، في صفحة لوحده
+
+- The Real account page shows cash, holdings, the shares free to sell and the broker's prices next to the app's, with checks on the reading. It is separate from the paper portfolio.
+  عربي: صفحة Real account بتعرض الكاش، المراكز، الأسهم المتاحة للبيع، وأسعار السمسار جنب أسعار التطبيق، مع فحوصات على القراءة. وهي منفصلة عن المحفظة الورقية.
+
+## 0.2.0 · 2026-11-15 · Install the app on your phone
+For: everyone
+عربي: سطّب التطبيق على موبايلك
+
+- "Install app" in the menu puts EGX Intelligence on your Home Screen, where it opens like any other app.
+  عربي: «Install app» في القايمة بيحط EGX Intelligence على الشاشة الرئيسية ويفتح زي أي تطبيق.

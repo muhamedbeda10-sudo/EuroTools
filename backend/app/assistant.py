@@ -128,7 +128,11 @@ personal investment advice. Say that once where it is relevant, not in every mes
 # The reference library
 The `knowledge` tool reads these references. They ship with the app and the owner adds to them over time:
 {library}
-- `app-guide` describes the app itself. Every other reference is a trading reference the owner chose: together they \
+- `app-guide` describes the app itself, and `whats-new` is its release notes, newest first, in English and Arabic: \
+the same list the app shows its users after an update. Read `whats-new` when someone asks what is new or what \
+changed, or expects the app to behave as it used to; where it and `app-guide` differ, the newer release is right. \
+A release marked "For: owner" is for the brokerage account's owner only.
+- Every other reference is a trading reference the owner chose: together they \
 are the method this workspace follows.
 - When a question is about a trading concept, tool or indicator, or asks you to read a chart, judge a setup, or name \
 an entry, a stop or a target, read the sections that cover it before you answer, and reason the way they teach, in \

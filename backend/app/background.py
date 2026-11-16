@@ -58,6 +58,7 @@ rings = logging.getLogger("egx.timer")
 if not rings.handlers:
     rings.addHandler(logging.StreamHandler())
     rings.setLevel(logging.INFO)
+    rings.propagate = False   # written once, by the handler above
 
 SWITCH = ("settings", "background")        # the owner's switch, and which key is the current one
 BEAT = ("settings", "background_beat")     # when the server last looked, and what came of it
@@ -236,8 +237,8 @@ def wake(settings: Settings, build_core, model, *, firestore: bool, may_review=N
     """The timer rang. Sign in as the owner and take a look; say plainly why not, when not."""
     out = _wake(settings, build_core, model, firestore=firestore, may_review=may_review)
     auto = out.get("auto") or {}
-    rings.info("timer: ran=%s why=%s sent=%s exits=%s review=%s", out.get("ran"), out.get("why") or auto.get("why"),
-               auto.get("sent", 0), auto.get("exits", 0), bool((out.get("review") or {}).get("ran")))
+    rings.info("timer: ran=%s why=%s sent=%s exits=%s review=%s region=%s", out.get("ran"), out.get("why") or auto.get("why"),
+               auto.get("sent", 0), auto.get("exits", 0), bool((out.get("review") or {}).get("ran")), os.environ.get("VERCEL_REGION", "-"))
     return out
 
 

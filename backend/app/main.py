@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, background, broker, orders, paper, push, real_auto, real_orders
+from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, whats_new
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -162,7 +162,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         token = header[7:].strip()
         return core_for(uid_from_token(token), token)
 
-    api = FastAPI(title="EGX Intelligence API", version="0.2.0",
+    api = FastAPI(title="EGX Intelligence API", version=whats_new.version(),
                   docs_url=None if firestore else "/docs", redoc_url=None, openapi_url=None if firestore else "/openapi.json")
     api.add_middleware(
         CORSMiddleware,
@@ -200,6 +200,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @api.exception_handler(real_orders.OrderError)
+    @api.exception_handler(whats_new.ReleaseNotesError)
     @api.exception_handler(background.BackgroundError)
     @api.exception_handler(push.PushError)
     @api.exception_handler(AccountError)
@@ -497,6 +498,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         out = paper.process_runs(core)
         done = orders.process(core)
         return {**out, "orders": done["filled"]}
+
+    # ---- what's new ----------------------------------------------------------
+    @api.get("/api/v1/whats-new")
+    def get_whats_new(core: App = Depends(get_core)):
+        """The app's release notes for this person, newest first, with the ones they have not seen yet marked."""
+        return whats_new.view(core)
+
+    @api.post("/api/v1/whats-new/seen")
+    def seen_whats_new(body: whats_new.SeenIn, core: App = Depends(get_core)):
+        return whats_new.mark_seen(core, body)
 
     # ---- the real brokerage account (read-only) ----------------------------
     @api.get("/api/v1/real-account")

@@ -48,6 +48,12 @@ broker.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
   sign-in accounts (administrators only), and the activity log.
 
+## What's new
+- "What's new" in the menu lists the app's updates, newest first, in English or Arabic: what changed in each
+  version and where to find it. After an update it opens by itself once, showing what this person has not seen.
+- The list is the reference `whats-new` in the assistant's library. Updates marked for the brokerage account's
+  owner are shown to that sign-in only.
+
 ## Installing the app on a phone
 - The app installs from the browser, not from a store, and then opens from the home screen in its own window.
 - Android (Chrome): the browser offers "Install app", or it is in the browser menu. iPhone or iPad (Safari):
