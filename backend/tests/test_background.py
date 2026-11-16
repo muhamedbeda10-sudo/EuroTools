@@ -150,11 +150,16 @@ def test_only_the_owners_devices_subscribe_and_only_at_a_browsers_push_service(f
 
 
 # ---- the timer --------------------------------------------------------------------------
-def test_only_the_platforms_timer_wakes_the_server(floor, tmp_path):
+def test_only_the_platforms_timer_wakes_the_server(floor, tmp_path, caplog):
     c = floor
+    caplog.set_level("INFO", logger="egx.timer")
     for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": "the-platforms-secret"}, {"Authorization": "Bearer "}):
         assert wake(c, headers).status_code == 401
     assert wake(c).json() == {"ran": False, "why": "background running is switched off"}     # the owner has not switched it on
+    # each ring leaves one line for the platform's logs, and only for a ring that was let in; it names no key
+    assert [r.getMessage() for r in caplog.records if r.name == "egx.timer"] == \
+        ["timer: ran=False why=background running is switched off sent=0 exits=0 review=False"]
+    assert "the-platforms-secret" not in caplog.text and "local" not in caplog.text
     with client(tmp_path / "unset", FakeBroker(), live_trading_enabled=True) as bare:        # no secret set: nobody can ring
         assert bare.get("/api/v1/background/look", headers={"Authorization": "Bearer "}).status_code == 401
         assert bare.get("/api/v1/background/look", headers=TIMER).status_code == 401
