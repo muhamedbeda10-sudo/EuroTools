@@ -176,19 +176,12 @@ def test_settings_update(client):
 
 
 def test_a_database_that_refuses_is_said_plainly_not_as_a_crash(tmp_path):
-    """Firestore answers 429 when the project's daily allowance is used up. The person is told that, with 503,
-    instead of "Request failed (500)" on every card."""
-    from app.store.errors import DatabaseError, QuotaError, database_error
+    """A database that cannot be asked is a 503 with its reason, instead of "Request failed (500)" on every card."""
+    from app.store.errors import DatabaseError, StoreUnavailable
 
-    quota = database_error("read", 429, '{"error": {"code": 429, "message": "Quota exceeded.", "status": "RESOURCE_EXHAUSTED"}}')
-    assert isinstance(quota, QuotaError) and "usage limit for today" in str(quota) and quota.retry_after is None
-    assert isinstance(database_error("read", 429, ""), QuotaError)
-    busy = database_error("write", 429, '{"error": {"message": "Quota exceeded for quota metric \'Requests\' and limit '
-                                        '\'Requests per minute\'", "status": "RESOURCE_EXHAUSTED"}}')
-    assert isinstance(busy, QuotaError) and busy.retry_after == 60 and "Try again in a minute" in str(busy)
-    down = database_error("read", 503, "")
-    assert type(down) is DatabaseError and down.retry_after == 30
-    assert str(database_error("write", 400, "x")) == "database write failed (400)"
+    busy = StoreUnavailable("the database is not answering; try again in a moment")
+    down = DatabaseError("The database is not answering right now. Try again in a minute.", retry_after=30)
+    assert isinstance(busy, DatabaseError) and busy.retry_after == 15
 
     class Refusing(Store):
         refuse: DatabaseError | None = None
@@ -201,11 +194,11 @@ def test_a_database_that_refuses_is_said_plainly_not_as_a_crash(tmp_path):
     store = Refusing(tmp_path / "t.sqlite3")
     with TestClient(create_app(Settings(data_dir=tmp_path), store), raise_server_exceptions=False) as c:
         assert c.get("/api/v1/portfolio").status_code == 200
-        store.refuse = quota
+        store.refuse = busy
         for path in ("/api/v1/portfolio", "/api/v1/status", "/api/v1/market/overview"):
             r = c.get(path)
-            assert r.status_code == 503 and "usage limit for today" in r.json()["detail"] and r.json()["database"] == "QuotaError"
-            assert "retry-after" not in r.headers
+            assert r.status_code == 503 and "try again in a moment" in r.json()["detail"] and r.json()["database"] == "StoreUnavailable"
+            assert r.headers["retry-after"] == "15"
         store.refuse = down
         r = c.get("/api/v1/portfolio")
         assert r.status_code == 503 and r.headers["retry-after"] == "30" and "not answering" in r.json()["detail"]

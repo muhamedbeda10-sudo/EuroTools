@@ -188,7 +188,7 @@ broker.
   Figures the server works out from them (portfolio value, breadth) are re-read once a minute while they stream.
 - A stock the feed gives no history for is set aside and asked for again half an hour later; the rest is updated.
 - Data: since 16 November 2026 each account's data is in the app's own Postgres database (no daily limit),
-  copied from Firestore; the old copy is kept, read-only. "The database is not answering": try again shortly.
+  moved from the previous one. Sign-in did not change. "The database is not answering": try again shortly.
 - A manual paper trade fills at the stock's latest price and is dated with the market's current session.
 
 ## Backtests and automatic runs

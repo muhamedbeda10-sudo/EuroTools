@@ -1,12 +1,11 @@
-"""Postgres-backed store, used when the API runs on a serverless host.
+"""Postgres-backed store, used when the API is deployed.
 
 Who may touch what
     The server holds the database's address and password (DATABASE_URL, in its environment only). So
-    nothing outside the server decides who may read a row, the way the Firestore rules did: this file
-    does. Every statement here is tied to one account's id, taken from a sign-in the server has
-    verified itself (app/identity.py) before a store is ever made for it. There is no statement in
-    this file that reads or writes another account's rows, and none that takes the account from a
-    request.
+    nothing outside the server decides who may read a row: this file does. Every statement here is
+    tied to one account's id, taken from a sign-in the server has verified itself (app/identity.py)
+    before a store is ever made for it. There is no statement in this file that reads or writes
+    another account's rows, and none that takes the account from a request.
 
 What the database itself still refuses
     The trade ledger and the audit trail are append-only in the table, not only in the application: a
@@ -16,9 +15,9 @@ Each document is one row holding the JSON text exactly as the application wrote 
 the same shape the SQLite store uses.
 
 Lost updates: a document this request has read is only overwritten if it is still the version that
-was read (`version`, raised by one on every write). Two requests changing the same document at once
-cannot silently undo each other: the second one gets ConflictError. All the writes of a transaction
-go to the database in one database transaction: all of them happen, or none.
+was read (`version`, a number no document has had before). Two requests changing the same document
+at once cannot silently undo each other: the second one gets ConflictError. All the writes of a
+transaction go to the database in one database transaction: all of them happen, or none.
 """
 from __future__ import annotations
 
@@ -65,8 +64,8 @@ select setval('egx.versions', greatest(nextval('egx.versions'), (select coalesce
                                        (select coalesce(max(version), 0) from egx.market) + 1));
 
 -- Who may use the app. A row here is the record: an account with one is let in or kept out by `active`, and
--- nothing else is asked. `admin` is who may open and close accounts. `migrated_at` says the account's data was
--- brought over from the previous database (or that it never had any there).
+-- nothing else is asked. `admin` is who may open and close accounts. `migrated_at` and `migration` are history:
+-- when, and how much of, an account's data was brought over from Firestore on 16 November 2026.
 create table if not exists egx.accounts (
     uid         text primary key,
     active      boolean     not null,
@@ -419,7 +418,7 @@ class PostgresStore:
 
 
 class PostgresDocs:
-    """The market documents every account shares, version-checked the way FirestoreDocs is."""
+    """The market documents every account shares, each written only over the version that was read."""
 
     def __init__(self, db: Database):
         self.db = db

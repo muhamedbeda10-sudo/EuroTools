@@ -136,60 +136,42 @@ def db():
     database.close()
 
 
-@needs_db
-def test_an_account_is_looked_up_once_and_after_that_the_database_is_the_record(db, monkeypatch):
-    import app.identity as identity
-    uid, asked = "g-" + uuid.uuid4().hex[:10], []
+def open_account(db, uid, *, active=True, admin=False):
+    db.one("insert into egx.accounts (uid, active, admin, checked_at, created_at) values (%s,%s,%s,now(),now()) returning uid",
+           (uid, active, admin))
 
-    def first(u, token):
-        asked.append((u, token))
-        return {"admin": False, "others": []}
-    gate = AccountGate(db, first)
-    gate.check(uid, "t1", "person@example.com")
-    gate.check(uid, "t2")
-    assert asked == [(uid, "t1")]
-    assert db.one("select active, admin, email from egx.accounts where uid=%s", (uid,)) == (True, False, "person@example.com")
-    # another server, later: the row is there, so nothing outside the database is asked, whatever it would say
-    AccountGate(db, lambda u, t: pytest.fail("must not be asked")).check(uid, "t3")
-    AccountGate(db, None).check(uid, "t3")
+
+@needs_db
+def test_the_gate_lets_in_an_account_with_an_open_row_and_nobody_else(db, monkeypatch):
+    import app.identity as identity
+    uid, closed, stranger = ("g-" + uuid.uuid4().hex[:10] for _ in range(3))
+    open_account(db, uid)
+    open_account(db, closed, active=False)
+    gate = AccountGate(db)
+    gate.check(uid)
+    for other in (closed, stranger):
+        with pytest.raises(AuthError):
+            gate.check(other)
+    assert db.one("select 1 from egx.accounts where uid=%s", (stranger,)) is None      # being refused writes nothing
+    # read at most once a minute: a second request within the minute is not a question to the database
+    asked = []
+    real = db.one
+    monkeypatch.setattr(db, "one", lambda *a: (asked.append(a), real(*a))[1])
+    gate.check(uid)
+    assert asked == []
     # the administrator closes it: refused within a minute on a server that had let it in, at once on any other
-    db.one("update egx.accounts set active=false where uid=%s returning uid", (uid,))
+    real("update egx.accounts set active=false where uid=%s returning uid", (uid,))
     with pytest.raises(AuthError):
-        AccountGate(db, lambda u, t: {"admin": True}).check(uid, "t4")          # not reopened by an old record elsewhere
-    gate.check(uid, "t5")                                                        # still believed here, for the minute
+        AccountGate(db).check(uid)
+    gate.check(uid)                                                                    # still believed here, for the minute
     clock = {"t": time.monotonic()}
     monkeypatch.setattr(identity.time, "monotonic", lambda: clock["t"])
     clock["t"] += identity.ALLOWED_FOR + 1
     with pytest.raises(AuthError):
-        gate.check(uid, "t6")
-    db.one("update egx.accounts set active=true where uid=%s returning uid", (uid,))
-    gate.forget(uid)                                                             # what closing or opening it here does
-    gate.check(uid, "t7")
-
-
-@needs_db
-def test_an_account_nobody_recorded_is_not_let_in_and_nothing_is_written_for_it(db):
-    stranger = "never-" + uuid.uuid4().hex[:8]
-    for first in (lambda u, t: False, None):                   # no record allows it; or records elsewhere are no longer asked
-        with pytest.raises(AuthError):
-            AccountGate(db, first).check(stranger, "t")
-    with pytest.raises(StoreUnavailable):                      # the old records cannot be asked: not let in on a guess
-        AccountGate(db, lambda u, t: None).check(stranger, "t")
-    assert db.one("select 1 from egx.accounts where uid=%s", (stranger,)) is None
-
-
-@needs_db
-def test_an_administrators_first_visit_brings_the_list_of_accounts_with_it(db):
-    admin, open_one, closed_one = ("a-" + uuid.uuid4().hex[:10] for _ in range(3))
-    others = [{"uid": open_one, "email": "o@example.com", "name": "Open", "active": True, "createdAt": "2026-10-01T09:00:00Z", "createdBy": admin},
-              {"uid": closed_one, "email": "c@example.com", "name": "Closed", "active": False}, {"uid": admin, "active": False},
-              {"nonsense": 1}, "nonsense"]
-    AccountGate(db, lambda u, t: {"admin": True, "others": others}).check(admin, "t", "admin@example.com")
-    assert db.one("select active, admin from egx.accounts where uid=%s", (admin,)) == (True, True)
-    assert db.one("select active, admin, name, created_by, migrated_at from egx.accounts where uid=%s", (open_one,)) == (True, False, "Open", admin, None)
-    AccountGate(db, None).check(open_one, "t")                 # known from the list: let in without asking anywhere
-    with pytest.raises(AuthError):
-        AccountGate(db, lambda u, t: {"admin": False}).check(closed_one, "t")   # closed in the list stays closed
+        gate.check(uid)
+    real("update egx.accounts set active=true where uid=%s returning uid", (uid,))
+    gate.forget(uid)                                                                   # what opening or closing it here does
+    gate.check(uid)
 
 
 def test_an_answer_from_the_key_service_without_usable_keys_does_not_throw_the_good_ones_away():
@@ -201,22 +183,3 @@ def test_an_answer_from_the_key_service_without_usable_keys_does_not_throw_the_g
         assert v.verify(sign("abc")) == "abc"
     with pytest.raises(StoreUnavailable):                      # and a server that never had keys says it cannot check, not "invalid"
         TokenVerifier(PROJECT, fetch_keys=lambda: ({"k1": {"kty": "RSA", "kid": "k1"}}, 3600.0)).verify(sign())
-
-
-def test_a_token_firestore_does_not_accept_is_not_an_account_that_was_closed(monkeypatch):
-    import app.identity as identity
-
-    def answers(by_coll):
-        def get(url, headers=None):
-            return httpx.Response(by_coll[url.rsplit("/", 2)[-2]], json={"fields": {"active": {"booleanValue": True}}})
-        return get
-    for by_coll, want in (({"egxAccounts": 200, "users": 403}, True), ({"egxAccounts": 404, "users": 200}, True),
-                          ({"egxAccounts": 404, "users": 403}, False),          # no record anywhere: not allowed
-                          ({"egxAccounts": 401, "users": 401}, None),           # the token was not accepted: not an answer
-                          ({"egxAccounts": 429, "users": 429}, None), ({"egxAccounts": 404, "users": 503}, None)):
-        monkeypatch.setattr(identity._http, "get", answers(by_coll))
-        assert identity.ask_firestore(PROJECT, "user/with slash", "t") is want, by_coll
-    seen = []
-    monkeypatch.setattr(identity._http, "get", lambda url, headers=None: (seen.append(url), httpx.Response(404))[1])
-    identity.ask_firestore(PROJECT, "a/b", "t")
-    assert all(url.endswith("/a%2Fb") for url in seen)         # an account id is one path segment, whatever is in it

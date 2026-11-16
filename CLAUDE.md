@@ -32,17 +32,11 @@ cd backend && python3 -m ruff check . && python3 -m pytest -q
 npm run typecheck && npm run build
 ```
 
-The Postgres tests (`test_postgres.py`, `test_identity.py`, `test_migrate.py`) are skipped unless a database is named,
+The Postgres tests (`test_postgres.py`, `test_identity.py`, `test_postgres_api.py`) are skipped unless a database is named,
 and they are the ones that cover what is deployed. Run them before handing over a change to the store or to sign-in:
 
 ```bash
 cd backend && TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/egxtest python3 -m pytest -q
-```
-
-The Firestore tests in `backend/tests/test_firestore.py` are skipped unless the emulators are running:
-
-```bash
-npx firebase emulators:start --only firestore,auth --project demo-egx
 ```
 
 ## Things that must stay true
@@ -57,5 +51,7 @@ npx firebase emulators:start --only firestore,auth --project demo-egx
   in the database itself (a trigger), not only in the application. The database's password (`DATABASE_URL`) is
   the server's alone. The timer works with the owner's sealed sign-in (`background.py`), verified the same way.
   (Until 16 November 2026 the data was in Firestore and the server held no database credentials; the owner
-  agreed to this change.)
+  had it moved and the Firestore code removed.)
+- `firestore.rules` is the security rules of the whole Firebase project, the quality system's included, and is
+  published from here on every change. Do not delete it, and do not loosen anything in it for this app.
 - Secrets live in the server's environment only: never in the repository, the browser, logs or release notes.
