@@ -15,6 +15,8 @@ The box (Settings → Real trading → Automatic orders)
     * every buy must carry a stop-loss, no further under its price than the owner allows;
     * it sells only shares it bought itself: the rest of the account is not its to touch;
     * a stock the app sold at its stop-loss or take-profit is not bought again by it the same day;
+    * whether a proposal is one it may send is decided once, when the assistant writes it (`admit`):
+      one that was told "this waits for the owner" keeps waiting, whatever changes afterwards;
     * when it is down by more than the owner allows, it stops buying for the day (it can still sell).
 
 It cannot be switched on before it is earned
@@ -60,6 +62,8 @@ from .store.errors import ConflictError
 
 SETTINGS = ("settings", "real_auto")
 BOOK = ("settings", "real_auto_book")
+# What an automatic order is tied to: it goes out only if neither of these changed since the look read them.
+SWITCHES = (SETTINGS, real_orders.SETTINGS)
 PROOF_SENT, PROOF_FILLED = 3, 1   # owner-approved orders the broker accepted, and how many of them filled
 MAX_SYMBOLS = 20
 SENDS_PER_LOOK = 2                # proposals sent in one look; the rest go at the next, half a minute later
@@ -71,6 +75,7 @@ CLAIM_SECONDS = 120.0             # a look that died while getting out of a posi
 SETTLING_SECONDS = 600.0          # after a fill, the broker's holdings are given this long to show it
 LIVE_SECONDS = 90.0               # a live price older than this is not acted on
 BID_LEVELS = 5                    # how deep into the bids a way-out sale is priced
+SHORT_LOOKS, SHORT_SECONDS = 3, 120.0   # the broker must show fewer shares at this many looks, over this long, to be believed
 AUTO_RETRY_SECONDS = 300.0        # a proposal the last look could not send is tried again after this
 MAX_AUTO_TRIES = 6                # and at most this many times; then it waits for the owner like any other
 
@@ -136,7 +141,9 @@ def _book(core: App) -> dict:
     return {"rev": int(saved.get("rev") or 0), "proven_at": saved.get("proven_at"),
             "proof": {"sent": list(proof.get("sent") or []), "filled": list(proof.get("filled") or [])},
             "positions": saved.get("positions") or {}, "days": saved.get("days") or {},
-            "realized": str(saved.get("realized") or "0"), "paused": saved.get("paused")}
+            "realized": str(saved.get("realized") or "0"), "paused": saved.get("paused"),
+            # how much of each order's fills the book has counted: kept here, where nothing else writes
+            "applied": saved.get("applied") or {}}
 
 
 def _keep(core: App, bk: dict) -> None:
@@ -250,6 +257,10 @@ def stop(core: App) -> dict:
             core.audit("stop", "real_auto", {"holding": sorted(_book(core)["positions"])})
     notes = []
     for rec in real_orders._records(core, cairo_now()):
+        if _automatic(rec) and rec["status"] == "sending":
+            # an order that was leaving at that very moment cannot be called back from here
+            notes.append(f"An automatic {rec['side'].lower()} of {rec['qty']:,} {rec['symbol']} was being sent as you stopped it. "
+                         "Look at it on the Real account page, and cancel it there if it went out.")
         if _automatic(rec) and rec["side"] == "BUY" and rec["status"] == "sent" and (rec.get("broker") or {}).get("state") in OPEN_STATES:
             try:
                 real_orders.cancel(core, rec["id"])
@@ -290,15 +301,36 @@ def _automatic(rec: dict) -> bool:
     return rec.get("approved_by") == "auto"
 
 
-def _active_sale(rec: dict) -> bool:
-    """A sale of the automation's that is waiting, on its way, in doubt, or still open at the broker."""
-    if rec["side"] != "SELL" or not (_automatic(rec) or rec["origin"] == "automation"):
-        return False
-    return rec["status"] in ("proposed", "sending", "unknown") or (
+def _booked(rec: dict) -> bool:
+    """Whether the fills of this order move the automation's book.
+
+    A buy does when the automation sent it: one the owner approved by hand is the owner's. A sale does when
+    it is a sale of the automation's shares, whoever approved it: the app's own way out, or a sale the
+    assistant wrote that the automation's shares could cover when it was written (`of_book`, set in `admit`).
+    """
+    if rec["side"] == "BUY":
+        return _automatic(rec)
+    return rec["origin"] == "automation" or bool(rec.get("of_book"))
+
+
+def _in_flight(rec: dict) -> bool:
+    """On its way, in doubt, or still open at the broker."""
+    return rec["status"] in ("sending", "unknown") or (
         rec["status"] == "sent" and (rec.get("broker") or {}).get("state") in (None, *OPEN_STATES))
 
 
-def _pending_buy_value(rec: dict) -> Decimal:
+def _active_sale(rec: dict) -> bool:
+    """A sale of the automation's shares that is in flight, or that the app wrote for itself and has yet to send."""
+    if rec["side"] != "SELL" or not _booked(rec):
+        return False
+    return _in_flight(rec) or (rec["status"] == "proposed" and rec["origin"] == "automation")
+
+
+def _applied(bk: dict, rec: dict) -> dict:
+    return bk["applied"].get(rec["id"]) or {"qty": 0, "amount": "0"}
+
+
+def _pending_buy_value(rec: dict, bk: dict) -> Decimal:
     """What an automatic buy may still put into the market, beyond what the book already counts."""
     if rec["side"] != "BUY" or not _automatic(rec):
         return ZERO
@@ -308,11 +340,11 @@ def _pending_buy_value(rec: dict) -> Decimal:
         return ZERO
     b = rec.get("broker") or {}
     reach = rec["qty"] if b.get("state") in (None, *OPEN_STATES) else int(b.get("executed_qty") or 0)
-    return money(D(rec["price"]) * max(reach - int((rec.get("applied") or {}).get("qty") or 0), 0))
+    return money(D(rec["price"]) * max(reach - int(_applied(bk, rec)["qty"]), 0))
 
 
 def _exposure(bk: dict, records: list[dict]) -> Decimal:
-    return money(sum((D(p["cost"]) for p in bk["positions"].values()), ZERO) + sum((_pending_buy_value(r) for r in records), ZERO))
+    return money(sum((D(p["cost"]) for p in bk["positions"].values()), ZERO) + sum((_pending_buy_value(r, bk) for r in records), ZERO))
 
 
 def _room(box: dict, bk: dict) -> Decimal:
@@ -321,14 +353,18 @@ def _room(box: dict, bk: dict) -> Decimal:
 
 
 def _apply_fills(core: App, records: list[dict], bk: dict, today: str) -> list[str]:
-    """Bring the book up to date with what the broker filled of the automation's orders. Each fill is counted once."""
+    """Bring the book up to date with what the broker filled. Each fill is counted once.
+
+    What has been counted of each order is kept in the book itself, not on the order's record: the book is
+    written only over the book it was read from, so nothing else that touches the record can undo the count.
+    """
     notes = []
     for rec in records:
-        if not _automatic(rec) or rec["status"] != "sent":
+        if not _booked(rec) or rec["status"] != "sent":
             continue
         b = rec.get("broker") or {}
         done = int(b.get("executed_qty") or 0)
-        seen = rec.get("applied") or {"qty": 0, "amount": "0"}
+        seen = _applied(bk, rec)
         if done <= seen["qty"]:
             continue
         amount = money(D(str(b["average"])) * done) if b.get("average") else money(D(rec["price"]) * done)
@@ -336,15 +372,15 @@ def _apply_fills(core: App, records: list[dict], bk: dict, today: str) -> list[s
         symbol, positions = rec["symbol"], bk["positions"]
         if rec["side"] == "BUY":
             pos = positions.setdefault(symbol, {"qty": 0, "cost": "0", "stop": None, "target": None, "since": now_iso(),
-                                                "stock_id": rec["stock_id"], "exit": None, "tries": None})
+                                                "stock_id": rec["stock_id"], "exit": None, "tries": None, "short": None})
             pos.update(qty=pos["qty"] + qty, cost=str(money(D(pos["cost"]) + cash)), touched=now_iso())
-            if rec.get("stop") and seen["qty"] == 0:
+            if rec.get("stop") and (seen["qty"] == 0 or pos.get("stop") is None):
                 # An order's levels are taken once, at its first fill, so a level the owner moved since is not put
-                # back by the rest of the same order. A later buy may raise the position's stop, never lower it:
-                # only the owner moves a stop down.
+                # back by the rest of the same order; a position without a stop takes them whenever it can. A later
+                # buy may raise the position's stop, never lower it: only the owner moves a stop down.
                 if pos.get("stop") is None or D(rec["stop"]) > D(pos["stop"]):
                     pos["stop"] = rec["stop"]
-                if rec.get("target"):
+                if rec.get("target") and (seen["qty"] == 0 or pos.get("target") is None):
                     pos["target"] = rec["target"]
         elif symbol in positions:
             pos = positions[symbol]
@@ -357,11 +393,13 @@ def _apply_fills(core: App, records: list[dict], bk: dict, today: str) -> list[s
             pos.update(qty=pos["qty"] - sold, cost=str(money(D(pos["cost"]) - basis)), touched=now_iso())
             if pos["qty"] <= 0:
                 del positions[symbol]
-        rec["applied"] = {"qty": done, "amount": str(amount)}
-        with core.store.transaction():   # the fill and the book change together, or not at all
-            real_orders._put(core, rec)
-            _keep(core, bk)
+        bk["applied"][rec["id"]] = {"qty": done, "amount": str(amount)}
+        _keep(core, bk)
         notes.append(f"{'Bought' if rec['side'] == 'BUY' else 'Sold'} {qty:,} {symbol} at about {float(cash / qty):g}.")
+    known = {r["id"] for r in records}
+    if any(i not in known for i in bk["applied"]):   # orders too old to be filled any further
+        bk["applied"] = {i: v for i, v in bk["applied"].items() if i in known}
+        _keep(core, bk)
     return notes
 
 
@@ -372,26 +410,52 @@ def _sweep(core: App, records: list[dict]) -> None:
             real_orders.discard(core, rec, "The app was interrupted before this sale was sent. Nothing was sent.")
 
 
-def _reconcile(core: App, bk: dict, held: dict) -> list[str]:
-    """The broker's holdings are the truth: where it shows fewer shares than the book, the book gives way."""
-    notes = []
+def _unsettled(bk: dict, records: list[dict], symbol: str) -> bool:
+    """Whether an order of the automation's in this stock is still in flight, or filled further than the book has counted."""
+    for rec in records:
+        if rec["symbol"] != symbol or not _booked(rec):
+            continue
+        if _in_flight(rec) or (rec["status"] == "sent" and int((rec.get("broker") or {}).get("executed_qty") or 0) > _applied(bk, rec)["qty"]):
+            return True
+    return False
+
+
+def _reconcile(core: App, bk: dict, held: dict, records: list[dict]) -> list[str]:
+    """The broker's holdings are the truth: where it shows fewer shares than the book, the book gives way.
+
+    But not on one reading. The account must show the shortfall at several looks in a row, some time apart,
+    with no order of the automation's in that stock still in flight: a single odd answer from the broker, or a
+    sale that filled a moment ago, must not make the app forget shares it is watching.
+    """
+    notes, changed = [], False
     for symbol, pos in list(bk["positions"].items()):
-        if real_orders._age(pos.get("touched")) < SETTLING_SECONDS:
-            continue   # a fill this recent may not show in the broker's holdings yet
+        if real_orders._age(pos.get("touched")) < SETTLING_SECONDS or _unsettled(bk, records, symbol):
+            continue   # a fill this recent, or one still to come, may not show in the broker's holdings yet
         row = held.get(pos.get("stock_id")) or {}
         actual = int(row.get("qty") or 0) + int(row.get("unsettled") or 0)   # the most the account can be holding
+        short = pos.get("short") or {}
         if actual >= pos["qty"]:
+            if short:
+                pos["short"], changed = None, True
+            continue
+        if short.get("actual") != actual:
+            pos["short"], changed = {"actual": actual, "since": now_iso(), "looks": 1}, True
+            continue
+        short["looks"] += 1
+        changed = True
+        if short["looks"] < SHORT_LOOKS or real_orders._age(short["since"]) < SHORT_SECONDS:
             continue
         notes.append(f"The broker shows {actual:,} {symbol}, not the {pos['qty']:,} the automation counted: the rest left the "
                      "account outside it, and is no longer its to watch.")
         if actual <= 0:
             del bk["positions"][symbol]
         else:
-            pos.update(cost=str(money(D(pos["cost"]) * actual / pos["qty"])), qty=actual)
-    if notes:
+            pos.update(cost=str(money(D(pos["cost"]) * actual / pos["qty"])), qty=actual, short=None)
+    if changed:
         with core.store.transaction():
             _keep(core, bk)
-            core.audit("reconcile", "real_auto", {"notes": notes})
+            if notes:
+                core.audit("reconcile", "real_auto", {"notes": notes})
     return notes
 
 
@@ -401,14 +465,29 @@ def _last(core: App, symbol: str) -> float | None:
 
 
 def _live(core: App, symbol: str, now: datetime) -> float | None:
-    """The price on screen, only when it is from the running session and fresh enough to act on."""
-    if not core.market.is_live(symbol):
+    """The price on screen, only when it is from the running session and fresh enough to act on.
+
+    Fresh means this stock answered at the last reading of the feed. One that did not keeps its earlier
+    figure on screen, and that figure is not acted on.
+    """
+    if not core.market.is_live(symbol) or symbol in (core.market.cache.get("live_stale") or ()):
         return None
     try:
         age = (now - datetime.fromisoformat(core.market.cache.get("live_as_of"))).total_seconds()
     except (TypeError, ValueError):
         return None
     return _last(core, symbol) if age <= LIVE_SECONDS else None
+
+
+def _price_now(core: App, symbol: str, pos: dict, now: datetime) -> float | None:
+    """The price a stop is judged by: the live feed's, or the broker's own for that stock when the feed has none that is fresh."""
+    live = _live(core, symbol, now)
+    if live is not None:
+        return live
+    try:
+        return core.younit.trading_limits(pos["stock_id"]).get("last") if market_open(now) else None
+    except (YounitError, KeyError, TypeError):
+        return None
 
 
 def _result(core: App, bk: dict, today: str, prices: dict | None = None) -> Decimal:
@@ -422,22 +501,31 @@ def _result(core: App, bk: dict, today: str, prices: dict | None = None) -> Deci
 
 
 # ---- what may be sent without the owner -------------------------------------------------
-def judge(rec: dict, records: list[dict], bk: dict, box: dict, today: str) -> list[str]:
-    """Why this proposal may not be sent automatically; empty when it may. No call to the broker."""
+def judge(rec: dict, records: list[dict], bk: dict, box: dict, today: str, *, birth: bool = False) -> list[str]:
+    """Why this proposal may not be sent automatically; empty when it may. No call to the broker.
+
+    `birth` is the judging done once, when the assistant has just written the proposal (`admit`). Only a
+    proposal that passed then is ever sent by itself: one that was told "this waits for the owner" keeps
+    waiting, whatever changes afterwards.
+    """
     if rec["origin"] not in ("assistant", "automation"):
         return ["Only the assistant's proposals are sent automatically; this one waits for you."]
     if rec.get("hold"):
         return ["The assistant wrote it to wait for your own decision."]
-    if rec["origin"] == "assistant" and _before(rec.get("created_at"), box.get("enabled_at")):
-        return ["It was written before automatic orders were switched on, so it waits for you as it said it would."]
+    if rec["origin"] == "assistant":
+        if not birth and not rec.get("auto_ok"):
+            said = " ".join(rec.get("auto_why") or []) or "it was outside the automatic box."
+            return [f"It waits for you, as it was told when it was written: {said}"]
+        if _before(rec.get("created_at"), box.get("enabled_at")):
+            return ["It was written before automatic orders were switched on, so it waits for you as it said it would."]
+    pos = bk["positions"].get(rec["symbol"])
+    selling = sum(r["qty"] for r in records if _active_sale(r) and r["symbol"] == rec["symbol"] and r["id"] != rec["id"])
     if rec["side"] == "SELL":
-        pos = bk["positions"].get(rec["symbol"])
-        others = sum(r["qty"] for r in records if _active_sale(r) and r["symbol"] == rec["symbol"] and r["id"] != rec["id"])
         if pos is None:
             return [f"The automation holds no {rec['symbol']}: it sells only shares it bought itself."]
-        if rec["qty"] + others > pos["qty"]:
+        if rec["qty"] + selling > pos["qty"]:
             return [f"The automation holds {pos['qty']:,} {rec['symbol']}"
-                    + (f", {others:,} of them already being sold" if others else "") + f"; this would sell {rec['qty']:,}."]
+                    + (f", {selling:,} of them already being sold" if selling else "") + f"; this would sell {rec['qty']:,}."]
         return []
     if rec["origin"] != "assistant":
         return ["The app itself never buys: a buy comes from the assistant or from you."]
@@ -453,6 +541,11 @@ def judge(rec: dict, records: list[dict], bk: dict, box: dict, today: str) -> li
         gap = (price - D(rec["stop"])) / price * 100
         if gap > D(box["max_stop_pct"]):
             out.append(f"Its stop-loss is {gap:.1f}% under the price; you allow at most {D(box['max_stop_pct']):g}%.")
+    if selling:
+        out.append(f"The automation is selling {rec['symbol']} right now; it does not buy it at the same time.")
+    elif pos and pos.get("stop") and price <= D(pos["stop"]):
+        out.append(f"The automation's {rec['symbol']} is watched by a stop-loss at {float(pos['stop']):g}; a buy at or under that "
+                   "would be bought under its own stop.")
     paused = bk.get("paused")
     if paused and paused.get("day") == today:
         out.append(f"The automation is not buying for the rest of today: {paused['why']}")
@@ -467,6 +560,52 @@ def judge(rec: dict, records: list[dict], bk: dict, box: dict, today: str) -> li
         out.append(f"The automation has {used:,.2f} in the market; with this it would be {used + value:,.2f}, over the "
                    f"{room:,.2f} left of its budget.")
     return out
+
+
+def admit(core: App, id: str) -> dict:
+    """Decide once, when the assistant has just written a proposal, whether it is one the automation may send.
+
+    The answer is written on the proposal and told to the assistant, which tells the owner. It does not change
+    later: a proposal that was outside the box then is never sent by itself, even if the box, the budget or the
+    day changes. A sale that the automation's own shares could cover is also marked as theirs here, so that it
+    comes off the automation's book whoever approves it.
+    """
+    real_orders._owner(core)
+    now = cairo_now()
+    box, bk = chosen(core), _book(core)
+    records = real_orders._records(core, now)
+    state = standing(core, box, bk, records)
+    rec = next((r for r in records if r["id"] == id and r["status"] == "proposed" and r["origin"] == "assistant"), None)
+    if rec is None:
+        return {"will_be_sent_automatically": False, "why_not": ["It is not a waiting proposal of the assistant's."]}
+    marks = {}
+    if rec["side"] == "SELL":
+        pos = bk["positions"].get(rec["symbol"])
+        selling = sum(r["qty"] for r in records if _active_sale(r) and r["symbol"] == rec["symbol"] and r["id"] != id)
+        if pos is not None and rec["qty"] + selling <= pos["qty"]:
+            marks["of_book"] = True
+    why = [state["why_not"]] if not state["on"] else judge(rec, records, bk, box, now.date().isoformat(), birth=True)
+    if not why:
+        marks["auto_ok"] = True
+    else:
+        marks["auto_why"] = why[:4]   # kept, so the page can say why it waits long after the reason has passed
+    if marks:
+        rec.update(marks)
+        real_orders._put(core, rec)
+    return {"will_be_sent_automatically": not why, "why_not": why}
+
+
+def _gate(core: App, bk: dict, today: str):
+    """The owner's box, standing in for the owner at the last moment before an order goes out.
+
+    It is asked inside the approval, after everything was read afresh: the switches and the box it judges by are
+    the very documents the approval is tied to, so what it allows is what is true when the order is committed.
+    """
+    def gate(rec: dict, rows: list[dict]) -> list[str]:
+        box = chosen(core)
+        state = standing(core, box, bk, rows)
+        return [state["why_not"]] if not state["on"] else judge(rec, rows, bk, box, today)
+    return gate
 
 
 # ---- getting out of a position ----------------------------------------------------------
@@ -491,9 +630,38 @@ def _exit_price(core: App, symbol: str, pos: dict, last: float, band_pct: float,
     return px(Decimal(str(bids[:BID_LEVELS][-1]))) if bids else px(Decimal(str(max(last, at_least or 0))))
 
 
-def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], box: dict, today: str,
-             last: float | None, held: dict | None, band_pct: float) -> tuple[dict | None, str | None]:
-    """Carry out a stop-loss or a take-profit that was reached. Returns the order sent, and anything the owner should read."""
+def _tries(pos: dict, today: str, kind: str) -> dict:
+    """How often a way out of this kind was tried today. A stop-loss and a take-profit are counted apart."""
+    kept = pos.get("tries") if (pos.get("tries") or {}).get("day") == today else None
+    if kept is None:
+        kept = pos["tries"] = {"day": today}
+    return kept.setdefault(kind, {"n": 0, "at": None})
+
+
+def _cancel_resting(core: App, records: list[dict], symbol: str, side: str) -> tuple[int, list[str]]:
+    """Take back the automation's own orders of one side that rest unfilled at the broker. Returns how many, and what went wrong."""
+    done, problems = 0, []
+    for rec in records:
+        if rec["symbol"] != symbol or rec["side"] != side or not _booked(rec) or rec["status"] != "sent" \
+                or (rec.get("broker") or {}).get("state") not in OPEN_STATES:
+            continue
+        try:
+            real_orders.cancel(core, rec["id"])
+            done += 1
+        except OrderError:
+            pass   # it is no longer open
+        except YounitError as exc:
+            problems.append(f"The resting {side.lower()} order for {rec['qty']:,} {symbol} could not be cancelled: {exc}")
+    return done, problems
+
+
+def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], today: str, last: float | None,
+             held: dict | None, band_pct: float, still_on) -> tuple[dict | None, str | None]:
+    """Carry out a stop-loss or a take-profit that was reached. Returns the order sent, and anything the owner should read.
+
+    `still_on()` is asked just before anything is written or sent: it reads the switches and the box afresh,
+    and returns the box, or None when the owner has switched something off since this look began.
+    """
     claim = pos.get("exit")
     if claim:
         rec = next((r for r in records if r["id"] == claim.get("order")), None)
@@ -516,35 +684,50 @@ def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], b
 
     stop, target = (float(pos[k]) if pos.get(k) else None for k in ("stop", "target"))
     if stop is None and target is None:
-        return None, None
+        return None, f"The automation's {symbol} has no stop-loss. Set one on the Real account page (Move levels)."
     if last is None:
-        return None, f"There is no live price for {symbol} right now, so its stop-loss is not being watched."
+        return None, f"There is no fresh price for {symbol} right now, so its stop-loss is not being watched."
     if stop is not None and last <= stop:
-        kind, why = "stop-loss", f"Stop-loss: the price reached {last:g}, at or under the stop at {stop:g}."
+        kind, level, why = "stop-loss", "stop", f"Stop-loss: the price reached {last:g}, at or under the stop at {stop:g}."
     elif target is not None and last >= target:
-        kind, why = "take-profit", f"Take-profit: the price reached {last:g}, at or over the target at {target:g}."
+        kind, level, why = "take-profit", "target", f"Take-profit: the price reached {last:g}, at or over the target at {target:g}."
     else:
         return None, None
 
-    tries = pos.get("tries") if (pos.get("tries") or {}).get("day") == today else {"day": today, "n": 0, "at": None}
+    tries = _tries(pos, today, level)
     if tries["n"] >= MAX_EXIT_TRIES:
-        return None, (f"{symbol} is at its {kind} and {tries['n']} attempts to sell it today did not complete. "
-                      "The app has stopped trying: sell it yourself on the Real account page.")
+        return None, (f"{symbol} is at its stop-loss and {tries['n']} sales of it today did not complete. "
+                      "The app has stopped trying: sell it yourself on the Real account page." if level == "stop" else
+                      f"{symbol} reached its take-profit, but {tries['n']} sales at it today did not fill. The app leaves the "
+                      "take-profit for today; the stop-loss still stands.")
     if real_orders._age(tries["at"]) < EXIT_RETRY_SECONDS:
         return None, None
+    doubtful = [r for r in records if r["symbol"] == symbol and _active_sale(r) and r["status"] in ("sending", "unknown")]
+    if doubtful:
+        return None, (f"{symbol} reached its {kind}, but an earlier sale of it may or may not have reached the broker. Settle that "
+                      "one on the Real account page: until then the app sends no other sale of it.")
+    # Other orders of the automation's in this stock must not stand in the way: a sale resting above the market
+    # would keep the stop from selling, and a buy still open would buy more of what is being sold.
+    sales, problems = _cancel_resting(core, records, symbol, "SELL")
+    buys, more = _cancel_resting(core, records, symbol, "BUY") if level == "stop" else (0, [])
+    if sales or buys or problems or more:
+        tries["at"] = None
+        return None, " ".join([f"{symbol} reached its {kind} while {sales + buys} other order(s) of the automation's in it rested "
+                               "at the broker; they were cancelled, and the sale follows at the next look."] * bool(sales + buys)
+                              + problems + more)
     if held is None:
         return None, f"{symbol} reached its {kind}, but the broker's holdings could not be read just now."
-    selling = sum(r["qty"] for r in records if _active_sale(r) and r["symbol"] == symbol)
-    qty = min(pos["qty"] - selling, int((held.get(pos.get("stock_id")) or {}).get("available") or 0))
+    qty = min(pos["qty"], int((held.get(pos.get("stock_id")) or {}).get("available") or 0))
     if qty <= 0:
-        return None, None if selling else (
-            f"{symbol} reached its {kind}, but the broker does not show its shares as free to sell yet. "
-            "The app sells as soon as it does.")
-    price = _exit_price(core, symbol, pos, last, band_pct, target if kind == "take-profit" else None)
+        return None, (f"{symbol} reached its {kind}, but the broker does not show its shares as free to sell yet. "
+                      "The app sells as soon as it does.")
+    if still_on() is None:
+        return None, f"{symbol} reached its {kind}, but automatic orders were switched off while this look was running."
+    price = _exit_price(core, symbol, pos, last, band_pct, target if level == "target" else None)
 
     # Claim the way out in the book before anything is written or sent: of two looks at the same moment, one gets it.
     pos["exit"] = {"at": now_iso(), "order": None}
-    pos["tries"] = {"day": today, "n": tries["n"] + 1, "at": now_iso()}
+    tries["at"] = now_iso()
     _keep(core, bk)
     try:
         made = real_orders.propose(core, OrderIn(symbol=symbol, side="SELL", qty=qty, price=price, reason=why), "automation",
@@ -556,29 +739,36 @@ def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], b
     pos["exit"]["order"] = made["id"]
     _keep(core, bk)
     try:
-        return real_orders.send_waiting(core, made["id"], lambda rec, rows: judge(rec, rows, bk, box, today)), None
+        sent = real_orders.send_waiting(core, made["id"], _gate(core, bk, today), touch=SWITCHES)
     except OrderError as exc:   # refused before anything was sent
         real_orders.discard(core, real_orders._get(core, made["id"]), f"Not sent: {exc}")
         pos["exit"] = None
         _keep(core, bk)
         return None, f"The sale of {symbol} at its {kind} was not sent: {exc}"
+    tries["n"] += 1             # only a sale that went to the broker counts as a try
+    _keep(core, bk)
+    return sent, None
 
 
 # ---- one look ---------------------------------------------------------------------------
 def tick(core: App) -> dict:
-    """One look by the automation. The owner's open app asks for it; it does nothing unless everything allows it."""
+    """One look by the automation. The owner's open app asks for it, or the server's timer; it does nothing unless everything allows it."""
     real_orders._owner(core)
     if not _looking.acquire(blocking=False):
         return {"ran": False, "busy": True, "why": "Another look is running."}
+    done: dict = {"sent": [], "exits": [], "notes": []}
     try:
-        return _tick(core)
+        return _tick(core, done)
     except (_Busy, ConflictError):
+        if done["sent"] or done["exits"]:   # what this look did before the collision is still told
+            return clean({"ran": True, **done, "notes": [*done["notes"], "This look stopped early: another window was working on "
+                                                        "the same thing. The next look carries on."][:12], "paused": None})
         return {"ran": False, "busy": True, "why": "Another window was working on the same thing; the next look starts afresh."}
     finally:
         _looking.release()
 
 
-def _tick(core: App) -> dict:
+def _tick(core: App, done: dict) -> dict:
     now = cairo_now()
     today = now.date().isoformat()
     box, bk = chosen(core), _book(core)
@@ -589,7 +779,7 @@ def _tick(core: App) -> dict:
         return {"ran": False, "why": state["why_not"]}
     if not market_open(now):
         return {"ran": False, "why": "The market is closed.", "market_open": False}
-    notes: list[str] = []
+    notes: list[str] = done["notes"]
     problem = real_orders._sync(core, records, now)
     if problem:
         notes.append(problem)
@@ -598,11 +788,12 @@ def _tick(core: App) -> dict:
     held = None
     if bk["positions"]:
         try:
-            held = {p["stock_id"]: p for p in broker.reading(core)["positions"]}
-            notes += _reconcile(core, bk, held)
+            held = {p["stock_id"]: p for p in broker.reading(core, fresh=True)["positions"]}
+            if not problem:   # without the orders' latest word, a fill could be taken for shares that left the account
+                notes += _reconcile(core, bk, held, records)
         except YounitError as exc:
             notes.append(f"The broker's holdings could not be read just now ({exc}).")
-    prices = {symbol: _live(core, symbol, now) for symbol in bk["positions"]}
+    prices = {symbol: _price_now(core, symbol, pos, now) for symbol, pos in bk["positions"].items()}
 
     # the brake: down by more than the owner allows, it buys nothing more today
     result = _result(core, bk, today, prices)
@@ -613,57 +804,57 @@ def _tick(core: App) -> dict:
             core.audit("pause", "real_auto", {"result": str(result), "limit": box["max_loss"]})
         notes.append(f"The automation stopped buying for today: {bk['paused']['why']}")
 
+    def still_on() -> dict | None:
+        """The switches and the box as they are in the database this instant, not as they were when the look began."""
+        nonlocal records
+        core.store.fresh()
+        latest = chosen(core)
+        records = real_orders._records(core, now)
+        return latest if standing(core, latest, bk, records)["on"] else None
+
     # ways out first: a stop-loss matters more than a new purchase
-    exits, sent = [], []
     band = float(D(real_orders.limits(core)["price_band_pct"]))
     for symbol in sorted(bk["positions"]):
-        if len(exits) >= EXITS_PER_LOOK:
+        if len(done["exits"]) >= EXITS_PER_LOOK:
             break
-        order, note = _way_out(core, symbol, bk["positions"][symbol], bk, records, box, today, prices.get(symbol), held, band)
+        order, note = _way_out(core, symbol, bk["positions"][symbol], bk, records, today, prices.get(symbol), held, band, still_on)
         if note:
             notes.append(note)
         if order:
-            exits.append(order)
+            done["exits"].append(order)
             records = real_orders._records(core, now)
 
     # then the assistant's proposals that fit the box, oldest first
-    waiting = [r for r in records if r["status"] == "proposed" and r["origin"] == "assistant" and not real_orders._over(r["session"], now)]
-    for rec in reversed(waiting):
-        if len(sent) >= SENDS_PER_LOOK:
+    waiting = [r["id"] for r in records if r["status"] == "proposed" and r["origin"] == "assistant" and r.get("auto_ok")
+               and not real_orders._over(r["session"], now)]
+    for id in reversed(waiting):
+        if len(done["sent"]) >= SENDS_PER_LOOK:
             break
-        tried = rec.get("auto") or {}
-        if tried and (tried.get("n", 0) >= MAX_AUTO_TRIES or real_orders._age(tried.get("at")) < AUTO_RETRY_SECONDS):
+        rec = next((r for r in records if r["id"] == id), None)
+        tried = (rec or {}).get("auto") or {}
+        if rec is None or rec["status"] != "proposed" or (
+                tried and (tried.get("n", 0) >= MAX_AUTO_TRIES or real_orders._age(tried.get("at")) < AUTO_RETRY_SECONDS)):
             continue
-        current = next((r for r in records if r["id"] == rec["id"]), rec)
-        if current["status"] != "proposed" or judge(current, records, bk, box, today):
-            continue   # it waits for the owner; the page says why
+        if judge(rec, records, bk, box, today):
+            continue   # it waits; the page says why
+        latest = still_on()   # read afresh before each order: a stop pressed a moment ago holds from here on
+        if latest is None:
+            notes.append("Automatic orders were switched off while this look was running; nothing more was sent.")
+            break
+        box = latest
         try:
-            done = real_orders.send_waiting(core, rec["id"], lambda r, rows: judge(r, rows, bk, box, today))
+            sent = real_orders.send_waiting(core, id, _gate(core, bk, today), touch=SWITCHES)
         except OrderError as exc:   # refused before anything was sent: it still waits, and says why
-            real_orders.note_auto(core, real_orders._get(core, rec["id"]), str(exc))
+            real_orders.note_auto(core, real_orders._get(core, id), str(exc))
             notes.append(f"{rec['side']} {rec['qty']:,} {rec['symbol']} was not sent automatically: {exc}")
             continue
-        sent.append(done)
+        done["sent"].append(sent)
         records = real_orders._records(core, now)
     paused = bk.get("paused") if (bk.get("paused") or {}).get("day") == today else None
-    return clean({"ran": True, "sent": sent, "exits": exits, "notes": notes[:12], "paused": paused})
+    return clean({"ran": True, "sent": done["sent"], "exits": done["exits"], "notes": notes[:12], "paused": paused})
 
 
 # ---- what the screens and the assistant see ---------------------------------------------
-def outlook(core: App, id: str) -> dict:
-    """Whether one waiting proposal will be sent automatically, and if not, why. For the assistant, right after it wrote one."""
-    real_orders._owner(core)
-    now = cairo_now()
-    box, bk = chosen(core), _book(core)
-    records = real_orders._records(core, now)
-    state = standing(core, box, bk, records)
-    rec = next((r for r in records if r["id"] == id and r["status"] == "proposed"), None)
-    if rec is None or not state["on"]:
-        return {"will_be_sent_automatically": False, "why_not": [state["why_not"] or "It is not a waiting proposal."]}
-    why = judge(rec, records, bk, box, now.date().isoformat())
-    return {"will_be_sent_automatically": not why, "why_not": why}
-
-
 def view(core: App) -> dict:
     """The automation for its owner: the box, whether it is on, what it holds, and what it will do with what waits."""
     real_orders._owner(core)
@@ -682,7 +873,7 @@ def view(core: App) -> dict:
         last = _last(core, symbol)
         value = money(D(str(last)) * pos["qty"]) if last is not None else None
         stop, target = (float(pos[k]) if pos.get(k) else None for k in ("stop", "target"))
-        tries = pos.get("tries") if (pos.get("tries") or {}).get("day") == today else None
+        tries = pos.get("tries") if (pos.get("tries") or {}).get("day") == today else {}
         positions.append({
             "symbol": symbol, "name": (core.market.instrument(symbol) or {}).get("name"), "qty": pos["qty"],
             "cost": D(pos["cost"]), "avg_cost": D(pos["cost"]) / pos["qty"] if pos["qty"] else None,
@@ -690,7 +881,7 @@ def view(core: App) -> dict:
             "result": value - D(pos["cost"]) if value is not None else None,
             "live": _live(core, symbol, now) is not None, "selling": symbol in selling,
             "at_stop": bool(stop is not None and last is not None and last <= stop),
-            "gave_up": bool(tries and tries["n"] >= MAX_EXIT_TRIES), "since": pos.get("since")})
+            "gave_up": (tries.get("stop") or {}).get("n", 0) >= MAX_EXIT_TRIES, "since": pos.get("since")})
     used = _exposure(bk, records)
     waiting = {}
     if state["on"]:

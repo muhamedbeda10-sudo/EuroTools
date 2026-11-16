@@ -21,7 +21,7 @@ export default function RealAutoRunner({ marketOpen }: { marketOpen: boolean }) 
   const believedOpen = useRef(marketOpen);
   believedOpen.current = marketOpen;
   useEffect(() => {
-    let busy = false, stopped = false, notBefore = 0;
+    let busy = false, stopped = false, notBefore = 0, failures = 0;
     const shown = new Map<string, number>();
     const look = async (now = false) => {
       if (busy || stopped || (!now && Date.now() < notBefore)) return;
@@ -31,6 +31,7 @@ export default function RealAutoRunner({ marketOpen }: { marketOpen: boolean }) 
         if (document.visibilityState !== "visible") await api("/api/v1/data/live", { method: "POST" }).catch(() => null);
         const result = await api("/api/v1/real-orders/auto/tick", { method: "POST" });
         if (stopped) return;
+        failures = 0;
         window.dispatchEvent(new CustomEvent(REAL_AUTO_LOOK, { detail: { at: Date.now(), result } }));
         notBefore = result.market_open === false ? Date.now() + CLOSED_MS : 0;
         if (result.ran && !believedOpen.current) window.dispatchEvent(new Event(DATA_UPDATED));   // the session began: prices start coming
@@ -49,8 +50,14 @@ export default function RealAutoRunner({ marketOpen }: { marketOpen: boolean }) 
           shown.set(note, Date.now());
           toast({ seq: `real-note-${shown.size}-${Date.now()}`, title: "Automatic orders", message: note });
         }
-      } catch {
-        // a look that did not get through is simply asked for again; the Real account page shows when the last one was
+      } catch (e: any) {
+        // A look that did not get through is asked for again. It is not passed over in silence: the Real account page
+        // shows that it failed, and after a few in a row the owner is told on whatever screen they are.
+        if (stopped) return;
+        failures += 1;
+        window.dispatchEvent(new CustomEvent(REAL_AUTO_LOOK, { detail: { at: Date.now(), failed: true, error: e?.message ?? "no answer" } }));
+        if (failures === 3) toast({ seq: "real-looks-failing", title: "Automatic orders",
+          message: "This window cannot reach the server. Nothing is being sent or watched from here until it can." });
       } finally {
         busy = false;
       }

@@ -113,4 +113,5 @@ def _assistant_proposal(body: dict):
                                  reason=body.get("reason", "Tried locally: a breakout on volume, wrong under the stop."),
                                  stop_price=Decimal(str(body["stop"])) if body.get("stop") else None,
                                  target_price=Decimal(str(body["target"])) if body.get("target") else None)
-    return _real_orders.propose(core, order, "assistant")
+    made = _real_orders.propose(core, order, "assistant")
+    return {**made, "automatic": _real_auto.admit(core, made["id"])}

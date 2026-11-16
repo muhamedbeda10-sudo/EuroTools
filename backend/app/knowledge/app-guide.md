@@ -108,6 +108,13 @@ broker.
   says why next to each waiting proposal.
 - Only the assistant's proposals go out by themselves, and only those written after the switch was turned on.
   An order the owner prepares always waits for the owner. The assistant can also mark a proposal to wait.
+- Whether a proposal goes out by itself is decided once, when it is written, and shown on it. One that was
+  outside the box then keeps waiting for the owner even if the box, the budget or the day changes later; the
+  page shows the reason it was given at the time.
+- A sale the assistant proposes that the automation's own shares could cover is a sale of those shares, also
+  when the owner approves it by hand. A larger sale is about the owner's own shares.
+- Pressing "Stop automatic orders" while a look is running holds at once: an order that was being checked at
+  that moment is not sent.
 - The budget is the most the automation may have in the market at once, at cost, counting its open buy
   orders. What it has lost so far comes off the budget, so the budget is also the most it can lose. A profit
   does not widen it. Raising the budget in Settings adds more.

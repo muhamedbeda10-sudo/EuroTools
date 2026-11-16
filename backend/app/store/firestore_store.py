@@ -113,6 +113,15 @@ class FirestoreStore:
         if self._depth == 0:
             self._flush()
 
+    def fresh(self) -> None:
+        """Drop everything this request has read, so that what is read next comes from the database as it is now.
+
+        A request normally sees one consistent picture. Something that acts more than once in a request (the
+        automation sending several orders) asks for a new picture before each act, so that a switch the owner
+        turned off a moment ago is seen. Writes that follow are checked against the new reads.
+        """
+        self._forget()
+
     def _forget(self) -> None:
         self._docs.clear()
         self._lists.clear()

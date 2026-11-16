@@ -20,6 +20,7 @@ from app.data.depth import build
 from app.data.feed import Feed, StoreDocs
 from app.data.younit import OrderRefused, YounitError
 from app.services import App
+from app.store.errors import ConflictError
 from app.store.sqlite_store import Store
 from tests.test_broker import FakeBroker, client
 from tests.test_feed import days
@@ -305,10 +306,13 @@ def test_the_budget_the_day_and_the_switches_bound_what_goes_out(floor):
     assert c.post(f"/api/v1/real-orders/{open_buy['id']}/cancel").status_code == 200
     v = auto(c)
     assert v["budget"]["used"] == pytest.approx(359) and v["today"]["buys"] == 2
-    assert v["waiting"][told["proposal"]["id"]]["why_not"] == ["2 automatic buys were already sent today; the limit is 2."]
+    # what a proposal was told when it was written stays true: room in the budget now does not send it later
+    waits = v["waiting"][told["proposal"]["id"]]
+    assert waits["automatic"] is False and waits["why_not"][0].startswith("It waits for you, as it was told when it was written: 2 automatic buys")
 
     # the owner's own switch, the server's switch and a closed market each stop a look before it does anything
     assert box(c, max_day_buys=5, budget=1000, max_order_value=600).status_code == 200
+    assert look(c)["sent"] == [] and auto(c)["waiting"][told["proposal"]["id"]]["automatic"] is False   # nor does a wider box
     c.put("/api/v1/real-orders/settings", json={**HAND, "enabled": False})
     assert look(c) == {"ran": False, "why": "Real orders are switched off in Settings → Real trading."}
     arm(c)
@@ -394,11 +398,19 @@ def test_the_book_gives_way_when_the_broker_shows_fewer_shares(floor, monkeypatc
     holds(c, (1, "COMI", 4, 4, COMI))                                           # the owner sold six of them in the broker's own app
     assert look(c)["notes"] == [] and auto(c)["positions"][0]["qty"] == 10      # too soon after the fill to conclude anything
     monkeypatch.setattr(real_auto, "SETTLING_SECONDS", -1)
+    monkeypatch.setattr(real_auto, "SHORT_SECONDS", -1)
+    # one reading is not believed: the broker must show it at several looks in a row
+    assert look(c)["notes"] == [] and look(c)["notes"] == [] and auto(c)["positions"][0]["qty"] == 10
+    holds(c, (1, "COMI", 10, 10, COMI))                                         # an odd answer that put itself right: forgotten
+    look(c)
+    holds(c, (1, "COMI", 4, 4, COMI))
+    assert [look(c)["notes"] for _ in range(2)] == [[], []]
     assert "The broker shows 4 COMI, not the 10 the automation counted" in look(c)["notes"][0]
     (pos,) = auto(c)["positions"]
     assert (pos["qty"], pos["cost"]) == (4, pytest.approx(143.6)) and ("reconcile", "real_auto") in audit(c)
     holds(c)                                                                    # and then the rest
-    look(c)
+    for _ in range(3):
+        look(c)
     assert auto(c)["positions"] == [] and auto(c)["budget"]["used"] == 0
     # shares bought today that the broker lists as not settled yet are still the account's
     monkeypatch.setattr(real_auto, "SETTLING_SECONDS", 600)
@@ -406,7 +418,30 @@ def test_the_book_gives_way_when_the_broker_shows_fewer_shares(floor, monkeypatc
     c.fake.positions = [{**c.fake.positions[0], "qty": 2, "unsettled": 8, "available": 0}]
     broker.reset()
     monkeypatch.setattr(real_auto, "SETTLING_SECONDS", -1)
-    assert look(c)["notes"] == [] and auto(c)["positions"][0]["qty"] == 10
+    assert [look(c)["notes"] for _ in range(4)] == [[]] * 4 and auto(c)["positions"][0]["qty"] == 10
+
+
+def test_a_sale_that_just_filled_is_never_taken_for_shares_that_left_the_account(floor, monkeypatch):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    monkeypatch.setattr(real_auto, "SETTLING_SECONDS", -1)
+    monkeypatch.setattr(real_auto, "SHORT_SECONDS", -1)
+    price(c, comi=33.5)
+    (sale,) = look(c)["exits"]
+    # the sale fills and the shares leave the account, but the broker's order list cannot be read for a while
+    fill(c, sale, average=33.5)
+    holds(c)
+    c.fake.orders = lambda profile_id: (_ for _ in ()).throw(YounitError("Younit request failed (HTTP 429)"))
+    for _ in range(4):
+        done = look(c)
+        assert any("order list could not be read" in n for n in done["notes"])
+    assert auto(c)["positions"][0]["qty"] == 10                                 # the book waits for the orders' own word
+    del c.fake.orders
+    real_orders.reset()
+    assert "Sold 10 COMI at about 33.5" in " ".join(look(c)["notes"])
+    v = auto(c)
+    assert v["positions"] == [] and v["today"]["realized"] == pytest.approx(335 - 359) and v["budget"]["lost"] == pytest.approx(24)
 
 
 # ---- stop-loss and take-profit ---------------------------------------------------------
@@ -477,7 +512,7 @@ def test_a_sale_that_does_not_fill_is_priced_again_and_the_app_says_when_it_give
         (refused,) = look(c)["exits"]
         assert refused["status"] == "rejected"
     done = look(c)
-    assert done["exits"] == [] and "4 attempts to sell it today did not complete" in done["notes"][0]
+    assert done["exits"] == [] and "4 sales of it today did not complete" in done["notes"][0]
     assert "sell it yourself" in done["notes"][0] and auto(c)["positions"][0]["gave_up"]
     assert len([s for s in c.fake.sent if s["side"] == "SELL"]) == 4
     # the owner moves the stop: the count starts again
@@ -514,10 +549,18 @@ def test_without_a_fresh_live_price_no_stop_is_acted_on(floor, monkeypatch):
     price(c, comi=33.0)
     c.clock["now"] += timedelta(minutes=5)                                      # the price on screen is five minutes old
     done = look(c)
-    assert done["exits"] == [] and done["notes"] == ["There is no live price for COMI right now, so its stop-loss is not being watched."]
+    assert done["exits"] == [] and done["notes"] == ["There is no fresh price for COMI right now, so its stop-loss is not being watched."]
     assert auto(c)["positions"][0]["live"] is False
-    price(c, comi=33.0)
-    assert len(look(c)["exits"]) == 1
+    # a stock that did not answer the feed this time keeps its old figure on screen; that figure is not acted on
+    del c.fake.live_prices["COMI"]
+    price(c, tmgh=TMGH)
+    assert look(c)["exits"] == [] and auto(c)["positions"][0]["last"] == 33.0 and auto(c)["positions"][0]["live"] is False
+    # then the broker's own price for the stock is what the stop is judged by
+    c.fake.limits[1] = {"last": 34.4}
+    assert look(c)["exits"] == [] and look(c)["notes"] == []                    # above the stop: nothing, and nothing to say
+    c.fake.limits[1] = {"last": 33.2}
+    (sale,) = look(c)["exits"]
+    assert sale["reason"].startswith("Stop-loss: the price reached 33.2")
 
 
 def test_a_take_profit_sells_at_the_target_or_better_never_under_it(floor):
@@ -677,7 +720,7 @@ def test_the_assistant_is_told_what_the_box_is_and_what_became_of_its_proposal(f
 
     on(c)
     # what it wrote before the switch was turned stays what it said it was: waiting for the owner
-    assert "written before automatic orders were switched on" in auto(c)["waiting"][told["proposal"]["id"]]["why_not"][0]
+    assert "as it was told when it was written: Automatic orders are switched off" in auto(c)["waiting"][told["proposal"]["id"]]["why_not"][0]
     assert look(c)["sent"] == [] and c.fake.sent == []
     bought(c, qty=10, stop=34.0, limit_price=35.8)
     seen = tool("real_orders")["automatic_orders"]
@@ -704,7 +747,7 @@ def test_nothing_but_the_owners_open_app_and_their_timer_starts_a_look():
     source = {str(p.relative_to(app_dir)): p.read_text() for p in app_dir.rglob("*.py")}
     for name in ("assistant_tools.py", "assistant.py", "assistant_prefs.py"):
         used = set(re.findall(r"real_auto\.(\w+)", source[name]))
-        assert used <= {"brief", "outlook", "tick"} and "real_auto.tick(" not in source[name], (name, used)   # `tick` is named in a comment only
+        assert used <= {"brief", "admit", "tick"} and "real_auto.tick(" not in source[name], (name, used)   # `tick` is named in a comment only
         for call in ("send_waiting(", "real_auto.save(", "real_auto.stop(", "real_auto.set_levels(", "note_auto(", "discard("):
             assert call not in source[name], f"{name} must not reach {call}"
     assert {name for name, text in source.items() if "send_waiting(" in text} == {"real_orders.py", "real_auto.py"}
@@ -720,3 +763,211 @@ def test_nothing_but_the_owners_open_app_and_their_timer_starts_a_look():
         assert "real_auto" not in source[paper], paper
     assert not [t.name for t in TOOLS if re.search(r"auto|tick|box|levels", t.name) and "real" in t.name]
     assert real_auto.AutoIn().enabled is False and real_auto.PROOF_SENT >= 3 and real_auto.PROOF_FILLED >= 1
+
+
+# ---- what an independent review found, each kept shut by a test ---------------------------
+def test_another_sale_resting_at_the_broker_does_not_keep_the_stop_from_selling(floor):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    told, _ = suggest(c, side="SELL", qty=10, limit_price=36.5, stop_price=None)   # the assistant asks more than the market gives
+    (resting,) = look(c)["sent"]
+    price(c, comi=33.0)                                                           # and the price falls through the stop instead
+    done = look(c)
+    assert done["exits"] == [] and "were cancelled, and the sale follows at the next look" in done["notes"][0]
+    assert c.fake.cancels == [(resting["broker"]["order_id"], 4242)]
+    (sale,) = look(c)["exits"]
+    assert (sale["qty"], sale["price"], sale["origin"]) == (10, 33.0, "automation")
+    # with one of its sales in doubt, it says so instead of staying silent
+    assert auto(c)["positions"][0]["selling"]
+
+
+def test_a_take_profit_that_will_not_fill_leaves_the_stop_loss_its_own_tries(floor, monkeypatch):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0, target=37.0)
+    monkeypatch.setattr(real_auto, "EXIT_PATIENCE_SECONDS", -1)
+    monkeypatch.setattr(real_auto, "EXIT_RETRY_SECONDS", -1)
+    monkeypatch.setattr(real_auto, "MAX_EXIT_TRIES", 2)
+    price(c, comi=37.2)
+    for _ in range(2):                                                            # two sales at the target rest and are taken back
+        assert len(look(c)["exits"]) == 1
+        assert "did not fill" in look(c)["notes"][0]
+    done = look(c)
+    assert done["exits"] == [] and "leaves the take-profit for today; the stop-loss still stands" in done["notes"][0]
+    assert auto(c)["positions"][0]["gave_up"] is False
+    price(c, comi=33.0)
+    (sale,) = look(c)["exits"]                                                    # the stop still has all its tries
+    assert sale["reason"].startswith("Stop-loss") and sale["qty"] == 10
+
+
+def test_a_sale_that_could_not_even_be_prepared_is_not_counted_as_a_try(floor, monkeypatch):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    monkeypatch.setattr(real_auto, "EXIT_RETRY_SECONDS", -1)
+    monkeypatch.setattr(real_auto, "MAX_EXIT_TRIES", 2)
+    price(c, comi=33.0)
+    asked = c.fake.trading_limits
+    c.fake.trading_limits = lambda stock_id: (_ for _ in ()).throw(YounitError("Younit request failed (HTTP 503)"))
+    for _ in range(4):                                                            # the broker cannot be asked, look after look
+        done = look(c)
+        assert done["exits"] == [] and "could not be prepared" in done["notes"][0]
+    c.fake.trading_limits = asked
+    (sale,) = look(c)["exits"]                                                    # none of that used the stop up
+    assert sale["status"] == "sent" and not auto(c)["positions"][0]["gave_up"]
+    assert [o["status"] for o in orders(c).values() if o["side"] == "SELL"] == ["sent"]   # and nothing was left waiting
+
+
+def test_a_sale_of_the_automations_shares_comes_off_its_book_whoever_approves_it(floor):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    holds(c, (1, "COMI", 60, 60, COMI))                                           # the owner holds fifty more of their own
+    told, _ = suggest(c, side="SELL", qty=10, limit_price=35.8, stop_price=None, hold_for_owner=True)
+    assert "Nothing was sent" in told["what_happens_next"] and look(c)["sent"] == []
+    waits = orders(c)[told["proposal"]["id"]]
+    assert waits["of_book"] and not waits["auto_ok"]
+    res = c.post(f"/api/v1/real-orders/{waits['id']}/approve", json={k: waits[k] for k in ("symbol", "side", "qty", "price")})
+    assert res.json()["status"] == "sent" and res.json()["approved_by"] == "owner"
+    fill(c, res.json(), average=35.8)
+    assert "Sold 10 COMI at about 35.8" in look(c)["notes"][0]
+    v = auto(c)
+    assert v["positions"] == [] and v["today"]["realized"] == pytest.approx(358 - 359)
+    holds(c, (1, "COMI", 50, 50, COMI))
+    price(c, comi=33.0)                                                           # the old stop is gone with the shares
+    assert look(c)["exits"] == [] and [s["side"] for s in c.fake.sent] == ["BUY", "SELL"]
+
+    # a sale larger than what the automation holds is about the owner's own shares: the book is not touched
+    bought(c, qty=5, stop=44.0, symbol="TMGH", limit_price=TMGH)
+    holds(c, (2, "TMGH", 55, 55, TMGH))
+    told, _ = suggest(c, symbol="TMGH", side="SELL", qty=30, limit_price=45.8, stop_price=None)
+    waits = orders(c)[told["proposal"]["id"]]
+    assert not waits["of_book"] and "holds 5 TMGH" in " ".join(told["why_it_is_not_sent_automatically"])
+    res = c.post(f"/api/v1/real-orders/{waits['id']}/approve", json={k: waits[k] for k in ("symbol", "side", "qty", "price")})
+    fill(c, res.json())
+    look(c)
+    assert [(p["symbol"], p["qty"]) for p in auto(c)["positions"]] == [("TMGH", 5)]
+
+
+def test_a_stop_pressed_while_a_look_is_running_wins(floor):
+    c = floor
+    on(c)
+    suggest(c)
+    suggest(c, symbol="TMGH", limit_price=TMGH, stop_price=44.0, qty=5)
+    asked, pressed = c.fake.buying_power, []
+
+    def while_it_is_checked(stock_id):
+        if not pressed:
+            pressed.append(c.post("/api/v1/real-orders/auto/stop").status_code)   # the owner taps Stop at that very moment
+        return asked(stock_id)
+    c.fake.buying_power = while_it_is_checked
+    done = look(c)
+    c.fake.buying_power = asked
+    assert pressed == [200] and c.fake.sent == [] and not done.get("sent")       # the order being checked did not go out
+    assert auto(c)["on"] is False and auto(c)["box"]["enabled"] is False        # and the stop was not undone
+    assert look(c)["ran"] is False and c.fake.sent == []
+
+    # between two orders of one look, the switches are read again
+    assert box(c).status_code == 200
+    suggest(c, limit_price=35.8)
+    suggest(c, symbol="TMGH", limit_price=45.8, stop_price=44.0, qty=5)
+    place = c.fake.place_limit_order
+
+    def then_stop(**order):
+        placed = place(**order)
+        c.put("/api/v1/real-orders/auto", json={**BOX, "enabled": False})         # switched off right after the first went out
+        return placed
+    c.fake.place_limit_order = then_stop
+    done = look(c)
+    c.fake.place_limit_order = place
+    assert len(done["sent"]) == 1 and len(c.fake.sent) == 1
+    assert "switched off while this look was running; nothing more was sent" in " ".join(done["notes"])
+
+
+def test_a_buy_under_its_own_stop_or_into_a_sale_is_not_sent(floor):
+    c = floor
+    on(c)
+    told, failed = suggest(c, limit_price=36.0, stop_price=35.95)                 # the market is at 35.9: that stop is already hit
+    assert failed and "at or above the market" in told["error"]
+    bought(c, qty=10, stop=34.0)
+    assert c.put("/api/v1/real-orders/auto/positions/COMI", json={"stop_price": 35.5}).status_code == 200
+    told, _ = suggest(c, qty=5, limit_price=35.4, stop_price=34.5)
+    assert "would be bought under its own stop" in " ".join(told["why_it_is_not_sent_automatically"])
+    c.put("/api/v1/real-orders/auto/positions/COMI", json={"stop_price": 34.0})
+    suggest(c, side="SELL", qty=10, limit_price=36.5, stop_price=None)
+    assert len(look(c)["sent"]) == 1                                              # a sale of it now rests at the broker
+    told, _ = suggest(c, qty=5, limit_price=35.8, stop_price=34.5)
+    assert "is selling COMI right now" in " ".join(told["why_it_is_not_sent_automatically"])
+    assert look(c)["sent"] == []
+
+
+def test_what_is_left_of_a_buy_never_makes_a_position_without_a_stop(floor):
+    c = floor
+    on(c)
+    suggest(c, qty=10, stop_price=34.0, target_price=37.0)
+    buy = look(c)["sent"][0]
+    fill(c, buy, qty=4)
+    look(c)
+    holds(c, (1, "COMI", 4, 4, COMI))
+    price(c, comi=37.2)                                                           # the four that filled reach their target and are sold
+    (sale,) = look(c)["exits"]
+    fill(c, sale)
+    look(c)
+    assert auto(c)["positions"] == []
+    fill(c, buy)                                                                  # then the rest of the same buy fills
+    look(c)
+    (pos,) = auto(c)["positions"]
+    assert (pos["qty"], pos["stop"], pos["target"]) == (6, 34.0, 37.0)            # watched from the first moment
+
+    # at a stop-loss, a buy of the same stock still open is taken back before anything is sold
+    suggest(c, symbol="TMGH", qty=10, limit_price=TMGH, stop_price=44.0)
+    buy = look(c)["sent"][0]
+    fill(c, buy, qty=4)
+    look(c)
+    holds(c, (2, "TMGH", 4, 4, TMGH), (1, "COMI", 6, 0, COMI))
+    price(c, tmgh=43.5, comi=COMI)
+    done = look(c)
+    assert done["exits"] == [] and c.fake.cancels[-1] == (buy["broker"]["order_id"], 4242)
+    (sale,) = look(c)["exits"]
+    assert (sale["symbol"], sale["qty"]) == ("TMGH", 4)
+
+
+def test_ways_out_do_not_use_up_the_owners_limits_and_the_count_lives_in_the_book(floor):
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    before = c.get("/api/v1/real-orders").json()["today"]
+    price(c, comi=33.5)
+    (sale,) = look(c)["exits"]
+    after = c.get("/api/v1/real-orders").json()["today"]
+    assert after == before == {"orders": 4, "value": pytest.approx(55.9 + 55.8 + 55.7 + 359)}
+    c.put("/api/v1/real-orders/settings", json={**HAND, "max_day_orders": 5})
+    by_hand(c, symbol="TMGH", qty=1, price=TMGH)                                  # the owner's own order still has its place
+
+    # what the book has counted of an order is not on the order's record, so nothing that rewrites the record can undo it
+    fill(c, sale, average=33.5)
+    look(c)
+    core = core_of(c)
+    rec = real_orders._get(core, sale["id"])
+    assert "applied" not in rec and real_auto._book(core)["applied"][sale["id"]] == {"qty": 10, "amount": "335.00"}
+    real_orders._put(core, {**rec, "cancel": {"asked_at": "x", "outcome": "a stale copy written over it"}})
+    assert look(c)["notes"] == [] and auto(c)["today"]["realized"] == pytest.approx(335 - 359)
+
+
+def test_what_a_look_did_before_a_collision_is_still_told(floor, monkeypatch):
+    c = floor
+    on(c)
+    suggest(c)
+    suggest(c, symbol="TMGH", limit_price=TMGH, stop_price=44.0, qty=5)
+    real, calls = real_orders.send_waiting, []
+
+    def collide_on_the_second(core, id, gate, touch=()):
+        calls.append(id)
+        if len(calls) == 2:
+            raise ConflictError("the data changed in another window")
+        return real(core, id, gate, touch)
+    monkeypatch.setattr(real_orders, "send_waiting", collide_on_the_second)
+    done = look(c)
+    assert done["ran"] and len(done["sent"]) == 1 and len(c.fake.sent) == 1
+    assert "stopped early" in done["notes"][-1]

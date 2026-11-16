@@ -233,7 +233,9 @@ class Feed:
         indices = got["indices"] or same_day.get("indices") or []
         doc = {"date": today, "ts": now.isoformat(timespec="seconds"), "quotes": quotes, "sectors": sectors,
                "indices": indices, "errors": got["errors"], "answered": got["answered"], "asked": len(tracked),
-               "fresh": len(got["quotes"])}
+               "fresh": len(got["quotes"]),
+               # stocks shown at an earlier figure because they did not answer this time: on screen, but not to be acted on
+               "stale": sorted(set(quotes) - set(got["quotes"]))}
         self.docs.put("live", doc)
         meta = self.docs.get("meta") or _meta(self.docs.get("index") or empty_index())
         meta["live_ts"] = doc["ts"]

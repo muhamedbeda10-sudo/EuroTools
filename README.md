@@ -171,12 +171,28 @@ once more at the last moment in the owner's place. Whatever does not fit simply 
 - **Stop-loss and take-profit** are watched by the app, not left at the broker (the API takes day
   limit orders only). When a fresh live price reaches the level, a sale is sent a few levels into
   the bids, inside the owner's price band; one that does not fill is cancelled and priced again; a
-  sale in doubt is never followed by another; after six attempts in a day the app stops and says so.
+  sale in doubt is never followed by another; other orders of the automation's in that stock are
+  taken back first (a sale resting above the market, a buy still open); a stop-loss and a
+  take-profit keep separate counts, only a sale that reached the broker counts, and after six in a
+  day the app stops and says so. Ways out do not use up the owner's daily limits.
   The owner can move a position's levels. A later buy can raise a position's stop, never lower it.
   A stock sold that way is not bought again by the automation the same day. **Shares that have not
   settled cannot be sold** (on EGX usually T+2), so the stop on a fresh purchase may have to wait.
-- **What was written before the switch was turned waits for the owner**, as it said it would, and
-  the assistant can mark a proposal to wait for the owner (`hold_for_owner`).
+- **Decided once, when it is written.** `real_auto.admit` judges a proposal at the moment the
+  assistant writes it and writes the answer on it. Only one that was inside the box then is ever
+  sent by itself; one that was told "this waits for the owner" keeps waiting, whatever changes
+  later (a new day, a freed budget, a wider box). What was written before the switch was turned
+  waits too, and the assistant can mark a proposal to wait (`hold_for_owner`).
+- **A stop pressed mid-look wins.** Before each order the look reads the switches afresh, and the
+  order is tied to them: they are written back unchanged with the approval, so the database refuses
+  the order if one of them changed while it was being checked.
+- **Whose shares a sale is.** A sale the assistant writes that the automation's own shares could
+  cover is theirs (`of_book`) and comes off the book whoever approves it; a larger one is about the
+  owner's own shares and leaves the book alone. An order the owner prepares never touches it.
+- **The broker's holdings are believed slowly.** The book gives way only when the account shows
+  fewer shares at several looks in a row, with no order of the automation's in that stock still in
+  flight and the order list readable: one odd answer, or a sale that filled a moment ago, must not
+  make the app forget shares it is watching.
 - **One-tap stop** on the Real account page: no further automatic order, the automation's open buys
   are cancelled, and nothing is watched any more. Its shares stay in the account.
 - **Two windows at once** (a phone and a computer) cannot send the same order twice: the day lock

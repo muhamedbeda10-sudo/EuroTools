@@ -701,7 +701,10 @@ def test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order(mo
         def suggest(**order):
             body = {"symbol": "COMI", "side": "BUY", "qty": 10, "price": Decimal(str(comi)), "stop_price": Decimal(str(round(comi * 0.95, 2))),
                     "reason": "Broke out on volume; wrong if it falls back under the breakout.", **order}
-            return real_orders.propose(server(), real_orders.OrderIn(**body), "assistant")
+            other = server()
+            made = real_orders.propose(other, real_orders.OrderIn(**body), "assistant")
+            assert real_auto.admit(other, made["id"])["will_be_sent_automatically"]
+            return made
 
         # while this server's look is asking the broker, the look of a second window goes all the way through elsewhere
         one = suggest()
@@ -710,7 +713,7 @@ def test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order(mo
         def slow(stock_id):
             if not inner:
                 inner["started"] = True
-                inner["res"] = real_auto._tick(server())
+                inner["res"] = real_auto._tick(server(), {"sent": [], "exits": [], "notes": []})
             return asked(stock_id)
         fake.buying_power = slow
         outer = c.post("/api/v1/real-orders/auto/tick", headers=ho).json()
@@ -744,10 +747,24 @@ def test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order(mo
         with pytest.raises((real_auto._Busy, ConflictError)):
             real_auto._keep(second, books[1])
 
-        # the one-tap stop is the owner's, and it holds on every server
-        assert c.post("/api/v1/real-orders/auto/stop", headers=ho).json()["on"] is False
-        suggest(symbol="TMGH", price=Decimal(str(tmgh)), stop_price=Decimal(str(round(tmgh * 0.95, 2))), qty=5)
-        assert real_auto._tick(server())["ran"] is False and len(fake.sent) == 1
+        # A stop pressed on another server while this one is checking an order wins: the order is tied to the
+        # switches it was read under, and the database refuses it once one of them has changed.
+        two = suggest(symbol="TMGH", price=Decimal(str(tmgh)), stop_price=Decimal(str(round(tmgh * 0.95, 2))), qty=5)
+        inner.clear()
+
+        def stopped_meanwhile(stock_id):
+            if not inner:
+                inner["started"] = True
+                inner["res"] = real_auto.stop(server())
+            return asked(stock_id)
+        fake.buying_power = stopped_meanwhile
+        outer = c.post("/api/v1/real-orders/auto/tick", headers=ho).json()
+        fake.buying_power = asked
+        assert inner["res"]["on"] is False and outer["ran"] is False and len(fake.sent) == 1     # nothing went out after the stop
+        after = c.get("/api/v1/real-orders", headers=ho).json()
+        assert [w["id"] for w in after["waiting"]] == [two["id"]]                                # it still waits, untouched
+        assert c.get("/api/v1/real-orders/auto", headers=ho).json()["on"] is False               # and the stop stands, on every server
+        assert real_auto._tick(server(), {"sent": [], "exits": [], "notes": []})["ran"] is False and len(fake.sent) == 1
         assert not [e for e in c.get("/api/v1/audit", headers=ha).json() if e["entity"].startswith("real_")]
     Feed.reset()
     broker.reset()

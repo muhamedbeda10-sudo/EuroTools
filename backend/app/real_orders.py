@@ -253,7 +253,10 @@ def menu_state(core: App) -> dict:
 
 
 def _used_today(records: list[dict], today: str, *, apart_from: str | None = None) -> tuple[int, Decimal]:
-    rows = [r for r in records if r.get("sent_day") == today and r["status"] in COUNTED and r["id"] != apart_from]
+    """Today's use of the owner's limits. A way out of a position the automation holds is not counted: the limits
+    bound what is put at stake, and a sale that could not be completed must not shut the owner's own orders out."""
+    rows = [r for r in records if r.get("sent_day") == today and r["status"] in COUNTED and r["id"] != apart_from
+            and not r.get("protective")]
     return len(rows), sum((D(r["value"]) for r in rows), ZERO)
 
 
@@ -342,6 +345,9 @@ def examine(core: App, order: OrderIn, records: list[dict], now: datetime, *, se
     if reference is None:
         problems.append(f"There is no current price for {symbol} to check the order against.")
     else:
+        if order.side == "BUY" and order.stop_price is not None and float(order.stop_price) >= reference:
+            problems.append(f"Its stop-loss ({float(order.stop_price):g}) is at or above the market ({reference:g}): "
+                            "it would be bought already under its stop.")
         band = float(D(chosen["price_band_pct"]))
         gap = (float(price) - reference) / reference * 100
         facts["distance_pct"] = gap
@@ -501,25 +507,33 @@ def approve(core: App, id: str, seen: ApproveIn) -> dict:
         return _approve(core, id, seen)
 
 
-def send_waiting(core: App, id: str, gate) -> dict:
+def send_waiting(core: App, id: str, gate, touch: tuple = ()) -> dict:
     """Send a waiting proposal on the owner's standing approval instead of their yes to this one.
 
     Called from real_auto.py only, and only for what the owner's automatic box allows: `gate` is that box,
     asked once more at the last moment with the records as they are now. Everything the owner's own yes goes
     through applies here too: the same checks, the same day lock, the same single request to the broker.
+
+    `touch` names documents the approval is tied to (the owner's switches): they are written back unchanged
+    together with the approval, so the database refuses the whole of it if one of them changed since it was
+    read. A stop the owner pressed while this was being checked therefore wins.
     """
     _owner(core)
     with _approving:
-        return _approve(core, id, None, by="auto", gate=gate)
+        # Everything is read again from the database for this one order, the day's lock first: a look that sends
+        # several orders must judge each against what is true at that moment, not at the moment the look began.
+        core.store.fresh()
+        return _approve(core, id, None, by="auto", gate=gate, touch=touch)
 
 
-def _approve(core: App, id: str, seen: ApproveIn | None, *, by: str = "owner", gate=None) -> dict:
+def _approve(core: App, id: str, seen: ApproveIn | None, *, by: str = "owner", gate=None, touch: tuple = ()) -> dict:
     now = cairo_now()
     today = now.date().isoformat()
     # Read first, write last: the day's lock and the records are read before any check is made, and the
     # database refuses the write below if either changed in between. So an approval that slipped in while
     # this one was being checked makes this one fail, to be judged again against what is true now.
     lock = core.store.get("real_days", today) or {"n": 0}
+    tied = [(key, core.store.get(*key)) for key in touch]
     rec, records = _with_others(core, id, now)
     if rec["status"] != "proposed":
         raise OrderError("This proposal is no longer waiting for a decision.")
@@ -555,8 +569,14 @@ def _approve(core: App, id: str, seen: ApproveIn | None, *, by: str = "owner", g
     rec.update(status="sending", approved_at=now_iso(), sent_day=today, decided_at=now_iso(), approved_by=by,
                broker={"profile_id": profile_id, "order_id": None, "status": None, "state": None, "executed_qty": 0,
                        "average": None, "seen_at": None, "before": before})
+    for key, doc in tied:   # where the database cannot refuse a stale write by itself, the comparison is made here
+        if core.store.get(*key) != doc:
+            raise ConflictError("a switch was changed while this order was being checked; nothing was sent")
     with core.store.transaction():
         core.store.put("real_days", today, {"n": lock["n"] + 1})
+        for key, doc in tied:
+            if doc is not None:
+                core.store.put(*key, doc)   # unchanged: written only so that a change made meanwhile refuses all of this
         _put(core, rec)
         core.audit("approve", "real_order", _summary(rec))
 
@@ -798,7 +818,7 @@ def _public(rec: dict) -> dict:
     out.update(price=float(rec["price"]), value=float(rec["value"]),
                stop=float(rec["stop"]) if rec.get("stop") else None, target=float(rec["target"]) if rec.get("target") else None,
                approved_by=rec.get("approved_by"), protective=bool(rec.get("protective")), hold=bool(rec.get("hold")),
-               auto=rec.get("auto"))
+               auto=rec.get("auto"), auto_ok=bool(rec.get("auto_ok")), of_book=bool(rec.get("of_book")))
     b = rec.get("broker") or {}
     out["broker"] = {k: b.get(k) for k in ("order_id", "status", "state", "executed_qty", "average", "seen_at")} if b else None
     out["can_cancel"] = rec["status"] == "sent" and b.get("state") in OPEN_STATES

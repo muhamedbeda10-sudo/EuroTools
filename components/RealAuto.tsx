@@ -34,7 +34,8 @@ function Position({ p, watched, onSaved }: { p: any; watched: boolean; onSaved: 
           {p.gave_up ? <span className="badge bad" title="Several sales did not complete today. Sell it yourself below.">sell it yourself</span>
             : p.selling ? <span className="badge warn">being sold</span>
             : p.at_stop ? <span className="badge warn">at its stop</span>
-            : !watched ? <span className="badge" title="Automatic orders are not running, so nothing watches this position">not watched</span>
+            : p.stop == null ? <span className="badge bad" title="It has no stop-loss. Set one with Move levels.">no stop-loss</span>
+            : !watched ? <span className="badge" title="No look is reaching the server right now, so nothing watches this position">not watched</span>
             : !p.live ? <span className="badge warn" title="No fresh live price: its stop-loss cannot be acted on right now">no live price</span>
             : <span className="badge ok">watched</span>}
           {/* on a narrow screen the level columns scroll out of view: the stop is said here too */}
@@ -71,7 +72,7 @@ function Position({ p, watched, onSaved }: { p: any; watched: boolean; onSaved: 
 
 /** Automatic orders on the Real account page: whether it is running, its budget, what it holds, and the one-tap stop. */
 export default function RealAuto({ auto, reload, onChanged }: { auto: any; reload: () => void; onChanged: () => void }) {
-  const [look, setLook] = useState<{ at: number; result: any } | null>(null);
+  const [look, setLook] = useState<{ at: number; result?: any; failed?: boolean; error?: string } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [stopNotes, setStopNotes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -109,6 +110,8 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
     window.dispatchEvent(new Event(REAL_AUTO_AWAKE));
   };
   const notes: string[] = auto.on && look?.result?.ran ? look.result.notes ?? [] : [];
+  // A position is watched while looks are getting through: this window's own, or the server's.
+  const watching = auto.on && auto.market_open && (!look?.failed || (background && !!bg && !bg.silent));
   return (
     <div className="card section auto-card">
       <div className="card-head">
@@ -122,7 +125,8 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
         <p className="muted" style={{ marginTop: 0, fontSize: 12.5 }} role="status">
           {auto.market_open
             ? <>{background ? "Running with the app open or closed" : "Running while this app is open"}: the assistant&apos;s proposals that fit your box are sent without asking you, and the positions below are watched.{" "}
-                {look ? <span className="num">Last look {hhmmss(look.at)}{look.result?.ran || look.result?.busy ? "" : ` · ${String(look.result?.why ?? "it did not run").replace(/\.$/, "")}`}.</span> : "Waiting for the first look…"}</>
+                {!look ? "Waiting for the first look…" : look.failed ? null
+                  : <span className="num">Last look {hhmmss(look.at)}{look.result?.ran || look.result?.busy ? "" : ` · ${String(look.result?.why ?? "it did not run").replace(/\.$/, "")}`}.</span>}</>
             : `The market is closed. It runs during the session, ${background ? "with the app open or closed" : "while this app is open"}.`}
           {background && bg?.beat?.at && <span className="num"> Last background look {hhmmss(Date.parse(bg.beat.at))}.</span>}
           {" "}<Link href="/settings?tab=real">Change the box</Link>
@@ -134,6 +138,10 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
           <strong>Automatic orders are off.</strong> The shares below were bought by the automation and are <strong>no longer watched</strong>: their
           stop-losses do nothing until it is switched on again in <Link href="/settings?tab=real">Settings</Link>. They are yours to manage.
         </div>
+      )}
+      {auto.on && auto.market_open && look?.failed && (
+        <div className="note danger" role="alert"><strong>The look at {hhmmss(look.at)} did not reach the server</strong> ({look.error}).{" "}
+          {background && bg && !bg.silent ? "The server's own looks are still running." : "While this goes on, nothing is being sent or watched from this window."}</div>
       )}
       {background && bg?.silent && auto.on && (
         <div className="note danger" role="alert"><strong>The server has not looked for several minutes.</strong> Background running is switched on, but nothing is being
@@ -162,7 +170,7 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
             <caption className="sr-only">Shares the automation bought and still holds</caption>
             <thead><tr><th>Bought by it</th><th>Shares</th><th>Last</th><th>Stop-loss</th><th>Take-profit</th><th>Avg cost</th><th>Result</th>
               <th><span className="sr-only">Actions</span></th></tr></thead>
-            <tbody>{auto.positions.map((p: any) => <Position key={p.symbol} p={p} watched={auto.on && auto.market_open} onSaved={reload} />)}</tbody>
+            <tbody>{auto.positions.map((p: any) => <Position key={p.symbol} p={p} watched={watching} onSaved={reload} />)}</tbody>
           </table>
         </div>
       ) : (

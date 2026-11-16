@@ -324,7 +324,8 @@ def _real_account(core: App, a: NoArgs) -> dict:
 
 
 NOT_SENT = ("This is a proposal, not an order. Nothing was sent to the broker. It waits on the Real account page, where only "
-            "the owner can approve it; you cannot approve, send or cancel it.")
+            "the owner can approve it; you cannot approve, send or cancel it. That is settled for this proposal: it will not "
+            "be sent by itself later, whatever changes.")
 WILL_BE_SENT = ("AUTOMATIC: this proposal fits the box the owner set for automatic orders. Nothing has been sent yet, but it "
                 "WILL be sent to the broker with REAL money, without the owner looking at it first, at the next look during "
                 "the session: within a minute or two, from their open app or, if they switched that on, from the server's own "
@@ -371,7 +372,7 @@ def _propose_real_order(core: App, a: ProposeRealOrder) -> dict:
     made = real_orders.propose(core, real_orders.OrderIn(symbol=a.symbol, side=a.side, qty=a.qty, price=a.limit_price,
                                                          reason=a.reason, stop_price=a.stop_price, target_price=a.target_price),
                                "assistant", hold=a.hold_for_owner)
-    outlook = real_auto.outlook(core, made["id"])
+    outlook = real_auto.admit(core, made["id"])   # decided once, here: sent by itself, or waiting for the owner for good
     out = {"proposal": pick(made, *REAL_ORDER), "checked": made["checked"],
            "what_happens_next": WILL_BE_SENT if outlook["will_be_sent_automatically"] else NOT_SENT}
     if not outlook["will_be_sent_automatically"]:
