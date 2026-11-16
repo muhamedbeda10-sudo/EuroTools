@@ -121,6 +121,31 @@ class BacktestIn(BaseModel):
 MAX_CACHED_USERS = 20
 
 
+def reach(url: str) -> dict:
+    """Whether a Postgres database can be reached with this connection string, and if not, which part of it is at fault.
+
+    Says nothing that is in the connection string: only how far the attempt got.
+    """
+    import psycopg
+    started = time.monotonic()
+    try:
+        with psycopg.connect(url, connect_timeout=8, autocommit=True, prepare_threshold=None) as conn:
+            version = conn.execute("select current_setting('server_version')").fetchone()[0]
+            schema = conn.execute("select to_regclass('egx.accounts') is not null").fetchone()[0]
+        return {"reached": True, "ms": round((time.monotonic() - started) * 1000), "version": version, "has_schema": schema}
+    except Exception as exc:  # noqa: BLE001 - whatever it is, the answer is "not reached" and the kind of failure
+        said = str(exc).lower()
+        why = ("the password was refused" if "password authentication failed" in said else
+               "the pooler does not know this user name or project (the user is written postgres.<project ref>)"
+               if "tenant or user not found" in said else
+               "the host name in the address could not be found" if "name or service not known" in said or "could not translate" in said else
+               "no answer from that address (timed out)" if "timeout" in said or "timed out" in said else
+               "the connection was refused at that address and port" if "connection refused" in said else
+               "the address is not a connection string this server can read" if isinstance(exc, (psycopg.ProgrammingError, ValueError)) else
+               type(exc).__name__)
+        return {"reached": False, "why": why}
+
+
 def create_app(settings: Settings | None = None, store: Store | None = None, younit=None, assistant_model=None, *,
                database: Database | None = None, verifier: TokenVerifier | None = None, account_ask=None,
                firestore_source=None, market_source=None) -> FastAPI:
@@ -282,17 +307,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
             out["database_ms"] = {"first": times[0], "then": sorted(times[1:])}
         elif probe and settings.database_url:
             # A Postgres database is named but not yet in use: can this server reach it? Nothing is read or made.
-            try:
-                waiting = Database(settings.database_url, max_size=1)
-                try:
-                    started = time.monotonic()
-                    version = waiting.one("select current_setting('server_version')")[0]
-                    out["postgres_waiting"] = {"reached": True, "ms": round((time.monotonic() - started) * 1000), "version": version,
-                                               "has_schema": waiting.one("select to_regclass('egx.accounts') is not null")[0]}
-                finally:
-                    waiting.close()
-            except Exception as exc:  # noqa: BLE001 - whatever it is, the answer is "not reached", with the kind of failure only
-                out["postgres_waiting"] = {"reached": False, "why": type(exc).__name__}
+            out["postgres_waiting"] = reach(settings.database_url)
         if probe and firestore and not postgres:
             # How far is the database from this server? Timed with requests that carry no
             # credentials and are refused, so nothing is read.
