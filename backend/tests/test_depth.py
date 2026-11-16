@@ -37,19 +37,37 @@ def test_build_orders_the_book_and_computes_the_summary():
     assert [lv["price"] for lv in b["bids"]] == [0.827, 0.825] and [lv["price"] for lv in b["asks"]] == [0.828, 0.829]
     assert b["best_bid_size"] == 107879 and b["best_ask_size"] == 155401
     assert b["spread"] == pytest.approx(0.001) and b["spread_pct"] == pytest.approx(0.1209, abs=1e-3)
-    assert b["bid_share_pct"] == pytest.approx(50.52, abs=0.01) and b["unread"] is None
+    assert b["bid_share_pct"] == pytest.approx(50.52, abs=0.01) and b["unread"] is None and b["top_only"] is None
 
 
 def test_build_falls_back_to_the_top_of_book_and_reports_what_it_could_not_read():
     b = build({"m_LastTradePrice": "10", "m_BidPrice": "9.9", "m_BidVol": "500", "m_AskPrice": "10.1", "m_AskVol": "700",
                "m_BidBook": "<<opaque blob>>", "m_AskBook": ""})
     assert b["bids"] == [{"price": 9.9, "size": 500.0, "orders": None}] and b["asks"][0]["size"] == 700
-    assert b["unread"] == {"bids": "<<opaque blob>>"}
+    assert b["unread"] == {"bids": "<<opaque blob>>"} and b["top_only"] == ["bids", "asks"]
     empty = build({})
     assert empty["bids"] == [] and empty["best_bid"] is None and empty["spread"] is None and empty["bid_share_pct"] is None
+    assert empty["top_only"] is None
+    # one side with levels, the other with its best price alone
+    half = build({"m_LastTradePrice": "10", "m_BidBook": "9.9,500,2|9.8,100,1", "m_AskPrice": "10.1", "m_AskVol": "700"})
+    assert half["top_only"] == ["asks"] and len(half["bids"]) == 2 and half["unread"] is None
 
 
 def test_describe_says_what_arrived_for_the_book_in_one_line():
     line = describe({"m_BidBook": "", "m_BidPrice": "9.9", "m_BidVol": "500"})
     assert "m_BidBook[0]=''" in line and "m_AskBook=absent" in line and '"m_BidPrice":"9.9"' in line and "\n" not in line
     assert "m_AskBook[9]='1,2|3,4x.'" in describe({"m_AskBook": "1,2|3,4x."}) and len(describe({"m_AskBook": "9" * 5000})) < 1500
+
+
+def test_the_server_notes_what_the_feed_sent_once_per_stock(caplog):
+    from app.data import younit
+    younit._BOOK_NOTED.clear()
+    row = {"m_BidPrice": "9.9", "m_BidVol": "500", "m_AskPrice": "10.1", "m_AskVol": "700", "m_BidBook": ""}
+    with caplog.at_level("INFO", logger="egx.depth"):
+        younit._note_book("sy7", row, build(row))
+        younit._note_book("sy7", row, build(row))          # again within ten minutes: nothing more
+        younit._note_book("sy8", row, build(row))
+    lines = [r.getMessage() for r in caplog.records]
+    assert len(lines) == 2 and "sy7 read as 1 bids and 1 asks (best price only: bids,asks)" in lines[0]
+    assert "m_BidBook[0]=''" in lines[0] and "m_AskBook=absent" in lines[0]
+    younit._BOOK_NOTED.clear()
