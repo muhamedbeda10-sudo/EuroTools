@@ -61,6 +61,10 @@ VIA_API = 8
 EXECUTION_DEFAULT = 1
 
 
+_log = logging.getLogger("egx.younit")
+if not _log.handlers:   # a line per sign-in; the host shows what is written here
+    _log.addHandler(logging.StreamHandler())
+    _log.setLevel(logging.INFO)
 book_log = logging.getLogger("egx.depth")
 if not book_log.handlers:   # one line now and then; the host shows what is written here
     book_log.addHandler(logging.StreamHandler())
@@ -308,7 +312,7 @@ class YounitClient:
         with self._lock:
             now = time.monotonic()
             cached = self._tokens.get(self._trading_id)
-            if cached and not force and now < cached[1] - REFRESH_BEFORE_EXPIRY:
+            if cached and not force and now < (cached[2] if len(cached) > 2 else cached[1] - REFRESH_BEFORE_EXPIRY):
                 return cached[0]
             wait = self._tokens.get(("wait", self._trading_id))
             if wait and now < wait[0]:
@@ -327,6 +331,7 @@ class YounitClient:
                     "Younit rejected the Trading ID / API key (check the values saved on the server)"))
             if res.status_code == 429:
                 pause = _retry_after(res)
+                _log.warning("Younit refused the sign-in (asked too often): not asked again for %s seconds", pause)
                 if cached and not force and now < cached[1] - TOKEN_MARGIN:
                     self._hold_off(pause, YounitRateLimit(pause))
                     return cached[0]
@@ -342,10 +347,15 @@ class YounitClient:
             token = payload.get("accessToken") if isinstance(payload, dict) else None
             if not isinstance(token, str) or not token:
                 raise self._hold_off(SIGN_IN_PAUSE, YounitError("Younit sign-in returned no access token"))
-            lifetime = payload.get("expiresIn")
+            stated = payload.get("expiresIn")
+            lifetime = stated if isinstance(stated, int) and not isinstance(stated, bool) and stated > 0 else 600
             header = f"{payload.get('tokenType') or 'Bearer'} {token}"
-            self._tokens[self._trading_id] = (header, time.monotonic() + (lifetime if isinstance(lifetime, int) and lifetime > 0 else 600))
+            signed = time.monotonic()
+            # Renewed five minutes before it runs out, or halfway through a short life: a token good for five
+            # minutes or less must still be used, not replaced by a new sign-in on every request.
+            self._tokens[self._trading_id] = (header, signed + lifetime, signed + lifetime - min(REFRESH_BEFORE_EXPIRY, lifetime / 2))
             self._tokens.pop(("wait", self._trading_id), None)
+            _log.info("Younit sign-in: a token good for %s seconds (the feed stated %r)", lifetime, stated)
             return header
 
     def _get(self, path: str, params: dict | None = None):

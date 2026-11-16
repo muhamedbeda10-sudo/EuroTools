@@ -352,7 +352,7 @@ def test_a_refused_sign_in_is_not_repeated_with_every_request():
     assert [s["symbol"] for s in c.stocks()] == ["COMI"] and state["token"] == 2 and ("wait", "tid-1") not in YounitClient._tokens
 
     # A token that is only due for renewal keeps working while sign-in is refused, and renewal is not asked for again.
-    header, _ = YounitClient._tokens["tid-1"]
+    header = YounitClient._tokens["tid-1"][0]
     import time as clock
     YounitClient._tokens["tid-1"] = (header, clock.monotonic() + 120)     # inside the renewal window, not yet expired
     state["limit"] = True
@@ -369,6 +369,32 @@ def test_a_refused_sign_in_is_not_repeated_with_every_request():
         with pytest.raises(YounitError, match="sign-in failed"):
             broken.stocks()
     assert seen == ["/api/public-keys/token"]
+
+
+def test_a_short_lived_token_is_used_not_replaced_on_every_request():
+    """A token good for five minutes or less used to count as "due for renewal" from the moment it was issued,
+    so every request signed in again. It is renewed halfway through its life instead."""
+    state = {"token": 0}
+
+    def handler(req):
+        if req.url.path == "/api/public-keys/token":
+            state["token"] += 1
+            return httpx.Response(200, json={"accessToken": f"t{state['token']}", "expiresIn": 240, "tokenType": "Bearer"})
+        return httpx.Response(200, json={"data": [{"stockId": 7, "symbol": "COMI", "stockName": "CIB"}]})
+    c = make_client(handler)
+    for _ in range(4):
+        c.stocks()
+    assert state["token"] == 1
+    header, expiry, renew = YounitClient._tokens["tid-1"]
+    assert 115 <= expiry - renew <= 125                      # halfway through its four minutes
+    YounitClient._tokens["tid-1"] = (header, expiry, 0.0)    # that moment has come
+    c.stocks()
+    assert state["token"] == 2
+    # a long-lived one is still renewed five minutes before it runs out
+    make_client(lambda r: httpx.Response(200, json={"accessToken": "t", "expiresIn": 3600, "tokenType": "Bearer"})
+                if "token" in r.url.path else httpx.Response(200, json={"data": [{"stockId": 7, "symbol": "COMI"}]})).stocks()
+    _, expiry, renew = YounitClient._tokens["tid-1"]
+    assert 299 <= expiry - renew <= 301
 
 
 def test_an_answer_that_is_not_json_is_described_without_its_content():
