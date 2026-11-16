@@ -4,7 +4,10 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 
 > Trading here is on paper. One thing is real and fenced off: the owner of the brokerage account can
 > look at it, and can send a **real order they approved themselves**, one at a time. It is off unless
-> switched on twice (server and owner). Nothing else in this codebase reaches a broker.
+> switched on twice (server and owner). The owner may go one step further and approve in advance
+> what fits a box they set (**automatic orders**, locked until hand-approved orders have worked),
+> and may let the server keep taking those looks with the app closed (**background running**).
+> Nothing else in this codebase reaches a broker.
 > The app ships with **synthetic sample prices** (clearly labelled in the UI) until real
 > history is imported by CSV or a data feed is connected.
 
@@ -17,7 +20,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
-| Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; and real orders, each sent only on the owner's approval. Owner only |
+| Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; real orders, each sent on the owner's approval; and automatic orders (what fits the owner's box, with stop-losses watched by the app, and a one-tap stop). Owner only |
 | Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
 | Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
@@ -27,7 +30,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
-Not built yet: real orders without the owner's approval, fundamentals (no verified source), corporate actions.
+Not built yet: fundamentals (no verified source), corporate actions.
 
 ## How it is hosted
 
@@ -141,6 +144,119 @@ pins it field by field. **It has not been exercised against the real broker from
 test environment): make the first real order a single cheap share and compare it with the EFG
 Hermes ONE app.
 
+## Automatic real orders (the owner's standing approval, inside a box)
+
+`backend/app/real_auto.py`. The owner may approve in advance: a proposal **the assistant** writes is
+then sent without waiting for them, provided it fits a box they drew in Settings → Real trading →
+Automatic orders. It goes out through the same path as a hand-approved order
+(`real_orders.send_waiting` → the same checks, day lock and single request), with the box asked
+once more at the last moment in the owner's place. Whatever does not fit simply waits for the owner.
+
+- **The box.** Named stocks (required, at most 20); the most for one automatic order; the most
+  automatic buys in a day; a budget; a stop-loss on every buy, no further under its price than the
+  owner allows; and a loss for the day at which it stops buying. The owner's own limits for real
+  orders apply on top of it.
+- **The budget is real.** It is the most the automation may have in the market at once, at cost,
+  counting its open buy orders. What it has lost so far comes off it, so it is also the most it can
+  lose; a profit does not widen it.
+- **Locked until earned.** The switch cannot be turned on before three orders the owner approved
+  themselves were accepted by the broker and at least one of them filled. Orders the automation
+  sent do not count.
+- **Only while the app is open.** Nothing runs on the server by itself. The owner's open app asks
+  for a look (`POST /api/v1/real-orders/auto/tick`) twice a minute during the session. Close the
+  app, lock the phone or lose the connection, and nothing is sent and **no stop-loss is watched**.
+- **Its own book.** What the automation holds is kept apart (`settings/real_auto_book`), built from
+  the fills of the orders it sent. It sells only those shares; where the broker shows fewer than the
+  book, the book gives way. An order the owner approved by hand never enters it.
+- **Two prices must agree.** The app's market data is shared by every account of the app and can
+  be written by any of them. So a stop is judged by two readings: the shared feed, and the broker's
+  own price for that stock, which the server asks for itself. When they differ by more than 1.5%
+  nothing is sold and the owner is told: a wrong figure in the feed can neither sell a position nor
+  hide that its stop was reached. A reading stamped in the future is not a reading.
+- **Stop-loss and take-profit** are watched by the app, not left at the broker (the API takes day
+  limit orders only). When a fresh live price reaches the level, a sale is sent a few levels into
+  the bids, inside the owner's price band; one that does not fill is cancelled and priced again; a
+  sale in doubt is never followed by another; other orders of the automation's in that stock are
+  taken back first (a sale resting above the market, a buy still open); a stop-loss and a
+  take-profit keep separate counts, only a sale that reached the broker counts, and after six in a
+  day the app stops and says so. Ways out do not use up the owner's daily limits.
+  The owner can move a position's levels. A later buy can raise a position's stop, never lower it.
+  A stock sold that way is not bought again by the automation the same day. **Shares that have not
+  settled cannot be sold** (on EGX usually T+2), so the stop on a fresh purchase may have to wait.
+- **Decided once, when it is written.** `real_auto.admit` judges a proposal at the moment the
+  assistant writes it and writes the answer on it. Only one that was inside the box then is ever
+  sent by itself; one that was told "this waits for the owner" keeps waiting, whatever changes
+  later (a new day, a freed budget, a wider box). What was written before the switch was turned
+  waits too, and the assistant can mark a proposal to wait (`hold_for_owner`).
+- **A stop pressed mid-look wins.** Before each order the look reads the switches afresh, and the
+  order is tied to them: they are written back unchanged with the approval, so the database refuses
+  the order if one of them changed while it was being checked.
+- **Whose shares a sale is.** A sale the assistant writes that the automation's own shares could
+  cover is theirs (`of_book`) and comes off the book whoever approves it; a larger one is about the
+  owner's own shares and leaves the book alone. An order the owner prepares never touches it.
+- **The broker's holdings are believed slowly.** The book gives way only when the account shows
+  fewer shares at several looks in a row, with no order of the automation's in that stock still in
+  flight and the order list readable: one odd answer, or a sale that filled a moment ago, must not
+  make the app forget shares it is watching.
+- **One-tap stop** on the Real account page: no further automatic order, the automation's open buys
+  are cancelled, and nothing is watched any more. Its shares stay in the account.
+- **Two windows at once** (a phone and a computer) cannot send the same order twice: the day lock
+  refuses the second approval, and the book carries a revision that refuses a stale write.
+
+The assistant still has no tool that sends, approves or cancels, or that touches the box; it reads
+the box (`real_orders`) and is told for each proposal whether it will go out by itself. Tests:
+`backend/tests/test_real_auto.py`, and with the Firestore emulator
+`test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order`.
+
+Like order sending itself, **none of this has been exercised against the real broker from here.**
+In particular the broker's words for order states, and how soon bought shares show as free to
+sell, are only known from its SDK.
+
+## Running without the app open, and notifications
+
+`backend/app/background.py`, `backend/app/push.py`. Automatic orders run from the owner's open app.
+With background running switched on, the server takes the same looks itself, once a minute during
+the session, so stop-losses and the box keep working with the app closed and the phone locked.
+
+- **The timer.** `vercel.json` → `crons`: `GET /api/v1/background/look` every minute, Sunday to
+  Thursday, over the hours the session can fall in (needs a plan that allows per-minute cron). The
+  call is answered only with the platform's secret (`CRON_SECRET`), and does nothing outside the
+  session.
+- **Whose hands.** The API holds no database credentials, and a timer has no sign-in. The owner
+  lends theirs: Settings → Real trading → *Running without the app open* → *Create a background key*
+  seals their sign-in's renewal token with a key only this server can derive, and shows it once.
+  The owner adds it to the server's environment as `BACKGROUND_KEY` (Sensitive) and redeploys.
+  With it the server signs in as the owner and nobody else; Firestore applies the owner's own rules,
+  as when the app is open. The key is never accepted from a request, only read from the
+  environment; it cannot be opened anywhere else; a new key, or a changed password, retires it.
+- **The owner's switch** is in their own data. Off, a look ends before it does anything.
+- **A look**: read live prices (or the session's final bars after the close), `real_auto.tick`,
+  then the assistant's review when one is due (its own switch and schedule in Settings →
+  Assistant), and what the review proposed is judged in the same look.
+- **It decides nothing.** What may be sent is still the owner's box and limits, checked at every look.
+  After the assistant's review, which can take minutes, everything is read again (the switches
+  included) and the prices are read anew before anything more is sent. A review is begun only with
+  time for it, and only for someone who may use the assistant.
+- **A look is never starved.** Whatever goes wrong reading prices, the automation's look still
+  happens and word of the look is left.
+- **When it stops, it cannot say so.** The app shows when the last background look was, and warns
+  when there has been none for a few minutes during the session.
+- **Notifications (Web Push).** Devices the owner switches on are told when the automation sends
+  an order, sells at a stop, or needs them. Messages are encrypted for the device (RFC 8291) and
+  signed as this application (VAPID, RFC 8292) with a key derived from a secret the server already
+  holds, so there is no key to store and no outside account. A notice names the order and its
+  outcome, never a balance. Subscriptions live in the owner's data, and the server posts only to
+  the browsers' own push services.
+
+Environment: `CRON_SECRET` (the platform's timer secret), `BACKGROUND_KEY` (created in the app),
+optional `BACKGROUND_SECRET` (what keys are derived from, at least 16 characters; the broker
+credentials are used without it). Changing either the broker credentials or `BACKGROUND_SECRET`
+makes the background key unreadable and every notification subscription stale: create a new key
+and switch notifications on again. A new key retires the old one on this server only; to end a
+key everywhere, change the password.
+Tests: `backend/tests/test_background.py` (the encryption is checked against the standard's own
+worked example).
+
 ## Run locally
 
 Without sign-in, on SQLite:
@@ -193,7 +309,9 @@ An assistant built into every screen (the **Assistant** button in the top bar). 
 market and the account's own data and operates the app through tools: it can read everything the screens show
 and do everything they do (paper trades, strategies, backtests, automatic runs, alerts, research, journal,
 settings). It has no tool for sign-in accounts or passwords. For the brokerage account's owner it can
-also read the real account and propose a real order; it cannot approve, send or cancel one.
+also read the real account and propose a real order; it cannot approve, send or cancel one. With
+automatic orders switched on by the owner, a proposal of its that fits their box is sent by the
+owner's open app; the assistant is told which of the two happened to each proposal.
 
 ### What the assistant knows about trading
 

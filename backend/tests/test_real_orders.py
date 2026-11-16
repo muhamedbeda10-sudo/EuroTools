@@ -214,7 +214,7 @@ def test_real_orders_are_for_the_owner_and_off_until_switched_on_twice(tmp_path,
         for method, path, body in everything:
             res = c.request(method, path, json=body)
             assert res.status_code == 403, (path, res.text)
-        assert c.get("/api/v1/status").json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0}
+        assert c.get("/api/v1/status").json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0, "auto": False, "background": False}
         assert fake.reads == [] and fake.sent == []
 
     # no broker connection at all
@@ -249,7 +249,7 @@ def test_real_orders_are_for_the_owner_and_off_until_switched_on_twice(tmp_path,
         assert c.get("/api/v1/real-orders/settings").json()["limits"]["enabled"] is False   # nothing of that was kept
         ready = arm(c, symbols=["comi", " TMGH "])
         assert ready["ready"] is True and ready["why_not"] is None and ready["limits"]["symbols"] == ["COMI", "TMGH"]
-        assert c.get("/api/v1/status").json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 0}
+        assert c.get("/api/v1/status").json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 0, "auto": False, "background": False}
         assert ("update", "real_trading_settings") in audit(c)
         # switching it off again stops everything at once
         arm(c, enabled=False)

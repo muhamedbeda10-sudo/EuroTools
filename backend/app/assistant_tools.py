@@ -7,8 +7,11 @@ for sign-in accounts or passwords, which stay a manual, administrator-only task.
 
 The real brokerage account, for its owner only: the assistant can read it, and it
 can write a proposal for a real order. It has no tool that approves, sends or
-cancels one. Sending takes the owner's own approval on the Real account page
-(`real_orders.approve`), which is not reachable from here, and a test keeps it so.
+cancels one, and none that changes the owner's limits. Sending takes the owner's
+approval: of that order on the Real account page (`real_orders.approve`), or given
+in advance for what fits the automatic box they set (`real_auto.tick`, asked for by
+their open app or by the server's timer working with their key). Neither is
+reachable from here, and a test keeps it so.
 
 `kind` decides how a call is treated under each access level:
   read    - looks only
@@ -31,7 +34,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import broker, orders, paper, real_orders
+from . import broker, orders, paper, real_auto, real_orders
 from .assistant_prefs import check_trade, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
@@ -321,9 +324,15 @@ def _real_account(core: App, a: NoArgs) -> dict:
 
 
 NOT_SENT = ("This is a proposal, not an order. Nothing was sent to the broker. It waits on the Real account page, where only "
-            "the owner can approve it; you cannot approve, send or cancel it.")
-REAL_ORDER = ("id", "created_at", "session", "origin", "symbol", "side", "qty", "price", "value", "reason", "status",
-              "status_note", "broker")
+            "the owner can approve it; you cannot approve, send or cancel it. That is settled for this proposal: it will not "
+            "be sent by itself later, whatever changes.")
+WILL_BE_SENT = ("AUTOMATIC: this proposal fits the box the owner set for automatic orders. Nothing has been sent yet, but it "
+                "WILL be sent to the broker with REAL money, without the owner looking at it first, at the next look during "
+                "the session: within a minute or two, from their open app or, if they switched that on, from the server's own "
+                "looks with the app closed. It is checked once more at that moment. Say exactly this to the user. If you no "
+                "longer stand behind it, withdraw it now.")
+REAL_ORDER = ("id", "created_at", "session", "origin", "symbol", "side", "qty", "price", "value", "stop", "target", "reason",
+              "status", "status_note", "approved_by", "hold", "auto", "broker")
 
 
 def _real_orders(core: App, a: NoArgs) -> dict:
@@ -334,7 +343,12 @@ def _real_orders(core: App, a: NoArgs) -> dict:
             "next_session": v["session"], "limits_set_by_the_owner": v["limits"], "sent_today": v["today"],
             "waiting_for_the_owner": [pick(o, *REAL_ORDER) for o in v["waiting"]],
             "earlier": [pick(o, *REAL_ORDER) for o in v["orders"][:20]], "note": v["sync_problem"],
-            "rules": "Limit orders for one day only. You can propose; only the owner can approve, on the Real account page. "
+            "automatic_orders": real_auto.brief(core),
+            "rules": "Limit orders for one day only. You can propose; you cannot approve, send or cancel. A proposal is sent "
+                     "either when the owner approves it on the Real account page, or by itself when automatic_orders.on is "
+                     "true and it fits automatic_orders.box (an allowed stock, within the limit per order and what is free "
+                     "of the budget, a buy carrying a stop-loss no further under its price than max_stop_pct; a sale only "
+                     "of shares listed in automatic_orders.positions). approved_by says which: owner or auto. "
                      "broker.status is the broker's own word for a sent order; broker.state is how the app reads it."}
 
 
@@ -345,12 +359,25 @@ class ProposeRealOrder(Args):
     limit_price: Decimal = Field(gt=0, le=Decimal("10000000"), description="The limit price in EGP, at most three decimals")
     reason: str = Field(min_length=15, max_length=600, description="Why, in a sentence or two the owner will read before deciding: "
                         "what you saw, and what would make it wrong")
+    stop_price: Decimal | None = Field(default=None, gt=0, le=Decimal("10000000"), description="For a buy: the stop-loss "
+                                       "price, under the limit price. Required for a buy to be sent automatically; the app "
+                                       "watches the position by it while the owner's app is open")
+    target_price: Decimal | None = Field(default=None, gt=0, le=Decimal("10000000"), description="For a buy, optional: the "
+                                         "take-profit price, above the limit price")
+    hold_for_owner: bool = Field(default=False, description="True when the user asked to see or approve it themselves: it "
+                                 "then waits for them even if the automatic box would allow it")
 
 
 def _propose_real_order(core: App, a: ProposeRealOrder) -> dict:
     made = real_orders.propose(core, real_orders.OrderIn(symbol=a.symbol, side=a.side, qty=a.qty, price=a.limit_price,
-                                                         reason=a.reason), "assistant")
-    return {"proposal": pick(made, *REAL_ORDER), "checked": made["checked"], "what_happens_next": NOT_SENT}
+                                                         reason=a.reason, stop_price=a.stop_price, target_price=a.target_price),
+                               "assistant", hold=a.hold_for_owner)
+    outlook = real_auto.admit(core, made["id"])   # decided once, here: sent by itself, or waiting for the owner for good
+    out = {"proposal": pick(made, *REAL_ORDER), "checked": made["checked"],
+           "what_happens_next": WILL_BE_SENT if outlook["will_be_sent_automatically"] else NOT_SENT}
+    if not outlook["will_be_sent_automatically"]:
+        out["why_it_is_not_sent_automatically"] = outlook["why_not"]
+    return out
 
 
 class WithdrawRealOrder(Args):
@@ -969,14 +996,19 @@ TOOLS: list[Tool] = [
          label=lambda a: "Reading the real brokerage account"),
     Tool("real_orders", "Real orders for the REAL brokerage account: whether proposals can be written now, the limits the "
          "owner set and how much of them was used today, the proposals waiting for the owner's decision, and what became "
-         "of earlier ones at the broker. Only for the account's owner.", NoArgs, _real_orders,
+         "of earlier ones at the broker. Also the owner's automatic box: whether your proposals are sent without them, "
+         "the stocks, sizes and budget it allows, and the shares the automation holds with their stop-losses. Read it "
+         "before every proposal. Only for the account's owner.", NoArgs, _real_orders,
          label=lambda a: "Reading the real orders"),
-    Tool("propose_real_order", "Write a proposal for a REAL order (real money) for the owner to decide on: one stock, buy or "
-         "sell, whole shares, a limit price, and your reasoning. It is checked against the owner's limits and the "
-         "broker's figures, then it waits on the Real account page. It is NOT sent: only the owner can approve it there. "
-         "Use it only when the user asked for a real order to be prepared, or their autopilot mandate says to.",
+    Tool("propose_real_order", "Write a proposal for a REAL order (real money): one stock, buy or sell, whole shares, a "
+         "limit price, your reasoning, and for a buy a stop-loss (and optionally a take-profit). It is checked against "
+         "the owner's limits and the broker's figures, then it waits on the Real account page. Normally it is NOT sent: "
+         "only the owner can approve it there. But when the owner has switched automatic orders on (see real_orders) and "
+         "the proposal fits their box, it IS sent to the broker without them, within about a minute; the result tells "
+         "you which of the two it is. Set hold_for_owner when the user wants to decide themselves. Use it only when the "
+         "user asked for a real order to be prepared, or their autopilot mandate says to.",
          ProposeRealOrder, _propose_real_order, kind="write",
-         label=lambda a: f"Preparing a real {a.side.lower()} order for {a.qty:,} {a.symbol.upper()} at {a.limit_price} (for approval)"),
+         label=lambda a: f"Preparing a real {a.side.lower()} order for {a.qty:,} {a.symbol.upper()} at {a.limit_price}"),
     Tool("withdraw_real_order_proposal", "Take back a waiting proposal for a real order that you wrote and no longer stand behind.",
          WithdrawRealOrder, _withdraw_real_order, kind="write", label=lambda a: "Withdrawing a real order proposal"),
     Tool("preview_trade", "What a paper order would cost before placing it: fill price, every fee line, total cash, and "

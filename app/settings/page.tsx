@@ -6,6 +6,8 @@ import { api, request } from "@/lib/api";
 import { egp } from "@/lib/format";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import AssistantSettings from "@/components/AssistantSettings";
+import RealAutoSettings from "@/components/RealAutoSettings";
+import RealBackground from "@/components/RealBackground";
 import RealTradingSettings from "@/components/RealTradingSettings";
 import { useFeedUpdate } from "@/components/Shell";
 import { CardHead, Empty, State } from "@/components/ui";
@@ -296,6 +298,8 @@ export default function Settings() {
         {tab === "portfolio" && <Capital />}
         {tab === "data" && <DataImport />}
         {tab === "real" && <RealTradingSettings />}
+        {tab === "real" && <RealAutoSettings />}
+        {tab === "real" && <RealBackground />}
         {tab === "assistant" && <AssistantSettings />}
         {tab === "accounts" && <AccountsCard />}
         {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
@@ -336,6 +340,7 @@ export default function Settings() {
             <dt>Real orders</dt>
             <dd>
               {!real?.allowed ? "Not for this sign-in"
+                : status.data?.real_orders?.auto ? <>On, automatic inside your box{status.data.real_orders.background ? ", also with the app closed" : ", while the app is open"} · <Link href="/settings?tab=real">limits and box</Link></>
                 : status.data?.real_orders?.ready ? <>On, each one on your approval · <Link href="/settings?tab=real">limits</Link></>
                 : <>Off · <Link href="/settings?tab=real">set up</Link></>}
             </dd>

@@ -13,8 +13,10 @@ import {
   Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, Landmark, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
   Receipt, Settings, SlidersHorizontal, Sparkles, Star, Sun, TriangleAlert, X, type LucideIcon,
 } from "lucide-react";
+import { SHOW_TOAST } from "@/lib/realAuto";
 import InstallApp from "./InstallApp";
 import MarketStrip from "./MarketStrip";
+import RealAutoRunner from "./RealAutoRunner";
 import SymbolSearch from "./SymbolSearch";
 
 /** The owner's real brokerage account (read-only). Listed only for the sign-in the server names as its owner. */
@@ -310,11 +312,14 @@ function Background() {
     };
     work(true);
     const onData = () => work();
+    const onToast = (e: Event) => { if (!stopped) setToasts((t) => [(e as CustomEvent).detail as Toast, ...t.filter((x) => x.seq !== (e as CustomEvent).detail.seq)].slice(0, 5)); };
+    window.addEventListener(SHOW_TOAST, onToast);
     window.addEventListener(DATA_UPDATED, onData);
     const timer = setInterval(() => work(), CHECK_MS);
     return () => {
       stopped = true;
       window.removeEventListener(DATA_UPDATED, onData);
+      window.removeEventListener(SHOW_TOAST, onToast);
       window.removeEventListener(ASSISTANT_SETTINGS, onSettings);
       clearInterval(timer);
     };
@@ -459,7 +464,13 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
               </span>
             )}
             <span className="pill paper hide-sm" title="Orders placed from these screens are simulated. Real orders are separate, on the Real account page.">Paper trading</span>
-            {status?.real_orders?.ready && (
+            {status?.real_orders?.auto ? (
+              <Link className="pill auto" href={REAL_ACCOUNT}
+                title={`Automatic orders are on: during the session, ${status.real_orders.background ? "with the app open or closed" : "while this app is open"}, what fits your box is sent to the broker without asking you. Open the Real account page to stop it.`}>
+                <span className="dot" /><span className="hide-sm">Automatic real orders on{status.real_orders.waiting > 0 ? ` · ${status.real_orders.waiting} waiting` : ""}</span>
+                <span className="only-sm">Auto on</span>
+              </Link>
+            ) : status?.real_orders?.ready && (
               <Link className="pill warn hide-sm" href={REAL_ACCOUNT} title="Real orders are switched on for this sign-in. Each one is sent only after you approve it.">
                 Real orders on{status.real_orders.waiting > 0 ? ` · ${status.real_orders.waiting} waiting` : ""}
               </Link>
@@ -482,6 +493,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           )}
           {status?.provider?.configured && <FeedUpdater provider={status.provider} />}
           <Background />
+          {status?.real_orders?.auto && <RealAutoRunner marketOpen={!!status?.provider?.market_open} />}
           {d && !d.has_sample_data && d.is_stale && (
             <Banner title="Stale data.">
               Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.
@@ -489,7 +501,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           )}
           <main className="content">{children}</main>
           <footer className="foot">
-            <span>Figures are for study, not investment advice. Trading is on paper unless the account&apos;s owner approves a real order.</span>
+            <span>Figures are for study, not investment advice. Trading is on paper; a real order needs the account owner&apos;s approval, of that order or given in advance.</span>
             <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
           </footer>
         </div>

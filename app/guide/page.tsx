@@ -111,7 +111,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <ul>
         <li><strong>It works on your real data.</strong> It looks things up in the app rather than answering from memory, and everything it does is recorded in <Link href="/trades">Trades</Link> and the activity log like any other action.</li>
         <li><strong>You choose how far it may go</strong>, at the bottom of the panel: <em>Full access</em> acts straight away; <em>Ask me first</em> shows each trade, run change, deletion or settings change and waits for you; <em>Look only</em> changes nothing.</li>
-        <li><strong>It cannot place a real order</strong> (nothing in the app can) and it does not manage sign-in accounts.</li>
+        <li><strong>It cannot send a real order</strong> and it does not manage sign-in accounts. For the brokerage account&apos;s owner it can propose one; see <em>The real account</em> below for when a proposal goes out by itself.</li>
         <li><strong>It is not an adviser.</strong> Its views come from price history and your own notes: there are no company financials in the app, and the simulation has the limits listed below. It can be wrong.</li>
         <li><strong>It has a cost.</strong> It runs on Claude through an API key billed per use; the panel shows an estimate for the conversation and the day.</li>
         <li><strong>You set it up in <Link href="/settings?tab=assistant">Settings → Assistant</Link>:</strong> which model it uses and how hard it thinks (both change the cost), a daily spending ceiling, and limits on its own trades (largest trade, largest holding, cash always kept, trades per day). The app enforces those limits itself, whatever the assistant decides.</li>
@@ -153,6 +153,18 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
         <li><strong>Start small.</strong> Make the first real order a single cheap share, and compare what the page shows with the broker&apos;s own app.</li>
       </ul>
       <p>The assistant can read the real account for its owner and propose an order with its reasoning, but it cannot approve, send or cancel one. A proposal is analysis: the decision is yours.</p>
+      <p><strong>Automatic orders</strong> are a further step that you switch on yourself in <Link href="/settings?tab=real">Settings → Real trading</Link>. With them on, an order the assistant proposes is sent <em>without asking you</em>, as long as it fits the box you set there.</p>
+      <ul>
+        <li><strong>Locked at first.</strong> The switch opens only after three real orders you approved yourself were accepted by the broker and at least one of them filled.</li>
+        <li><strong>The box.</strong> The stocks it may trade (you name them), the most for one order, the most buys in a day, a budget, and a stop-loss on every buy. Anything outside it waits for your approval as before, and the page says why.</li>
+        <li><strong>The budget is the most it can lose.</strong> It is what the automation may have in the market at once; what it has lost so far comes off it.</li>
+        <li><strong>Only while the app is open, unless you set up the background.</strong> By default it runs from your open app during the session: close the app or lock the phone and nothing is sent, and <em>no stop-loss is watched</em>, until it is open again. The Real account page shows when it last looked.</li>
+        <li><strong>Running without the app open.</strong> In the same Settings tab you can let the server take the looks itself, once a minute during the session. You create a <em>background key</em> there (your own sign-in, sealed for this server), place it in the server&apos;s settings, and switch it on. If the server ever stops looking, the app says so.</li>
+        <li><strong>Notifications.</strong> Turn them on for a phone or a computer in that card, and it is told when an automatic order is sent, when a stop-loss sells, or when you are needed. On an iPhone, install the app to the Home Screen first.</li>
+        <li><strong>Stop-losses are the app&apos;s, not the broker&apos;s.</strong> When the price reaches a stop, the app sends a sale priced to fill. It sells only shares it bought itself. Shares the broker does not yet show as free to sell have to wait: on EGX that is usually two sessions after the purchase, so a stop on a fresh purchase may not be able to act straight away.</li>
+        <li><strong>One tap stops it.</strong> <em>Stop automatic orders</em> on the Real account page: nothing more is sent, its open buys are cancelled, and its shares stay in your account for you to manage.</li>
+        <li><strong>Start smaller than you think.</strong> A budget you could lose entirely without minding, one or two liquid stocks, and watch the first days closely.</li>
+      </ul>
     </>
   ) },
 ];

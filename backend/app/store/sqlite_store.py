@@ -110,6 +110,9 @@ class Store:
             )
             return doc
 
+    def fresh(self) -> None:
+        """Nothing is kept between reads here: every read is already the database as it is now."""
+
     def warm(self, gets=(), lists=()) -> None:
         """Nothing to do locally; the Firestore store uses this to read in parallel."""
 

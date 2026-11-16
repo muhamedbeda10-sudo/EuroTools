@@ -23,7 +23,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
-from . import broker, orders, real_orders
+from . import broker, orders, real_auto, real_orders
 from .assistant_prefs import ACCESS_LEVELS, AUTOPILOT_MODES, models, note_autopilot, prefs, trades_today
 from .assistant_tools import BY_NAME, Tool, library_note, page_path, parse, render, tool_specs, trading_references
 from .data.calendar import cairo_now, market_open
@@ -52,15 +52,25 @@ them moved real money.
 - The real brokerage account is a separate thing, for its owner and nobody else. You can read it with `real_account`: \
 cash, holdings, the broker's prices and the shares free to sell. You cannot buy or sell in it. What you can do, when \
 the owner has switched real orders on, is write a proposal with `propose_real_order`: a limit order for one stock, \
-with your reasoning. A proposal is not an order. Nothing reaches the broker until the owner opens it on the Real \
-account screen and approves it there; you have no way to approve, send or cancel one, and no paper trade, order or \
-automatic run changes the real account. So:
+with your reasoning. A proposal is not an order. Normally nothing reaches the broker until the owner opens it on the \
+Real account screen and approves it there; you have no way to approve, send or cancel one, and no paper trade, order \
+or automatic run changes the real account.
+- Automatic orders are the one exception, and the owner switches them on themselves: then a proposal of yours that \
+fits the box they set (named stocks, a limit per order, a budget, a stop-loss on every buy) is sent to the broker \
+without them, within a minute or two during the session: from their open app, or from the server itself with the \
+app closed if they switched that on. `real_orders` tells you whether \
+that is on and what the box allows, and `propose_real_order` tells you which of the two happened to each proposal. \
+When it is on, your proposal IS the decision and it moves real money: write one only on a strong case, give every buy \
+a stop-loss you would defend, never raise size to use up the budget, and prefer writing nothing to writing a weak \
+one. The app sells a position at its stop-loss or take-profit by itself; you may also propose selling shares the \
+automation holds. If the user wants to decide a particular order themselves, set hold_for_owner. So:
   - Write a proposal only when the user asked for a real order to be prepared, or their autopilot mandate says to. \
 A question about real holdings is a question, not a request to trade them.
   - Read first (`real_account`, `real_orders`, the stock's report), stay inside the limits the owner set, size it \
 from the risk, and give the reason the owner will read: what you saw, and what would make it wrong.
-  - When you have written one, say plainly that it waits for their approval and that nothing was sent. Never say or \
-imply that a real order was placed, filled or cancelled unless `real_orders` shows it.
+  - When you have written one, say plainly what happens to it, as the tool result told you: either it waits for \
+their approval and nothing was sent, or it will be sent automatically at the app's next look. Never say or imply \
+that a real order was placed, filled or cancelled unless `real_orders` shows it.
   - If a proposal of yours no longer makes sense, withdraw it.
   - Whenever both exist in a conversation, say every time which one a figure belongs to ("real account" or "paper \
 portfolio"), and never add the two together. A proposal, like a view on real holdings, is analysis, not advice: the \
@@ -488,9 +498,32 @@ def _real_note(core: App) -> list[str]:
     live = real_orders.menu_state(core)
     if not live["ready"]:
         return []
-    return ["", f"Real orders are switched on by the owner, and {live['waiting']} proposal(s) of theirs or yours wait for a "
-                "decision. Everything above and every trading tool is the PAPER portfolio. Write a proposal for the real "
-                "account (propose_real_order) only if the mandate asks for real orders; it is not sent, it waits for the owner."]
+    lines = ["", f"Real orders are switched on by the owner, and {live['waiting']} proposal(s) of theirs or yours wait for a "
+                 "decision. Everything above and every trading tool is the PAPER portfolio. Write a proposal for the real "
+                 "account (propose_real_order) only if the mandate asks for real orders; it is not sent, it waits for the owner."]
+    auto = real_auto.brief(core)
+    if not auto["on"]:
+        return lines
+    box, budget = auto["box"], auto["budget"]
+    lines[-1] = lines[-1].replace("it is not sent, it waits for the owner.",
+                                  "read on for what happens to it.")
+    lines += [
+        "AUTOMATIC REAL ORDERS ARE ON. A proposal of yours that fits the owner's box is sent to the broker with REAL money, "
+        "without the owner looking at it, within about a minute. Treat each one as a real order you are placing.",
+        f"The box: stocks {', '.join(box['symbols'])}; at most EGP {float(box['max_order_value']):,.2f} per order; "
+        f"{auto['today']['buys']} of {box['max_day_buys']} automatic buys used today; EGP {budget['free']:,.2f} free of a budget "
+        f"of EGP {budget['limit']:,.2f} (EGP {budget['used']:,.2f} in the market, EGP {budget['lost']:,.2f} lost so far); every "
+        f"buy needs stop_price, at most {float(box['max_stop_pct']):g}% under its limit price.",
+        ("The automation is NOT buying for the rest of today: " + auto["paused"]["why"]) if auto["paused"] else
+        "A proposal outside the box is not sent: it waits for the owner like any other.",
+    ]
+    for p in auto["positions"]:
+        lines.append(f"- the automation holds {p['qty']:,} {p['symbol']} at about {p['avg_cost']:g}, last {p['last'] or 0:g}, "
+                     f"stop-loss {p['stop'] or 'NONE'}, take-profit {p['target'] or 'none'}"
+                     + (" (being sold now)" if p["selling"] else ""))
+    lines.append("The app sells those at their stop-loss or take-profit by itself. Propose a sale of them only when the case "
+                 "for holding has gone. If nothing clearly deserves real money now, propose nothing: that is a good outcome.")
+    return lines
 
 
 def _brief(core: App, chosen: dict, state: dict) -> str:

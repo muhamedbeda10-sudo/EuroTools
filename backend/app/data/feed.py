@@ -217,7 +217,7 @@ class Feed:
         current = self.docs.get("live")
         if current and current.get("date") == today:
             age = (now - datetime.fromisoformat(current["ts"])).total_seconds()
-            if age < min_age_seconds:
+            if -5 <= age < min_age_seconds:   # a reading stamped in the future is not a recent one: the feed is asked again
                 return {"updated": False, "ts": current["ts"], "available": bool(current["quotes"])}
         index = self.docs.get("index") or empty_index()
         current_list = listed(index["instruments"])
@@ -233,7 +233,9 @@ class Feed:
         indices = got["indices"] or same_day.get("indices") or []
         doc = {"date": today, "ts": now.isoformat(timespec="seconds"), "quotes": quotes, "sectors": sectors,
                "indices": indices, "errors": got["errors"], "answered": got["answered"], "asked": len(tracked),
-               "fresh": len(got["quotes"])}
+               "fresh": len(got["quotes"]),
+               # stocks shown at an earlier figure because they did not answer this time: on screen, but not to be acted on
+               "stale": sorted(set(quotes) - set(got["quotes"]))}
         self.docs.put("live", doc)
         meta = self.docs.get("meta") or _meta(self.docs.get("index") or empty_index())
         meta["live_ts"] = doc["ts"]

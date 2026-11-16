@@ -145,6 +145,7 @@ class MarketData:
                           frames=frames, sources=sources, settled={}, watermark=watermark, live_symbols=live_symbols,
                           snapshot_symbols=snapshot_symbols,
                           live_as_of=live_doc.get("ts") if snapshot_symbols else None,
+                          live_stale=set(live_doc.get("stale") or []),
                           shared_only=self.feed is not None and not imported and not custom,
                           indices=[{**i, "as_of": live_doc.get("ts"), "live": live_doc.get("date") == self.today.isoformat()}
                                    for i in live_doc.get("indices") or []])

@@ -1,7 +1,8 @@
 """EGX Intelligence API. Trading here is on paper, with one exception that is fenced off:
 
-the owner of the brokerage account can look at it (app/broker.py) and can send a real order
-they approved themselves (app/real_orders.py). Nothing else in this service reaches a broker."""
+the owner of the brokerage account can look at it (app/broker.py), can send a real order they
+approved themselves (app/real_orders.py), and can approve in advance what fits a box they set
+(app/real_auto.py), which then goes out the same way. Nothing else in this service reaches a broker."""
 from __future__ import annotations
 
 import csv
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, broker, orders, paper, real_orders
+from . import assistant, background, broker, orders, paper, push, real_auto, real_orders
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -129,24 +130,20 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     local_store = None if firestore else (store or Store(settings.data_dir / "egx.sqlite3"))
     caches: OrderedDict[str, dict] = OrderedDict()
 
-    def get_core(request: Request) -> App:
-        """Build the per-request application object for the signed-in user."""
+    def core_for(uid: str | None, token: str | None) -> App:
+        """The application object for one person: the signed-in caller of a request, or the owner the timer works for."""
         if not firestore:
             feed = Feed(StoreDocs(local_store)) if younit else None
             core = App(local_store, settings, caches.setdefault("local", {}), feed, younit).bootstrap()
             core.real_account_allowed = broker.may_view(settings, None, signed_in=False)
             return core
-        header = request.headers.get("authorization", "")
-        if not header.lower().startswith("bearer "):
-            raise AuthError("sign in to use the app")
-        token = header[7:].strip()
-        uid = uid_from_token(token)
         # bootstrap() reads the user's settings first; Firestore rejects that read
         # unless the token is genuine, so the cache below is never reached by a forgery.
         core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {},
                    Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
         core.bootstrap()
         # Only now is the uid proven: the read above was refused unless the token is genuine.
+        core.uid, core.signed_in, core.id_token = uid, True, token
         core.real_account_allowed = broker.may_view(settings, uid, signed_in=True)
         core.cache = caches.setdefault(uid, {})
         core.market.cache = core.cache.setdefault("market", {})
@@ -154,6 +151,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         while len(caches) > MAX_CACHED_USERS:
             caches.popitem(last=False)
         return core
+
+    def get_core(request: Request) -> App:
+        """Build the per-request application object for the signed-in user."""
+        if not firestore:
+            return core_for(None, None)
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            raise AuthError("sign in to use the app")
+        token = header[7:].strip()
+        return core_for(uid_from_token(token), token)
 
     api = FastAPI(title="EGX Intelligence API", version="0.2.0",
                   docs_url=None if firestore else "/docs", redoc_url=None, openapi_url=None if firestore else "/openapi.json")
@@ -193,6 +200,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @api.exception_handler(real_orders.OrderError)
+    @api.exception_handler(background.BackgroundError)
+    @api.exception_handler(push.PushError)
     @api.exception_handler(AccountError)
     @api.exception_handler(LedgerError)
     @api.exception_handler(DataError)
@@ -236,11 +245,18 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         core.store.warm(gets=[("settings", "fees")], lists=["instruments", "bars"])
         real = broker.access(core)
         live = real_orders.menu_state(core)
+        # Whether this open app should ask for the automation's looks. Sending without the owner is decided
+        # at each look, on the server, from everything as it stands then.
+        live["auto"] = bool(live["ready"] and real_auto.menu(core))
+        live["background"] = bool(live["ready"] and background.menu(core))   # the server also takes looks by itself
         return {
             "trading_mode": "paper",
             "live_trading_enabled": bool(settings.live_trading_enabled),
             "broker_connected": False,
             "broker_note": ("Younit is connected for market data and for the real brokerage account. Real orders are on for this "
+                            "sign-in, and automatic orders too: while the app is open, what fits the box you set goes to the "
+                            "broker without waiting for you. Everything else is paper trading." if live["auto"] else
+                            "Younit is connected for market data and for the real brokerage account. Real orders are on for this "
                             "sign-in: each one goes to the broker only after you approve it. Everything else is paper trading."
                             if live["ready"] else
                             "Younit is connected for market data, and this sign-in can look at the real brokerage account. "
@@ -505,6 +521,83 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def put_real_trading_settings(body: real_orders.LimitsIn, core: App = Depends(get_core)):
         """The owner's own switch and limits for real orders."""
         return real_orders.save_limits(core, body)
+
+    # ---- automatic real orders: the owner's standing approval, inside a box ---
+    @api.get("/api/v1/real-orders/auto")
+    def get_real_auto(core: App = Depends(get_core)):
+        """The automatic box, whether it is on, what the automation holds, and what it would do with what waits."""
+        return real_auto.view(core)
+
+    @api.put("/api/v1/real-orders/auto")
+    def put_real_auto(body: real_auto.AutoIn, core: App = Depends(get_core)):
+        """The owner's box for automatic orders. Switching it on is refused until hand-approved orders have worked."""
+        return real_auto.save(core, body)
+
+    @api.post("/api/v1/real-orders/auto/stop")
+    def stop_real_auto(core: App = Depends(get_core)):
+        """The one-tap stop: no further automatic order, and the automation's open buys are cancelled."""
+        return real_auto.stop(core)
+
+    @api.post("/api/v1/real-orders/auto/tick")
+    def tick_real_auto(core: App = Depends(get_core)):
+        """One look by the automation, asked for by the owner's open app during the session.
+
+        The only place an order is sent without the owner approving that order. It goes through
+        real_orders.send_waiting, which is the owner's approval path with the automatic box in the owner's place.
+        """
+        result = real_auto.tick(core)
+        push.report(core, result)   # the owner's other devices hear of it too
+        return result
+
+    @api.put("/api/v1/real-orders/auto/positions/{symbol}")
+    def put_real_auto_levels(symbol: str, body: real_auto.LevelsIn, core: App = Depends(get_core)):
+        """Move the stop-loss or the take-profit of a position the automation holds."""
+        return real_auto.set_levels(core, symbol, body)
+
+    # ---- the same looks without a browser, and word of them to the owner's devices ---
+    @api.get("/api/v1/background/look")
+    def background_look(request: Request):
+        """The hosting platform's timer calls this every minute during the session (vercel.json).
+
+        Not for people: it is answered only when the call carries the platform's own secret. The server then
+        signs in as the owner with the key they placed in its environment, and takes the looks their open app
+        would have taken.
+        """
+        background.check_timer(settings, request.headers.get("authorization"))
+
+        def may_review(core: App) -> bool:
+            """The same rule the open app's route applies: on a key shared by several accounts, administrators only."""
+            if not firestore or settings.assistant_users == "all":
+                return True
+            return Accounts(settings.firebase_project_id, settings.firebase_web_api_key, core.id_token, core.uid).can_manage()
+        return background.wake(settings, core_for, assistant_model, firestore=firestore, may_review=may_review)
+
+    @api.get("/api/v1/background")
+    def get_background(core: App = Depends(get_core)):
+        """Whether the server takes looks by itself for this owner, and when it last did."""
+        return {**background.view(core), "push": push.status(core)}
+
+    @api.post("/api/v1/background/key")
+    def make_background_key(body: background.KeyIn, core: App = Depends(get_core)):
+        """Seal the owner's sign-in into a key for the server's environment. Shown once, to its owner."""
+        return background.make_key(core, body)
+
+    @api.put("/api/v1/background")
+    def put_background(body: background.SwitchIn, core: App = Depends(get_core)):
+        return {**background.set_enabled(core, body), "push": push.status(core)}
+
+    @api.post("/api/v1/push/subscribe")
+    def push_subscribe(body: push.SubscriptionIn, core: App = Depends(get_core)):
+        """This device will be told what the automation did with real money."""
+        return push.subscribe(core, body)
+
+    @api.post("/api/v1/push/unsubscribe")
+    def push_unsubscribe(body: push.EndpointIn, core: App = Depends(get_core)):
+        return push.unsubscribe(core, body)
+
+    @api.post("/api/v1/push/test")
+    def push_test(core: App = Depends(get_core)):
+        return push.test(core)
 
     @api.post("/api/v1/real-orders/check")
     def check_real_order(body: real_orders.OrderIn, core: App = Depends(get_core)):

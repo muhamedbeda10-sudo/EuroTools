@@ -100,6 +100,10 @@ class App:
         # Whether this request may look at the real brokerage account. The API sets it for each
         # sign-in (broker.may_view); anything that builds an App itself gets the safe answer.
         self.real_account_allowed = False
+        # Who this unit of work is for, when the server has sign-in: set by the API for each request.
+        self.uid: str | None = None
+        self.signed_in = False
+        self.id_token: str | None = None   # that person's sign-in for this unit of work; never stored, never sent on
         self._app_settings: dict | None = None
         self.market: MarketData = None  # set by bootstrap()
 
