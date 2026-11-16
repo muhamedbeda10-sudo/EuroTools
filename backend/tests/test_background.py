@@ -531,8 +531,25 @@ def test_the_server_checks_the_alerts_too_and_what_it_saw_wakes_the_review_in_th
     out = c.post("/api/v1/alerts/check").json()
     assert out["pushed"] == 1 and out["wake"] is False
     assert read(c.posted[-1][1]["content"], key, auth)["title"] == "Alert"
+    # a watch the assistant set for itself is told without its note: those are the model's words
+    made = c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "NEWCO", "value": 56.5, "note": note, "wake": True}).json()
+    store = core_of(c).store
+    store.put("alerts", made["id"], {**store.get("alerts", made["id"]), "by": "assistant"})
+    price(c, NEWCO=56.6)
+    c.post("/api/v1/alerts/check")
+    assert read(c.posted[-1][1]["content"], key, auth)["body"] == "NEWCO is at 56.6, at or above 56.5"
+    # with no device to tell, the server leaves the alerts that only tell the person to their open app, where they are
+    # seen; the ones that wake the assistant are still checked
+    c.post("/api/v1/push/unsubscribe", json={"endpoint": sub["endpoint"]})
+    plain = c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 36.0}).json()
+    c.post("/api/v1/alerts", json={"kind": "price_below", "symbol": "NEWCO", "value": 60, "note": note, "wake": True})
+    c.clock["now"] += timedelta(seconds=40)
+    out = wake(c).json()
+    assert out["alerts"] == {"fired": 1, "active": 1, "wake": True}
+    assert next(a for a in c.get("/api/v1/alerts").json()["alerts"] if a["id"] == plain["id"])["last_triggered_on"] is None
+    assert [e["symbol"] for e in c.post("/api/v1/alerts/check").json()["triggered"]] == ["COMI"]   # and there it fires
     # a failure to check the alerts is noted, and the look goes on
-    monkeypatch.setattr(background.Extras, "check_alerts", lambda self: (_ for _ in ()).throw(RuntimeError("no prices")))
+    monkeypatch.setattr(background.Extras, "check_alerts", lambda self, only_wake=False: (_ for _ in ()).throw(RuntimeError("no prices")))
     c.clock["now"] += timedelta(seconds=40)
     out = wake(c).json()
     assert out["ran"] and out["alerts"] == {"problem": "RuntimeError"} and out["auto"]["ran"]

@@ -142,7 +142,7 @@ export default function Alerts() {
                           <td className="l wrap muted">{a.note || "—"}</td>
                           <td className="l">{a.last_triggered_on ? (a.kind === "time_at" ? cairo(a.last_triggered_on) : a.last_triggered_on) : <span className="muted">Never</span>}</td>
                           <td className="l">{a.active ? <span className="badge ok"><span className="dot" />On</span>
-                            : <span className="badge" title={a.lapsed ? "It did not fire in two weeks, so it was switched off" : undefined}>{a.lapsed ? "Lapsed" : "Off"}</span>}</td>
+                            : <span className="badge" title={a.missed ? "The app was not looking at that time, so nobody was woken for it" : a.lapsed ? "It did not fire in two weeks, so it was switched off" : undefined}>{a.missed ? "Missed" : a.lapsed ? "Lapsed" : "Off"}</span>}</td>
                           <td className="actions"><button className="small" onClick={() => toggle(a)}>{a.active ? "Turn off" : "Turn on"}</button>
                             <button className="small danger" onClick={() => remove(a)}>Delete</button></td>
                         </tr>

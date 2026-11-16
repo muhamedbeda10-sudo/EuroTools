@@ -300,12 +300,22 @@ def remark(core: App, title: str, message: str, *, every: float = SAME_REMARK_SE
 MAX_ALERTS = 4   # alerts told in one go; a burst is summed up in the last one
 
 
+def listening(core: App) -> bool:
+    """Whether any device of this person would be told at all."""
+    try:
+        return _signing_key(core.settings) is not None and bool(core.store.list(SUBS))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def alerts(core: App, fired: list[dict], post=None) -> dict:
     """Word of the alerts that just fired, to the owner's devices. The alert's own sentence and note: a price or a
     time the person asked about, never a balance."""
     total = {"sent": 0, "failed": 0, "removed": 0}
     for n, event in enumerate(fired[:MAX_ALERTS]):
-        words = str(event.get("message") or "An alert fired") + (f" — {event['note']}" if event.get("note") else "")
+        # The person's own note goes with it. One the assistant wrote for itself does not: those are the model's words.
+        words = str(event.get("message") or "An alert fired") + (
+            f" — {event['note']}" if event.get("note") and event.get("by") != "assistant" else "")
         if n == MAX_ALERTS - 1 and len(fired) > MAX_ALERTS:
             words += f" (and {len(fired) - MAX_ALERTS} more)"
         title = "Alert: the assistant is woken" if event.get("wake") else "Alert"

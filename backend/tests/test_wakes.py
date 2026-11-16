@@ -7,6 +7,7 @@ from app.assistant_tools import parse
 from app.config import Settings
 from app.data import calendar
 from app.data.calendar import CAIRO
+from app.llm import AssistantError
 from app.services import App
 from app.store.sqlite_store import Store
 from tests.test_assistant import Script, app_with
@@ -32,6 +33,12 @@ def long_ago(tmp_path, minutes=30):
 
 def test_a_watch_is_checked_by_the_app_fires_once_and_waits_for_the_assistant(tmp_path):
     with app_with(tmp_path, Script()) as c:
+        # with the autopilot off there is no review to tell: the watch fires, the person is told, nothing is kept
+        c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "EAST", "value": 1, "note": NOTE, "wake": True})
+        out = c.post("/api/v1/alerts/check").json()
+        assert [(e["symbol"], e["wake"]) for e in out["triggered"]] == [("EAST", False)] and out["wake"] is False
+        assert wakes.pending(core_at(tmp_path)) == []
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "after_close"})
         watch = c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 1, "note": NOTE, "wake": True}).json()
         plain = c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "TMGH", "value": 1}).json()
         assert (watch["wake"], watch["by"], plain["wake"], plain["by"]) == (True, "user", False, "user")
@@ -55,6 +62,13 @@ def test_a_watch_is_checked_by_the_app_fires_once_and_waits_for_the_assistant(tm
         assert c.post("/api/v1/alerts/check").json()["triggered"] == []
         lapsed = next(a for a in c.get("/api/v1/alerts").json()["alerts"] if a["id"] == old["id"])
         assert lapsed["active"] is False and lapsed["lapsed"] is True and len(wakes.pending(core_at(tmp_path))) == 1
+        back = c.put(f"/api/v1/alerts/{old['id']}", json={"kind": "price_above", "symbol": "SWDY", "value": 9999, "note": NOTE, "wake": True}).json()
+        assert back["active"] is True and back["lapsed"] is False              # switched on again, it is as new
+        # what happened too long ago is no longer news: it is dropped, never told
+        store.put(*wakes.QUEUE, {"pending": [{**wakes.pending(core_at(tmp_path))[0],
+                                              "ts": (datetime.now(UTC) - timedelta(hours=wakes.EVENT_HOURS + 1)).isoformat()}]})
+        assert wakes.pending(core_at(tmp_path)) == [] and wakes.take(core_at(tmp_path)) == []
+        assert Store(tmp_path / "t.sqlite3").get(*wakes.QUEUE) == {"pending": []}
         # the queue is bounded: the oldest give way
         core = core_at(tmp_path)
         wakes.add(core, [{"ts": "t", "kind": "x", "message": f"m{n}"} for n in range(wakes.MAX_PENDING + 3)])
@@ -66,6 +80,8 @@ def test_a_time_can_be_watched_like_a_price(tmp_path, monkeypatch):
     clock = {"now": datetime(2026, 11, 16, 10, 0, tzinfo=CAIRO)}                # a Monday, during the session
     monkeypatch.setattr(calendar, "cairo_now", lambda: clock["now"])
     with app_with(tmp_path, Script()) as c:
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "events"})
+
         def at(when, **more):
             return c.post("/api/v1/alerts", json={"kind": "time_at", "at": when, "note": NOTE, "wake": True, **more})
         today = at("13:30", symbol="COMI").json()
@@ -75,7 +91,11 @@ def test_a_time_can_be_watched_like_a_price(tmp_path, monkeypatch):
         clock["now"] = datetime(2026, 11, 19, 15, 0, tzinfo=CAIRO)              # Thursday afternoon
         assert at("10:00").json()["at"] == "2026-11-22T10:00+02:00"             # not Friday, not Saturday: Sunday
         clock["now"] = datetime(2026, 11, 16, 10, 0, tzinfo=CAIRO)
-        for bad, why in (("25:99", "not a time of day"), ("2026-11-15 10:00", "already passed"), ("2027-03-01 10:00", "days ahead")):
+        # a zone written with it is honoured, not dropped: that moment, told in Cairo time
+        assert at("2026-11-16T10:30+00:00").json()["at"] == "2026-11-16T12:30+02:00"
+        assert at("2026-11-16T11:00Z").json()["at"] == "2026-11-16T13:00+02:00"
+        for bad, why in (("25:99", "not a time of day"), ("2026-11-15 10:00", "already passed"), ("2027-03-01 10:00", "days ahead"),
+                         ("2026-11-31 10:00", "not a date"), ("10:30+00:00", "in Cairo time")):
             res = at(bad)
             assert res.status_code == 422 and why in res.json()["detail"], bad
         assert at("soon").status_code == 422 and at(None).status_code == 422
@@ -83,9 +103,35 @@ def test_a_time_can_be_watched_like_a_price(tmp_path, monkeypatch):
         assert c.post("/api/v1/alerts/check").json()["triggered"] == []
         clock["now"] = datetime(2026, 11, 16, 13, 31, tzinfo=CAIRO)
         fired = c.post("/api/v1/alerts/check").json()
-        assert [e["message"] for e in fired["triggered"]] == [
-            "It is 13:31 Cairo time: the moment set for 2026-11-16 13:30 has come (about COMI)"] and fired["wake"] is True
+        assert "It is 2026-11-16 13:31 Cairo time: the moment set for 2026-11-16 13:30 has come (about COMI)" in [
+            e["message"] for e in fired["triggered"]] and fired["wake"] is True
         assert next(a for a in c.get("/api/v1/alerts").json()["alerts"] if a["id"] == today["id"])["active"] is False
+        assert c.post("/api/v1/alerts/check").json()["triggered"] == []
+        # a time the app was not looking at was missed: the person is told so, and nobody is woken with a stale idea
+        waiting = len(wakes.pending(core_at(tmp_path)))
+        clock["now"] = datetime(2026, 11, 26, 11, 0, tzinfo=CAIRO)              # ten days on
+        late = c.post("/api/v1/alerts/check").json()
+        assert late["wake"] is False and all(e["wake"] is False for e in late["triggered"])
+        assert "The moment set for 2026-11-17 09:00 Cairo time passed while the app was not looking: it is now 2026-11-26 11:00" in [
+            e["message"] for e in late["triggered"]]
+        assert len(wakes.pending(core_at(tmp_path))) == waiting
+        gone = [a for a in c.get("/api/v1/alerts").json()["alerts"] if a["kind"] == "time_at"]
+        assert all(a["active"] is False for a in gone) and len(late["triggered"]) == 3
+        assert {e["alert_id"] for e in late["triggered"]} <= {a["id"] for a in gone if a["missed"]}
+        assert next(a for a in gone if a["id"] == today["id"])["missed"] is False   # the one seen on time was not
+
+        # a time far ahead keeps its place: a watch on a level lapses after two weeks, a watch on a time waits for its time
+        clock["now"] = datetime(2026, 11, 16, 10, 0, tzinfo=CAIRO)
+        far = at("2026-12-10 10:30").json()
+        store = Store(tmp_path / "t.sqlite3")
+        store.put("alerts", far["id"], {**store.get("alerts", far["id"]),
+                                         "updated_at": (datetime.now(UTC) - timedelta(days=wakes.WATCH_DAYS + 3)).isoformat()})
+        c.post("/api/v1/alerts/check")
+        assert next(a for a in c.get("/api/v1/alerts").json()["alerts"] if a["id"] == far["id"])["active"] is True
+        # one whose minute has come can still be switched off before the app has looked
+        clock["now"] = datetime(2026, 12, 10, 10, 31, tzinfo=CAIRO)
+        off = c.put(f"/api/v1/alerts/{far['id']}", json={"kind": "time_at", "at": far["at"], "note": NOTE, "wake": True, "active": False})
+        assert off.status_code == 200 and off.json()["active"] is False and off.json()["at"] == far["at"]
         assert c.post("/api/v1/alerts/check").json()["triggered"] == []
 
 
@@ -114,6 +160,9 @@ def test_the_assistant_sets_its_own_watches_and_is_told_what_will_happen(tmp_pat
         core.store.put("settings", "assistant", {"autopilot": {"mode": mode}})
         out, failed, _ = run(kind="time_at", at="2026-12-01 13:30", wake_me=True, note=NOTE)
         assert not failed and words in out["what_happens_when_it_fires"], mode
+    # a watch on what is already the case would wake it at once, again and again: it is told so instead
+    told, failed, _ = run(kind="price_above", symbol="COMI", value=1, wake_me=True, note=NOTE)
+    assert failed and "That is already the case (COMI is at" in told["error"] and "would fire at once" in told["error"]
     # switching one off needs no note, and there is a most it may have on at once
     off, failed, _ = run(id=out["id"], kind="time_at", at="2026-12-01 13:30", wake_me=True, active=False)
     assert not failed and off["active"] is False
@@ -231,3 +280,41 @@ def test_the_assistant_is_told_to_hand_work_to_the_app():
     tool = next(t for t in assistant.tool_specs() if t["name"] == "save_alert")
     assert "wake_me" in tool["input_schema"]["properties"] and "time_at" in tool["input_schema"]["properties"]["kind"]["enum"]
     assert "wakes YOU" in tool["description"]
+
+
+def test_a_review_that_fails_gives_back_what_it_was_told(tmp_path, monkeypatch):
+    monkeypatch.setattr(assistant, "market_open", lambda *a, **k: True)
+    script = Script({"say": "the review after the close"}, AssistantError("The service is busy."), {"say": "handled"})
+    with app_with(tmp_path, script) as c:
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "events"})
+        assert c.post("/api/v1/assistant/autopilot").json()["reason"] == "close"
+        c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 1, "note": NOTE, "wake": True})
+        assert c.post("/api/v1/alerts/check").json()["wake"] is True
+        long_ago(tmp_path)
+        failed = c.post("/api/v1/assistant/autopilot").json()
+        assert failed["ran"] and failed["reason"] == "event" and failed["error"] and failed["changes"] == 0
+        assert [e["symbol"] for e in wakes.pending(core_at(tmp_path))] == ["COMI"]   # the watch is off, but the event is not lost
+        long_ago(tmp_path)
+        again = c.post("/api/v1/assistant/autopilot").json()
+        assert again["ran"] and again["reason"] == "event" and again["events"] == 1 and not again["error"]
+        assert "COMI is at" in brief(script.seen[-1]) and wakes.pending(core_at(tmp_path)) == []
+
+
+def test_during_the_session_too_the_timed_review_is_not_pushed_aside_by_an_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(assistant, "market_open", lambda *a, **k: True)
+    script = Script(*({"say": f"review {n}"} for n in range(4)))
+    with app_with(tmp_path, script) as c:
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "intraday", "autopilot_every_minutes": 30})
+        assert c.post("/api/v1/assistant/autopilot").json()["reason"] == "close"
+        c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 1, "note": NOTE, "wake": True})
+        c.post("/api/v1/alerts/check")
+        long_ago(tmp_path, minutes=10)                                          # the pause is over, the half hour is not
+        short = c.post("/api/v1/assistant/autopilot").json()
+        assert short["reason"] == "event" and brief(script.seen[1]).startswith("AUTOPILOT WAKE-UP.")
+        c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "TMGH", "value": 1, "note": NOTE, "wake": True})
+        c.post("/api/v1/alerts/check")
+        long_ago(tmp_path, minutes=31)                                          # now the timed check is due as well
+        full = c.post("/api/v1/assistant/autopilot").json()
+        assert full["reason"] == "intraday" and full["events"] == 1
+        told = brief(script.seen[2])
+        assert told.startswith("AUTOPILOT REVIEW.") and "Work through it in this order" in told and "TMGH is at" in told

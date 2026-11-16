@@ -297,7 +297,9 @@ def _alerts(core: App, out: dict, pushed: dict) -> None:
     their devices, and the ones that wake the assistant are queued for the review that follows in this same look.
     A failure here is noted and never stops the look."""
     try:
-        fired = Extras(core).check_alerts()
+        # With no device to tell, the alerts that only tell the person are left for their open app: an alert is
+        # used up when it fires. The ones that wake the assistant are checked either way.
+        fired = Extras(core).check_alerts(only_wake=not push.listening(core))
         out["alerts"] = {"fired": len(fired["triggered"]), "active": fired["active"], "wake": fired["wake"]}
         if fired["triggered"]:
             for k, v in push.alerts(core, fired["triggered"]).items():

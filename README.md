@@ -388,9 +388,15 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   review, so a burst is one review; event reviews count in the day's limit; outside the session, or in
   `after_close` mode, they wait for the next review. The automation's own exits from a real position are
   queued the same way (`wakes.note_exits`). Nothing in `wakes.py` calls the model or sends an order.
+  Guards: nothing is queued with the autopilot off; a queued event older than 20 hours is dropped; a review
+  that fails before changing anything gives its events back; a time seen more than 30 minutes late is marked
+  missed and wakes nobody; in `intraday` mode the timed review comes before an event review and takes the
+  events with it; the assistant cannot set a watch on a condition that already holds (it would wake itself).
 - **Alerts in the background**: the server's own look (`background.look`) checks the owner's alerts after the
   automation's look and before the review, so what fires can wake the review in that same look; fired alerts
-  are pushed to the owner's devices from both the open app's check and the server's.
+  are pushed to the owner's devices from both the open app's check and the server's. With no device subscribed
+  the server checks only the alerts that wake the assistant (`check_alerts(only_wake=True)`), because an alert
+  is used up when it fires.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
   description on the second, then the text under `## ` headings). `app-guide` describes the app; any other
   file is one of the owner's trading references. The assistant's instructions list every reference, and its `knowledge` tool reads them: the outline of a

@@ -16,8 +16,10 @@ Nothing here calls the model or sends an order: it only remembers what happened 
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from .assistant_prefs import prefs
+from .data.calendar import CAIRO
 from .services import App, now_iso, retry_conflict
 
 QUEUE = ("settings", "assistant_wakes")
@@ -25,12 +27,26 @@ MAX_PENDING = 12          # what waits for one review; older ones give way
 MAX_WATCHES = 12          # the wake alerts the assistant may have switched on at once
 WATCH_DAYS = 14           # a wake alert that has not fired by then is switched off
 EVENT_GAP_SECONDS = 300   # at least this long after any review before an event wakes it, so a burst is one review
+EVENT_HOURS = 20          # what happened longer ago than this is no longer news: it is dropped, not told
 WOKEN = ("events", "intraday")   # the autopilot modes in which an event starts a review of its own
 log = logging.getLogger("egx.wakes")
 
 
+def _hours_old(event: dict) -> float:
+    try:
+        return (datetime.now(UTC) - datetime.fromisoformat(event["ts"])).total_seconds() / 3600
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
 def pending(core: App) -> list[dict]:
-    return list((core.store.get(*QUEUE) or {}).get("pending") or [])
+    """What waits for the assistant, without what has grown too old to act on."""
+    return [e for e in (core.store.get(*QUEUE) or {}).get("pending") or [] if _hours_old(e) < EVENT_HOURS]
+
+
+def listening(core: App) -> bool:
+    """Whether anything is kept for the assistant at all: with the autopilot off there is no review to tell."""
+    return prefs(core)["autopilot"]["mode"] != "off"
 
 
 def add(core: App, events: list[dict]) -> None:
@@ -42,9 +58,18 @@ def add(core: App, events: list[dict]) -> None:
 def take(core: App) -> list[dict]:
     """What waits, handed to the review that claims it: called inside the claim, so two reviews never both get it."""
     waiting = pending(core)
-    if waiting:
-        core.store.put(*QUEUE, {"pending": []})
+    if (core.store.get(*QUEUE) or {}).get("pending"):
+        core.store.put(*QUEUE, {"pending": []})   # the stale ones go with it
     return waiting
+
+
+def give_back(core: App, events: list[dict]) -> None:
+    """A review that failed before it did anything returns what it was told, so the next one hears of it.
+    Never raises: this runs after a failure, and must not hide it."""
+    try:
+        retry_conflict(add)(core, events)
+    except Exception:  # noqa: BLE001
+        log.exception("wakes: what a failed review was told could not be kept for the next one")
 
 
 def wakes_now(core: App) -> bool:
@@ -74,7 +99,10 @@ def lines(events: list[dict]) -> list[str]:
     """What happened, one line each, for the assistant's brief."""
     out = []
     for e in events:
-        when = str(e.get("ts") or "")[:16].replace("T", " ")
+        try:
+            when = f"{datetime.fromisoformat(e['ts']).astimezone(CAIRO):%Y-%m-%d %H:%M} Cairo time"
+        except (KeyError, TypeError, ValueError):
+            when = "a moment ago"
         note = f" Your note when you set it: “{e['note']}”" if e.get("note") else ""
-        out.append(f"- {when} UTC: {e.get('message') or e.get('kind')}.{note}")
+        out.append(f"- {when}: {e.get('message') or e.get('kind')}.{note}")
     return out

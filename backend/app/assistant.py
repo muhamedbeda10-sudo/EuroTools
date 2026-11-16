@@ -626,10 +626,10 @@ def autopilot_state(core: App) -> dict:
         since = (datetime.fromisoformat(now_iso()) - last).total_seconds() if last else None
         if auto["last_session"] != session:
             due = "close"
+        elif auto["mode"] == "intraday" and market_open() and (since is None or since >= auto["every_minutes"] * 60):
+            due = "intraday"   # the timed check, which is told of anything that waits as well
         elif auto["mode"] in wakes.WOKEN and waiting and market_open() and (since is None or since >= wakes.EVENT_GAP_SECONDS):
             due = "event"   # something the app was watching for it has happened: a short review of that alone
-        elif auto["mode"] == "intraday" and market_open() and (since is None or since >= auto["every_minutes"] * 60):
-            due = "intraday"
     return {"mode": auto["mode"], "due": due, "session": session, "last_run": auto["last_run"], "last_chat": auto["last_chat"],
             "waiting": waiting}
 
@@ -804,6 +804,8 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
             text.clear()
         elif event["type"] == "error":
             error = event["detail"]
+    if error and not trades and events:
+        wakes.give_back(core, events)   # it failed before it did anything: what it was told is kept for the next review
     return {"ran": True, "chat": chat["id"], "changes": trades, "error": error, "reason": state["due"], "events": len(events),
             "summary": "".join(text).strip()[-700:], "notify": bool(auto["notify"])}
 

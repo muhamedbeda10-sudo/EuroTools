@@ -46,7 +46,10 @@ broker.
   at a time of day, and one that wakes the assistant, fires once and is then switched off. The app checks them
   itself as prices update: while it is open and, for the brokerage account's owner with running without the app
   open switched on, from the server every minute during the session. The owner's devices with notifications on
-  are told when one fires.
+  are told when one fires. With no device to tell, the server leaves the alerts that only tell the person to
+  their open app, where they are seen.
+- A time alert seen more than 30 minutes late (the app was closed and the server was not looking) is marked
+  "Missed": the person is told that it passed, and the assistant is not woken for it.
 - **Guide**: short explanations of indicators, candle patterns, order-book reading, financial statements and ratios, risk
   management, fees, sectors and honest strategy testing.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
@@ -216,7 +219,14 @@ broker.
 - "When a watch fires" is the cheapest schedule that still works during the session: one review after each
   close, plus a short one per event. Several events close together are one review (at least five minutes pass
   after any review), and these reviews count in the day's limit like the timed ones.
-- The assistant may have 12 watches on at once. One that has not fired in 14 days lapses by itself.
+- The assistant may have 12 watches on at once. A watch on a level that has not fired in 14 days lapses by
+  itself; a watch on a time waits for its time. The assistant cannot set a watch on something that is already
+  the case: it is told to act on it now instead.
+- What happened is kept for the assistant for about 20 hours; older than that it is dropped, not told. With the
+  autopilot off nothing is kept: the person is told, as with any alert. A review that fails before doing
+  anything gives back what it was told, so the next one hears of it.
+- In a notice to the owner's devices, a note the person wrote goes with the alert; a note the assistant wrote
+  for itself does not.
 - When automatic real orders sell a position on their own way out (stop-loss or take-profit), that is told to
   the assistant the same way, in the schedules that wake it.
 

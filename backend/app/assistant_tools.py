@@ -652,6 +652,10 @@ def _save_alert(core: App, a: SaveAlert) -> dict:
         mine = [x for x in extras.alerts()["alerts"] if x.get("wake") and x["active"] and x.get("by") == "assistant" and x["id"] != a.id]
         if len(mine) >= wakes.MAX_WATCHES:
             raise AlertError(f"{wakes.MAX_WATCHES} watches of yours are already on. Switch off the ones that no longer matter first.")
+        true_now = extras.holds_now(body)
+        if true_now:
+            raise AlertError(f"That is already the case ({true_now}), so a watch on it would fire at once. Act on it now, or "
+                             "watch for something that has not happened yet.")
     saved = extras.save_alert(body, a.id, by="assistant" if a.wake_me else None)
     if a.wake_me and a.active:
         saved = {**saved, "what_happens_when_it_fires": WHEN_IT_FIRES[prefs(core)["autopilot"]["mode"]] + " It fires once and is "
