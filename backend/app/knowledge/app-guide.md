@@ -54,8 +54,8 @@ broker.
   "Missed": the person is told that it passed, and the assistant is not woken for it.
 - **Guide**: short explanations of indicators, candle patterns, order-book reading, financial statements and ratios, risk
   management, fees, sectors and honest strategy testing.
-- **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
-  sign-in accounts (administrators only), and the activity log.
+- **Settings**: tabs Assistant, Real trading (owner), Paper & fees (capital, reset, fees), Market data
+  (CSV import), Accounts & log (administrators).
 
 ## What's new
 - "What's new" in the menu lists the app's updates, newest first, in English or Arabic: what changed in each
@@ -204,15 +204,16 @@ broker.
 ## Protective orders, limits and the autopilot
 - A stop-loss or take-profit order on a holding is carried out by the app itself. On a completed session the
   whole day's range counts (a stop fills at its price, or at the open after a gap below it); during a running
-  session and on the placement day only the latest price counts. Orders are checked while the app is open.
+  session and on the placement day only the latest price counts. Orders are checked while the app is open; with running without the app open
+  on, the server checks them too, and the automatic runs.
 - Trades placed by the assistant must stay inside limits the user sets in Settings -> Assistant: largest single
   trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
   places by hand are not limited.
 - Autopilot, when switched on, has the assistant review after each completed session (optionally during the
   session: when a watch fires, or every so many minutes) and act inside those limits, following the user's
   mandate. The user sets the most reviews in a day (default 12); the one after the close always runs.
-- The owner chooses its account: "Paper portfolio only" (no real-order proposal in a review),
-  "Real account only" (proposals only; paper left alone) or "Both" (default). The app enforces it.
+- The owner chooses its account: "Paper portfolio" (no real-order proposal in a review),
+  "Real account" (proposals only; paper left alone) or "Both" (default). The app enforces it.
 
 ## The app watches for the assistant (watches)
 - A review by the assistant costs money every time; a rule the app checks costs nothing. So an alert can be
@@ -238,16 +239,16 @@ broker.
   the assistant the same way, in the schedules that wake it.
 
 ## The assistant's own settings (Settings, Assistant)
+- "Trading by itself", the first card: what it works on by itself, when it reviews, and each step marked
+  ready or missing (also in the `settings` tool).
 - What it costs: a daily ceiling and a monthly one, in US dollars (USD 5 a day and USD 60 a month unless the
   user changes them; 0 means none; the daily one cannot be above the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
   next day or month, or until the user raises it. The page shows what was spent today (conversations and the
   autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
   model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
   the middle when it is reached ("The assistant stopped here"); what was already done stays done.
-- What the autopilot can cost in a day is shown in its card: the reviews the saved schedule runs (one after the
-  close; during the session, one at the open and one every so many minutes, as far as the day's limit lets
-  through; the card says when the schedule asks for more than the limit allows), times what a review cost on
-  average over the last seven days. It never passes the daily
+- A day of the autopilot is estimated there: the reviews the schedule can run, times a review's average
+  cost over the last seven days. It never passes the daily
   ceiling. Only reviews and conversations cost money: the app's own looks at the real account, its stop-losses
   and the sending of what was decided use no model and cost nothing.
 - How it answers: the language (the one the user writes in, always Egyptian Arabic, or always English) and

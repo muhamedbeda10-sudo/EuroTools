@@ -149,7 +149,7 @@ function StockView() {
           </div>
 
           {!data.has_data ? (
-            <div className="note">No price history for this stock yet. Import a CSV in <Link href="/settings">Settings</Link>.</div>
+            <div className="note">No price history for this stock yet. Import a CSV in <Link href="/settings?tab=data">Settings</Link>.</div>
           ) : (
             <>
               <div className="statband five tight" style={{ marginBottom: 16 }}>

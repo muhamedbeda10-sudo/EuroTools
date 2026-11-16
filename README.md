@@ -28,7 +28,16 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Journal | Why each decision was made, what was expected, what happened, what was learned |
 | Alerts | Price, day change, volume, RSI, strategy-signal and time-of-day alerts, shown in the app and as notifications; an alert can wake the assistant |
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
-| Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
+| Settings | Five tabs: Assistant (first: trading by itself, with a checklist of what is in place), Real trading (the owner), Paper & fees, Market data (CSV import, connections), Accounts & log (administrators, audit trail) |
+
+The menu has seven entries (`NAV` in `components/Shell.tsx`): Dashboard, Market, Portfolio, Real account
+(its owner only), Strategies, Guide, Settings. Market, Portfolio and Strategies are groups, and their
+screens are tabs across the top of the page (`SectionTabs`): Market · Watchlist · Alerts · Research & News;
+Portfolio · Trades · Journal; Strategies · Simulator. The addresses of the screens are unchanged. On a
+phone a bar at the bottom holds Home, Market, Portfolio, the assistant and the menu. The strip under the
+search box (`components/MarketStrip.tsx`) is a moving tape of the indices, breadth, the paper portfolio and
+the day's movers; it stops under the pointer, has a stop button, and stands still under
+`prefers-reduced-motion`.
 
 Not built yet: fundamentals (no verified source), corporate actions.
 
@@ -276,6 +285,9 @@ the session, so stop-losses and the box keep working with the app closed and the
   environment; it cannot be opened anywhere else; a new key, or a changed password, retires it.
 - **The owner's switch** is in their own data. Off, a look ends before it does anything.
 - **A look**: read live prices (or the session's final bars after the close), `real_auto.tick`,
+  then the paper portfolio's own standing work (`paper.process_runs` and `orders.process`: automatic runs
+  brought up to date, stop-losses and take-profits carried out, a notice to the owner's devices for each
+  fill; paper only, and a failure there never stops the look),
   then the assistant's review when one is due (its own switch and schedule in Settings →
   Assistant), and what the review proposed is judged in the same look.
 - **It decides nothing.** What may be sent is still the owner's box and limits, checked at every look.
@@ -423,8 +435,15 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   (12 by default), which holds back the ones during the session and always leaves a place for the one after
   the close. A review that changed something is pushed to the owner's devices unless they switched that off
   (`push.review`): the count only, never the model's words. One held back by a ceiling is told once (once in
-  the month for the monthly ceiling). It runs only while the app is open in
-  a browser; with anything less than full access it looks and reports only.
+  the month for the monthly ceiling). It runs while the app is open in
+  a browser and, for the owner with background running on, from the server's own looks; with anything less
+  than full access it looks and reports only.
+- **Trading by itself, in one list** (`backend/app/self_trading.py`): the switches that let the assistant act
+  without being asked sit in three places (its schedule and access, the spending ceilings, real orders and the
+  automatic box, the server's own looks). `self_trading.report` reads them together and returns one row for
+  each with `ok`, `missing` or `note`, a headline, and where a missing one is set. `GET /api/v1/assistant`
+  carries it for the first card of Settings → Assistant, and the assistant's `settings` tool returns the same
+  list so that it can say why it did or did not act. The module only reads; a test keeps it from doing more.
 - **The account the autopilot works on** (`autopilot.account`, the owner's choice; `assistant_prefs.autopilot_account`):
   `paper`, `real` or `both`. `both` is the default and is how it worked before the choice existed: the briefing
   is the paper portfolio, with a paragraph about real orders, to be used only when the mandate asks. With `real`
@@ -467,7 +486,8 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 ## Protective orders
 
 A stop-loss or take-profit on a holding (`backend/app/orders.py`), placed from the Portfolio page or by the
-assistant. The background job carries them out: on a completed session the day's whole range counts (a stop
+assistant. The open app's background job carries them out, and so does the server's own look when the
+owner switched background running on (`background._paper`): on a completed session the day's whole range counts (a stop
 fills at the stop, or at the open if the stock gapped through it, as in the backtester); during a running
 session and on the day the order was placed only the latest price counts. A fill is an ordinary SELL in the
 ledger (`origin: order:<id>`) with the usual fees. One stop and one target per stock.

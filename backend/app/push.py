@@ -324,6 +324,19 @@ def alerts(core: App, fired: list[dict], post=None) -> dict:
     return total
 
 
+def paper_orders(core: App, filled: list[dict], post=None) -> dict:
+    """Word of the stop-loss and take-profit orders the server just carried out on the PAPER portfolio, said as
+    paper so that it is not taken for a real sale."""
+    total = {"sent": 0, "failed": 0, "removed": 0}
+    for n, order in enumerate(filled[:MAX_ALERTS]):
+        words = f"{order['message']} (paper portfolio)"
+        if n == MAX_ALERTS - 1 and len(filled) > MAX_ALERTS:
+            words += f" (and {len(filled) - MAX_ALERTS} more)"
+        for k, v in send(core, "Paper order filled", words, tag=f"paper-order-{order['id']}", url="/portfolio", post=post).items():
+            total[k] += v
+    return total
+
+
 def review(core: App, done: dict, post=None) -> dict:
     """Word of a review the assistant made by itself: what it changed, that it stopped, or that a ceiling held it back."""
     if done.get("ran"):

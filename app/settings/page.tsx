@@ -262,13 +262,19 @@ function Audit() {
   );
 }
 
-const TABS = [["fees", "Fees"], ["portfolio", "Paper portfolio"], ["data", "Market data"], ["real", "Real trading"], ["assistant", "Assistant"],
-              ["accounts", "Accounts"], ["audit", "Audit trail"]] as const;
+/** Five sections, the assistant first: it is the one people come here for. What used to be seven tabs sit together
+ *  where they belong (fees with the paper portfolio they price, the activity log with the accounts). */
+const TABS = [["assistant", "Assistant"], ["real", "Real trading"], ["paper", "Paper & fees"], ["data", "Market data"],
+              ["admin", "Accounts & log"]] as const;
+type Tab = (typeof TABS)[number][0];
+/** Addresses from before the sections were put together still open the right one. */
+const MOVED: Record<string, Tab> = { fees: "paper", portfolio: "paper", accounts: "admin", audit: "admin" };
 
 /** Opens the tab named in the address (?tab=assistant), also when the page is already showing. */
-function TabFromAddress({ onTab }: { onTab: (tab: any) => void }) {
-  const wanted = useSearchParams().get("tab");
-  useEffect(() => { if (wanted && TABS.some(([k]) => k === wanted)) onTab(wanted); }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+function TabFromAddress({ onTab }: { onTab: (tab: Tab) => void }) {
+  const asked = useSearchParams().get("tab");
+  const wanted = asked ? MOVED[asked] ?? asked : null;
+  useEffect(() => { if (wanted && TABS.some(([k]) => k === wanted)) onTab(wanted as Tab); }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
   return null;
 }
 
@@ -277,14 +283,14 @@ export default function Settings() {
   const feed = useFeedUpdate();
   const pv = status.data?.provider;
   const real = status.data?.real_account;
-  const [tab, setTab] = useState<(typeof TABS)[number][0]>("fees");
+  const [tab, setTab] = useState<Tab>("assistant");
   useEffect(() => { if (feed.state.done) window.dispatchEvent(new Event(DATA_UPDATED)); }, [feed.state.done, feed.state.changed]);
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="sub">The assumptions behind every number in the app.</p>
+          <p className="sub">What the assistant may do by itself, and the assumptions behind every number in the app.</p>
         </div>
       </div>
       <Suspense fallback={null}><TabFromAddress onTab={setTab} /></Suspense>
@@ -294,15 +300,14 @@ export default function Settings() {
         ))}
       </div>
       <div className="grid" role="tabpanel" aria-label={TABS.find(([k]) => k === tab)?.[1]}>
-        {tab === "fees" && <Fees />}
-        {tab === "portfolio" && <Capital />}
-        {tab === "data" && <DataImport />}
+        {tab === "assistant" && <AssistantSettings />}
         {tab === "real" && <RealTradingSettings />}
         {tab === "real" && <RealAutoSettings />}
         {tab === "real" && <RealBackground />}
-        {tab === "assistant" && <AssistantSettings />}
-        {tab === "accounts" && <AccountsCard />}
-        {tab === "accounts" && <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>Only an administrator sees the account list. If nothing is shown above, this account cannot manage others.</p>}
+        {tab === "paper" && <Capital />}
+        {tab === "paper" && <Fees />}
+        {tab === "data" && <DataImport />}
+        {tab === "admin" && <AccountsCard />}
         {(tab === "data") && <div className="card">
           <h2>Connections</h2>
           <dl className="kv ruled" style={{ maxWidth: 720 }}>
@@ -381,7 +386,7 @@ export default function Settings() {
             </>
           )}
         </div>}
-        {tab === "audit" && <Audit />}
+        {tab === "admin" && <Audit />}
       </div>
     </>
   );

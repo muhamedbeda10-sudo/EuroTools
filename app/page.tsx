@@ -118,7 +118,7 @@ export default function Dashboard() {
                 </div>
                 <p className="foot-note">
                   Amounts in EGP.{!s.fees_verified && (
-                    <> Net figures use a placeholder fee schedule: <Link href="/settings">enter your broker&apos;s tariff</Link> to make them exact.</>
+                    <> Net figures use a placeholder fee schedule: <Link href="/settings?tab=paper">enter your broker&apos;s tariff</Link> to make them exact.</>
                   )}
                 </p>
               </>

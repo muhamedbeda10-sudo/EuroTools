@@ -3,8 +3,9 @@
 Automatic real orders (real_auto.py) run from the owner's open app. This module lets the same looks
 happen with the app closed. A timer on the hosting platform calls one address every minute during
 the session (`vercel.json`, `crons`); the server then does what the open app would have done: reads
-the live prices, takes the automation's look, runs the assistant's review when one is due, and tells
-the owner's devices what happened (push.py).
+the live prices, takes the automation's look, carries out the paper portfolio's stop-losses and
+take-profits and brings its automatic runs up to date, runs the assistant's review when one is due, and
+tells the owner's devices what happened (push.py).
 
 Whose hands the server works with
     The API holds no database credentials: every request reads and writes the signed-in person's own
@@ -45,7 +46,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import assistant, push, real_auto, real_orders, wakes
+from . import assistant, orders, paper, push, real_auto, real_orders, wakes
 from .config import Settings
 from .data.calendar import cairo_now, is_trading_day, market_open
 from .extras import Extras
@@ -309,8 +310,28 @@ def _alerts(core: App, out: dict, pushed: dict) -> None:
         out["alerts"] = {"problem": type(exc).__name__}
 
 
+def _paper(core: App, out: dict, pushed: dict) -> None:
+    """The paper portfolio's standing work, which the open app does at each of its rounds: the automatic runs are
+    brought up to the latest completed session, and a stop-loss or take-profit whose price was reached is carried
+    out. Paper only: it writes to the paper ledger and nothing here reaches the broker. So the paper portfolio is
+    looked after with the app closed as well, before the assistant's review reads it. A failure here is noted and
+    never stops the look."""
+    try:
+        runs = paper.process_runs(core)
+        done = orders.process(core)
+        out["paper"] = {"fills": int(runs.get("fills") or 0), "orders": len(done["filled"])}
+        for k, v in push.paper_orders(core, done["filled"]).items():
+            pushed[k] += v
+    except ConflictError:
+        out["paper"] = {"busy": True}   # the open app was at the same work in that very moment: it is done there
+    except Exception as exc:  # noqa: BLE001
+        log.exception("background: the paper portfolio's orders and runs could not be processed")
+        out["paper"] = {"problem": type(exc).__name__}
+
+
 def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
-    """One look by the server for one owner: prices, the automation, the alerts, the assistant's review when due.
+    """One look by the server for one owner: prices, the automation, the paper portfolio's own orders and runs,
+    the alerts, the assistant's review when due.
 
     `may_review(core)` says whether this person may use the assistant at all, as the open app's own route asks.
     """
@@ -328,6 +349,7 @@ def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
         result = real_auto.tick(core)
         pushed = push.report(core, result)
         wakes.note_exits(core, result)
+        _paper(core, out, pushed)
         _alerts(core, out, pushed)
         # The assistant's review comes last, because it can take minutes, and only while there is time for it
         # and for what follows inside this one call.

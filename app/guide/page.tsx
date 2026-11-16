@@ -1,6 +1,19 @@
 import Link from "next/link";
 
 const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
+  { id: "around", title: "Finding your way around", body: (
+    <>
+      <p>The menu has a few entries, and three of them are groups whose screens are <strong>tabs across the top of the page</strong>:</p>
+      <ul>
+        <li><strong>Market:</strong> <Link href="/market">Market</Link>, <Link href="/watchlist">Watchlist</Link>, <Link href="/alerts">Alerts</Link> and <Link href="/research">Research &amp; News</Link>.</li>
+        <li><strong>Portfolio:</strong> <Link href="/portfolio">Portfolio</Link>, <Link href="/trades">Trades</Link> and <Link href="/journal">Journal</Link>.</li>
+        <li><strong>Strategies:</strong> <Link href="/strategies">Strategies</Link> and the <Link href="/simulator">Simulator</Link>.</li>
+      </ul>
+      <p>On a phone the bar at the bottom holds Home, Market, Portfolio and the assistant; <em>Menu</em> opens everything else. The search box at the top opens any stock.</p>
+      <p>The tape under the search box keeps moving: the indices, how many stocks are up and down, your paper portfolio, then the day&apos;s most active stocks, gainers and losers. Tap a stock to open it. It stops while the pointer is on it, and the small button at its start stops it for good on that device.</p>
+      <p><Link href="/settings">Settings</Link> opens on the assistant and has five tabs: Assistant, Real trading (the brokerage account&apos;s owner), Paper &amp; fees, Market data, and Accounts &amp; log.</p>
+    </>
+  ) },
   { id: "indicators", title: "Technical indicators in this app", body: (
     <>
       <p><strong>Moving averages (SMA 20 / 50 / 200).</strong> The average closing price over the last 20, 50 or 200 sessions. Price above a rising average suggests an up-trend; the 50 crossing above the 200 is a classic long-term signal. Averages lag: they confirm a trend, they do not predict it.</p>
@@ -67,7 +80,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
     <>
       <p>Every buy and every sell pays brokerage commission plus exchange, clearing, regulatory and tax charges. On a round trip they are paid twice. A trade that gains 1% before costs can lose money after them.</p>
       <p>That is why every profit in this app is shown twice: <strong>gross</strong> (price movement only) and <strong>net</strong> (after the fees actually charged, and for open positions after the fees you would pay to sell). Frequent trading multiplies costs: a strategy with many small wins needs a much higher win rate than one with few larger ones.</p>
-      <p>The fee schedule in <Link href="/settings">Settings</Link> starts as a placeholder. Enter your broker&apos;s real tariff and mark it verified; until then every net figure is an estimate.</p>
+      <p>The fee schedule in <Link href="/settings?tab=paper">Settings</Link> starts as a placeholder. Enter your broker&apos;s real tariff and mark it verified; until then every net figure is an estimate.</p>
     </>
   ) },
   { id: "sectors", title: "EGX sectors", body: (
@@ -90,7 +103,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
       <ul>
         <li>On a completed session the whole day counts: a stop fills at its price, or at the open if the stock opened below it.</li>
         <li>While a session is running, and on the day you placed the order, only the latest price the app has seen counts.</li>
-        <li>Orders are checked while the app is open; sessions that completed while it was closed are caught up the next time you open it.</li>
+        <li>Orders are checked while the app is open; sessions that completed while it was closed are caught up the next time you open it. For the brokerage account&apos;s owner with <em>Running without the app open</em> switched on, the server checks them too, every minute during the session, and tells your devices when one is filled.</li>
         <li>One stop and one target per stock; a new one replaces the old. Selling the shares another way cancels them.</li>
       </ul>
     </>
@@ -119,6 +132,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
         <li><strong>You set it up in <Link href="/settings?tab=assistant">Settings → Assistant</Link>:</strong> which model it uses and how hard it thinks (both change the cost), a daily and a monthly spending ceiling, the language it answers in, standing instructions it follows every time, and limits on its own trades (largest trade, largest holding, cash always kept, trades per day). The app enforces those limits itself, whatever the assistant decides.</li>
         <li><strong>The app watches for it.</strong> On <Link href="/alerts">Alerts</Link>, tick <em>Also wake the assistant</em> on a price level, a day&apos;s move or a time, and write what it should check. The assistant sets such watches for itself too. The watching is done by the app and costs nothing; only the short review that follows costs money.</li>
         <li><strong>You can see what it spent.</strong> The same page shows today (conversations and its own reviews apart), this month and the last seven days. When a ceiling is reached it stops until the next day or month, or until you raise it.</li>
+        <li><strong>Trading by itself, step by step.</strong> The first card in <Link href="/settings?tab=assistant">Settings → Assistant</Link> is where you choose what the assistant works on by itself and when it reviews. Under it, <em>What is in place</em> marks each thing it needs: a schedule, Full access, room under your spending ceilings, whether it keeps going with the app closed and, for real money, real orders, proposals and the automatic box. What is missing has a button to where you set it. The assistant can take none of these steps itself.</li>
         <li><strong>Autopilot.</strong> Switched on there, the assistant reviews the portfolio after each close (and, if you choose, during the session), trades inside the limits following the instructions you wrote, and leaves a conversation you can read. With <em>When a watch fires</em> it also wakes for a short review whenever something the app is watching for it happens, which costs far less than reviewing every so many minutes. You choose the most reviews in one day and whether your devices are told when one changed something. The brokerage account&apos;s owner also chooses <em>which account it works on</em>: the paper portfolio only, the real account only, or both. On the real account it only ever writes proposals, which wait for your approval unless automatic orders are on (see <em>The real account</em>), and the app refuses it the other account&apos;s tools, whatever your instructions say. It works while the app is open in a browser; for the brokerage account&apos;s owner it can also run with the app closed (see <em>The real account</em>).</li>
       </ul>
     </>
@@ -135,7 +149,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
         <li><strong>When signals outnumber free positions,</strong> stocks are taken in alphabetical order.</li>
         <li><strong>Calendar.</strong> Sunday to Thursday; public holidays are not marked.</li>
         <li><strong>Benchmark.</strong> The data feed has no index history, so results are compared with holding the same stocks, not with EGX 30.</li>
-        <li><strong>Fees.</strong> The schedule in <Link href="/settings">Settings</Link> is a placeholder until you check it against your broker&apos;s tariff.</li>
+        <li><strong>Fees.</strong> The schedule in <Link href="/settings?tab=paper">Settings</Link> is a placeholder until you check it against your broker&apos;s tariff.</li>
         <li><strong>Manual paper trades</strong> fill at the stock&apos;s latest price and are dated with the market&apos;s current session.</li>
       </ul>
     </>
