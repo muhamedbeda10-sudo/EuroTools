@@ -306,19 +306,44 @@ def spent_month(core: App) -> float:
     return float(_month(core)[1].get("cost_usd") or 0.0)
 
 
+SESSION_MINUTES = 270   # 10:00 to 14:30 Cairo
+
+
+def reviews_a_day(auto: dict) -> int:
+    """The most reviews the saved schedule can ask for in one day: one after the close, and during the session
+    one at the open and one every so many minutes; never more than the day's own limit."""
+    if auto["mode"] == "off":
+        return 0
+    asked = 1 if auto["mode"] == "after_close" else 2 + SESSION_MINUTES // int(auto["every_minutes"])
+    return min(int(auto["max_per_day"]), asked)
+
+
 def spending(core: App) -> dict:
-    """What the assistant has cost: today, split by what it was doing, this month, and the last seven days."""
+    """What the assistant has cost: today, split by what it was doing, this month, and the last seven days.
+
+    `autopilot` is what a day of reviews can come to: how many the schedule can ask for, and what a review did
+    cost on average over those seven days (None until one has run). An estimate; the ceilings are the limit.
+    """
     chosen = prefs(core)
     today = cairo_now().date()
     days = [(today - timedelta(days=n)).isoformat() for n in range(7)]
     core.store.warm(gets=[("assistant_usage", d) for d in days])
     docs = {d: core.store.get("assistant_usage", d) or {} for d in days}
     now = docs[days[0]]
+    reviews = sum(int(d.get("reviews") or 0) for d in docs.values())
+    each = sum(float((d.get("by") or {}).get("autopilot") or 0.0) for d in docs.values()) / reviews if reviews else None
+    at_most = reviews_a_day(chosen["autopilot"])
+    a_day = at_most * each if each is not None else None
+    if a_day is not None and chosen["daily_usd"] > 0:
+        a_day = min(a_day, chosen["daily_usd"])
     return {"today_usd": round(float(now.get("cost_usd") or 0.0), 4), "daily_limit_usd": chosen["daily_usd"],
             "today_by": {k: round(float((now.get("by") or {}).get(k) or 0.0), 4) for k in ("chat", "autopilot")},
             "month_usd": round(spent_month(core), 4), "monthly_limit_usd": chosen["monthly_usd"],
             "days": [{"date": d, "usd": round(float(docs[d].get("cost_usd") or 0.0), 4), "calls": int(docs[d].get("calls") or 0)}
-                     for d in days]}
+                     for d in days],
+            "autopilot": {"reviews_a_day": at_most, "reviews_counted": reviews,
+                          "review_usd": round(each, 4) if each is not None else None,
+                          "day_usd": round(a_day, 4) if a_day is not None else None}}
 
 
 def over_budget(core: App) -> str | None:
@@ -465,6 +490,12 @@ def _converse(core: App, model: AssistantModel, chat: dict, access: str | None =
     access = access or access_level(core)
     try:
         for _step in range(MAX_STEPS):
+            # A ceiling is asked again before every further call to the model, so one long piece of work
+            # cannot run far past it. What was already done stays done; the conversation can be picked up later.
+            spent = over_budget(core) if _step else None
+            if spent:
+                yield {"type": "notice", "text": f"{spent} The assistant stopped here."}
+                break
             final = None
             for event in model.turn(system=system, tools=specs, messages=chat["messages"]):
                 if event["type"] == "final":
@@ -683,6 +714,12 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
                            last_session=state["session"] if state["due"] == "close" else chosen["autopilot"]["last_session"])
     except ConflictError:
         return {"ran": False, **state, "skipped": "another window is already running it"}
+    day, usage = _usage_doc(core)   # the day's reviews are counted, so the page can say what one costs on average
+    usage["reviews"] = int(usage.get("reviews") or 0) + 1
+    try:
+        core.store.put("assistant_usage", day, usage)
+    except ConflictError:
+        pass   # a conversation wrote its cost at the same moment: the count is for an estimate only
     # Without full access the review only looks and reports: nothing can be approved while nobody is there.
     access = "full" if chosen["access"] == "full" else "read"
     trades, error, text = 0, None, []

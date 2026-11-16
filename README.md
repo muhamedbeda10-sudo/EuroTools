@@ -362,7 +362,8 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   it may write in a day. The environment values above are only the defaults.
 - **Spending** is recorded per day and per month in the account's own data (`assistant_usage`), split into
   conversations and autopilot reviews; the page shows today, the month and the last seven days. Both ceilings
-  are checked before every model call.
+  are checked before every model call, so a turn stops in the middle when one is reached. The autopilot card
+  shows what a day can cost: the reviews the schedule asks for (`reviews_a_day`) times the measured average.
 - **What the person chose** (language, standing instructions) is appended at the very end of the system prompt,
   after the text everyone shares, so the shared part stays cacheable. Instructions are the person's own words:
   they are kept out of the activity log, and the prompt says they do not widen any tool or limit.

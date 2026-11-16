@@ -675,3 +675,41 @@ def test_the_autopilot_keeps_to_the_reviews_and_the_money_it_was_given(tmp_path)
         held = c.post("/api/v1/assistant/autopilot").json()
         assert held["ran"] is False and held["skipped"] == "the budget is used up" and "This month's assistant budget" in held["why"]
         assert len(script.seen) == 3
+        # what a day of reviews can come to: the schedule's count, and what a review did cost on average
+        c.put("/api/v1/assistant/settings", json={"monthly_usd": 0, "autopilot_max_per_day": 12})
+        cost = c.get("/api/v1/assistant").json()["spending"]["autopilot"]
+        each = cost_usd("claude-opus-5-5", USAGE)
+        assert cost["reviews_a_day"] == 12 and cost["reviews_counted"] == 3            # every 15 minutes asks for more than the 12 allowed
+        assert cost["review_usd"] == pytest.approx(each, abs=1e-4) and cost["day_usd"] == pytest.approx(12 * each, abs=1e-3)
+        c.put("/api/v1/assistant/settings", json={"autopilot_every_minutes": 60, "daily_usd": 0.01})
+        cost = c.get("/api/v1/assistant").json()["spending"]["autopilot"]
+        assert cost["reviews_a_day"] == 6 and cost["day_usd"] == 0.01                  # never more than the day's ceiling
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "after_close"})
+        assert c.get("/api/v1/assistant").json()["spending"]["autopilot"]["reviews_a_day"] == 1
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "off"})
+        assert c.get("/api/v1/assistant").json()["spending"]["autopilot"]["reviews_a_day"] == 0
+
+
+def test_a_ceiling_reached_in_the_middle_of_the_work_stops_it_before_the_next_call(tmp_path):
+    turn = cost_usd("claude-opus-5-5", USAGE)
+    script = Script({"calls": [call(1, "portfolio")]}, {"calls": [call(2, "portfolio")]}, {"say": "never reached"})
+    with app_with(tmp_path, script, assistant_daily_usd=0) as c:
+        c.put("/api/v1/assistant/settings", json={"daily_usd": round(turn * 1.5, 6)})
+        chat = new_chat(c)
+        got = say(c, chat, "look at my portfolio twice")
+        # two calls were paid for: after the second the day's ceiling is passed, and the third is never made
+        assert len(script.seen) == 2
+        assert [e["text"] for e in got if e["type"] == "notice"] == [
+            f"Today's assistant budget (about USD {turn * 1.5:.2f}) is used up. It resets at midnight Cairo time. The assistant stopped here."]
+        assert got[-1]["type"] == "done"
+        # the conversation is whole: what was looked up is kept, and it can be picked up once there is room
+        c.put("/api/v1/assistant/settings", json={"daily_usd": 0})
+        script.turns.append({"say": "Here it is."})
+        assert any(e["type"] == "text" for e in say(c, chat, "continue")) and len(script.seen) == 3
+
+
+
+def test_the_daily_ceiling_is_five_dollars_until_the_person_chooses_another(tmp_path):
+    with app_with(tmp_path, Script()) as c:
+        s = c.get("/api/v1/assistant").json()
+        assert s["settings"]["daily_usd"] == 5.0 and s["spending"]["daily_limit_usd"] == 5.0 and s["settings"]["monthly_usd"] == 0

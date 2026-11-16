@@ -203,7 +203,13 @@ broker.
   the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
   next day or month, or until the user raises it. The page shows what was spent today (conversations and the
   autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
-  model's published prices.
+  model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
+  the middle when it is reached ("The assistant stopped here"); what was already done stays done.
+- What the autopilot can cost in a day is shown in its card: the most reviews the saved schedule asks for (one
+  after the close; during the session, one at the open and one every so many minutes; never more than the
+  day's limit), times what a review cost on average over the last seven days. It never passes the daily
+  ceiling. Only reviews and conversations cost money: the app's own looks at the real account, its stop-losses
+  and the sending of what was decided use no model and cost nothing.
 - How it answers: the language (the one the user writes in, always Egyptian Arabic, or always English) and
   standing instructions the user writes once, followed in every conversation and review. Instructions change
   how it works and answers; they do not widen what its tools may do or any limit.

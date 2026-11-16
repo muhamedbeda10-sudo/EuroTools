@@ -213,6 +213,18 @@ export default function AssistantSettings() {
               and each one uses the API (typically a few cents to a few tens of cents, depending on the model). It runs while the app is open
               {live?.background ? ", and on the server with the app closed, because you switched on running without the app open." : "; to keep it going with the app closed, see Real trading → Running without the app open."}
             </p>
+            {spend?.autopilot?.reviews_a_day > 0 && (
+              <div className="note info" style={{ marginBottom: 14 }}>
+                <strong>What a day can cost.</strong> The schedule saved now asks for at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day.{" "}
+                {spend.autopilot.review_usd != null
+                  ? <>{spend.autopilot.reviews_counted === 1 ? "Your one review this week cost" : `Your ${spend.autopilot.reviews_counted} reviews this week cost on average`} about {usd(spend.autopilot.review_usd)}, so about <strong>{usd(spend.autopilot.day_usd)} a day</strong>.</>
+                  : <>No review has run in the last week, so there is no figure of your own yet.</>}{" "}
+                {Number(spend.daily_limit_usd) > 0
+                  ? <>It can never pass your daily ceiling of {usd(spend.daily_limit_usd)}, conversations included: at the ceiling it stops reviewing and proposing until the next day.</>
+                  : <>There is no daily ceiling: set one above to bound it.</>}{" "}
+                Watching stop-losses and sending what was already decided is the app&apos;s own work and costs nothing here.
+              </div>
+            )}
             <div className="grid cols-2">
               <div className="field">
                 <label htmlFor="as-auto">When it reviews</label>
