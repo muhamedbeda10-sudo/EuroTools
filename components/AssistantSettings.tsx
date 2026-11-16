@@ -63,11 +63,17 @@ export default function AssistantSettings() {
   }, [data]);
 
   const save = async () => {
+    const numbers = ["daily_usd", "monthly_usd", "max_trade_pct", "max_position_pct", "min_cash_pct", "max_trades_per_day", "autopilot_every_minutes",
+                     "real_proposals_per_day", "autopilot_max_per_day"];
+    // An emptied field is not a zero: zero means "no ceiling" or "no proposals", which must be typed on purpose.
+    if (numbers.some((k) => String(draft[k] ?? "").trim() === "" || !Number.isFinite(Number(draft[k])))) {
+      setMsg({ ok: false, text: "Fill in every number on this page. Where none is wanted, write 0." });
+      return;
+    }
     setBusy(true); setMsg(null);
     try {
       const body = { ...draft };
-      for (const k of ["daily_usd", "monthly_usd", "max_trade_pct", "max_position_pct", "min_cash_pct", "max_trades_per_day", "autopilot_every_minutes",
-                       "real_proposals_per_day", "autopilot_max_per_day"]) body[k] = Number(body[k]);
+      for (const k of numbers) body[k] = Number(body[k]);
       await api("/api/v1/assistant/settings", { method: "PUT", json: body });
       setMsg({ ok: true, text: "Saved. The new settings apply from the assistant's next reply." });
       window.dispatchEvent(new Event(ASSISTANT_SETTINGS));
@@ -215,7 +221,8 @@ export default function AssistantSettings() {
             </p>
             {spend?.autopilot?.reviews_a_day > 0 && (
               <div className="note info" style={{ marginBottom: 14 }}>
-                <strong>What a day can cost.</strong> The schedule saved now asks for at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day.{" "}
+                <strong>What a day can cost.</strong> The schedule saved now runs at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day.{" "}
+                {spend.autopilot.reviews_asked > spend.autopilot.reviews_a_day && <>It asks for about {spend.autopilot.reviews_asked}, and your limit for one day holds the rest back: the last checks of the session will not run (the review after the close always does).{" "}</>}
                 {spend.autopilot.review_usd != null
                   ? <>{spend.autopilot.reviews_counted === 1 ? "Your one review this week cost" : `Your ${spend.autopilot.reviews_counted} reviews this week cost on average`} about {usd(spend.autopilot.review_usd)}, so about <strong>{usd(spend.autopilot.day_usd)} a day</strong>.</>
                   : <>No review has run in the last week, so there is no figure of your own yet.</>}{" "}
@@ -242,16 +249,18 @@ export default function AssistantSettings() {
                 <label htmlFor="as-reviews">Most reviews in one day</label>
                 <input id="as-reviews" type="number" min={1} max={48} value={draft.autopilot_max_per_day}
                   disabled={draft.autopilot_mode === "off"} onChange={(e) => set({ autopilot_max_per_day: e.target.value })} />
-                <p className="foot-note" style={{ marginTop: 6 }}>Each review costs money: this bounds a day whatever the schedule.</p>
+                <p className="foot-note" style={{ marginTop: 6 }}>Each review costs money: this bounds a day whatever the schedule. The review after the close is one of them and always runs.</p>
               </div>
-              <div className="field">
-                <span className="label-like">After a review</span>
-                <label className="check" style={{ marginTop: 6 }}>
-                  <input type="checkbox" checked={!!draft.autopilot_notify} onChange={(e) => set({ autopilot_notify: e.target.checked })} />
-                  <span>Tell my devices when a review changed something</span>
-                </label>
-                <p className="foot-note" style={{ marginTop: 6 }}>Needs notifications switched on for the device (Real trading → Running without the app open). A review that stops with an error is always told.</p>
-              </div>
+              {live?.allowed && (   /* notifications are the brokerage account owner's: nobody else can switch a device on */
+                <div className="field">
+                  <span className="label-like">After a review</span>
+                  <label className="check" style={{ marginTop: 6 }}>
+                    <input type="checkbox" checked={!!draft.autopilot_notify} onChange={(e) => set({ autopilot_notify: e.target.checked })} />
+                    <span>Tell my devices when a review changed something</span>
+                  </label>
+                  <p className="foot-note" style={{ marginTop: 6 }}>Needs notifications switched on for the device (Real trading → Running without the app open). The notice gives the number of changes only; a review that stops with an error is always told.</p>
+                </div>
+              )}
             </div>
             <div className="field">
               <label htmlFor="as-mandate">Your instructions to it (goals, style, what to avoid). Arabic or English.</label>

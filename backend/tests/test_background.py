@@ -1,7 +1,7 @@
 """Running without a browser, and telling the owner's devices: the timer, the sealed key, the look, the notifications (no network)."""
 import json
 import time as clock_module
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -478,8 +478,9 @@ def test_the_owner_hears_of_a_review_as_they_asked_to(floor, monkeypatch):
     c.post("/api/v1/push/subscribe", json=sub)
     core = core_of(c)
     said = lambda: [read(kw["content"], key, auth)["body"] for _, kw in c.posted]   # noqa: E731
-    push.review(core, {"ran": True, "changes": 2, "error": None, "summary": "Sold TMGH, bought COMI.", "notify": True})
-    assert said() == ["The assistant reviewed and made 2 change(s). Sold TMGH, bought COMI."]
+    # the notice gives the count and nothing of the report: that is the model's own words, and may name a balance
+    push.review(core, {"ran": True, "changes": 2, "error": None, "summary": "Sold TMGH, bought COMI. Cash left EGP 41,200.", "notify": True})
+    assert said() == ["The assistant reviewed and made 2 change(s). Open the app to read its report."]
     push.review(core, {"ran": True, "changes": 2, "error": None, "summary": "x", "notify": False})     # they asked not to be told
     push.review(core, {"ran": True, "changes": 0, "error": None, "summary": "Nothing to do.", "notify": True})
     push.review(core, {"ran": False, "skipped": "another window is already running it"})
@@ -491,3 +492,12 @@ def test_the_owner_hears_of_a_review_as_they_asked_to(floor, monkeypatch):
     for _ in range(3):
         push.review(core, held)
     assert len(c.posted) == 3 and said()[-1].startswith("No review was made: Today's assistant budget")
+    # a month's ceiling is told once in that month, however many days it lasts and however the words change
+    month = {"ran": False, "skipped": "the budget is used up", "ceiling": "month", "why": "This month's assistant budget (about USD 60.00) is used up."}
+    push.review(core, month)
+    assert len(c.posted) == 4
+    seen = core.store.get(*push.SEEN)
+    key = next(k for k in seen if k.startswith(push.LONG))
+    core.store.put(*push.SEEN, {**seen, key: (datetime.now(UTC) - timedelta(days=9)).isoformat()})   # nine days on
+    push.review(core, {**month, "why": "This month's assistant budget (about USD 80.00) is used up."})
+    assert len(c.posted) == 4 and key in push._kept(core.store.get(*push.SEEN))

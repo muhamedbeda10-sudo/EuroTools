@@ -218,6 +218,7 @@ def menu(core: App) -> bool:
 
 def save(core: App, body: AutoIn) -> dict:
     real_orders._owner(core)
+    before = chosen(core)
     symbols = sorted({s.strip().upper() for s in body.symbols if s.strip()})
     unknown = [s for s in symbols if core.market.instrument(s) is None]
     if unknown:
@@ -228,9 +229,11 @@ def save(core: App, body: AutoIn) -> dict:
         raise OrderError("The loss at which it pauses cannot be larger than the budget.")
     if body.max_day_value is not None and body.max_order_value is not None and body.max_day_value < body.max_order_value:
         raise OrderError("The most it may buy in one day cannot be smaller than the most allowed for one automatic order.")
-    before = chosen(core)
     after = {**body.model_dump(mode="json"), "symbols": symbols,
              "enabled_at": (before["enabled_at"] or _stamp()) if body.enabled else None}
+    if "max_day_value" not in body.model_fields_set:
+        # A page loaded before this limit existed saves the box without naming it: that must not remove it.
+        after["max_day_value"] = before.get("max_day_value")
     if body.enabled:
         hand = real_orders.limits(core)
         state = standing(core, after, _book(core), real_orders._records(core, cairo_now()))

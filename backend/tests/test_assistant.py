@@ -584,7 +584,7 @@ def test_the_owner_sets_what_it_may_cost_how_it_answers_and_how_often_it_reviews
     script = Script({"say": "تمام"}, {"say": "Again"}, {"say": "Third"})
     with app_with(tmp_path, script, assistant_daily_usd=0) as c:
         s = c.get("/api/v1/assistant").json()
-        assert s["settings"]["monthly_usd"] == 0 and s["settings"]["language"] == "auto" and s["settings"]["instructions"] == ""
+        assert s["settings"]["monthly_usd"] == 60 and s["settings"]["language"] == "auto" and s["settings"]["instructions"] == ""
         assert s["settings"]["real_proposals_per_day"] == 20 and s["settings"]["autopilot"]["max_per_day"] == 12
         assert s["settings"]["autopilot"]["notify"] is True and s["languages"] == ["auto", "ar", "en"]
         assert s["spending"]["today_usd"] == 0 and len(s["spending"]["days"]) == 7
@@ -645,45 +645,49 @@ def test_the_month_has_a_ceiling_too_and_what_was_spent_is_shown_by_day_and_by_k
         assert c.get("/api/v1/assistant").json()["spending"]["month_usd"] == pytest.approx(turn_cost, abs=1e-4)
 
 
-def test_the_autopilot_keeps_to_the_reviews_and_the_money_it_was_given(tmp_path):
-    script = Script(*({"say": f"review {n}"} for n in range(5)))
+def test_the_autopilot_keeps_to_the_reviews_and_the_money_it_was_given(tmp_path, monkeypatch):
+    monkeypatch.setattr(assistant, "market_open", lambda *a, **k: True)
+    script = Script(*({"say": f"review {n}"} for n in range(6)))
     with app_with(tmp_path, script, assistant_daily_usd=0) as c:
-        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "intraday", "autopilot_max_per_day": 2, "autopilot_every_minutes": 15})
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "intraday", "autopilot_max_per_day": 3, "autopilot_every_minutes": 15})
         store = Store(tmp_path / "t.sqlite3")
 
-        def due_again():
+        def due(close: bool):
             doc = store.get("settings", "assistant")
-            doc["autopilot"].update(last_run=None, last_session=None)
+            doc["autopilot"].update(last_run=None, **({"last_session": None} if close else {}))
             store.put("settings", "assistant", doc)
-        ran = []
-        for _ in range(3):
-            due_again()
-            ran.append(c.post("/api/v1/assistant/autopilot").json())
-        assert [r["ran"] for r in ran] == [True, True, False] and len(script.seen) == 2
-        assert ran[2]["skipped"] == "today's reviews are used up" and "its 2 reviews for today" in ran[2]["why"]
-        assert ran[0]["notify"] is True
+            return c.post("/api/v1/assistant/autopilot").json()
+        first = due(close=True)
+        assert first["ran"] and first["reason"] == "close" and first["notify"] is True
+        assert due(close=False)["reason"] == "intraday"                       # the second of the three
+        held = due(close=False)                                               # the third place is kept for the close
+        assert held["ran"] is False and held["skipped"] == "today's reviews are used up" and len(script.seen) == 2
+        assert "the review after the close still runs" in held["why"]
+        after = due(close=True)                                               # and the review after the close is never held back for it
+        assert after["ran"] and after["reason"] == "close" and len(script.seen) == 3
         # the report is written in the language chosen in Settings, and in the mandate's when none was chosen
         briefs = [" ".join(b["text"] for b in seen["messages"][0]["content"]) for seen in script.seen]
         assert "Write the report in the language of the mandate" in briefs[0]
-        c.put("/api/v1/assistant/settings", json={"language": "en", "autopilot_max_per_day": 3})
-        due_again()
-        assert c.post("/api/v1/assistant/autopilot").json()["ran"] and len(script.seen) == 3
-        assert "Write the report in English." in " ".join(b["text"] for b in script.seen[2]["messages"][0]["content"])
-        # a ceiling in money holds a review back the same way, and says which ceiling
-        c.put("/api/v1/assistant/settings", json={"autopilot_max_per_day": 10, "monthly_usd": 0.0001})
-        due_again()
-        held = c.post("/api/v1/assistant/autopilot").json()
-        assert held["ran"] is False and held["skipped"] == "the budget is used up" and "This month's assistant budget" in held["why"]
-        assert len(script.seen) == 3
-        # what a day of reviews can come to: the schedule's count, and what a review did cost on average
-        c.put("/api/v1/assistant/settings", json={"monthly_usd": 0, "autopilot_max_per_day": 12})
+        c.put("/api/v1/assistant/settings", json={"language": "en", "autopilot_max_per_day": 12})
+        assert due(close=False)["ran"] and len(script.seen) == 4
+        assert "Write the report in English." in " ".join(b["text"] for b in script.seen[3]["messages"][0]["content"])
+        # a ceiling in money holds a review back, the one after the close too, and says which ceiling
+        c.put("/api/v1/assistant/settings", json={"monthly_usd": 0.0001})
+        held = due(close=True)
+        assert held["ran"] is False and held["skipped"] == "the budget is used up" and held["ceiling"] == "month"
+        assert "This month's assistant budget" in held["why"] and len(script.seen) == 4
+        # what a day of reviews can come to: what the schedule asks for, what the day's limit lets through, and
+        # what a review did cost on average
+        c.put("/api/v1/assistant/settings", json={"monthly_usd": 0})
         cost = c.get("/api/v1/assistant").json()["spending"]["autopilot"]
         each = cost_usd("claude-opus-5-5", USAGE)
-        assert cost["reviews_a_day"] == 12 and cost["reviews_counted"] == 3            # every 15 minutes asks for more than the 12 allowed
+        assert (cost["reviews_asked"], cost["reviews_a_day"], cost["reviews_counted"]) == (20, 12, 4)   # every 15 minutes asks for more than 12
         assert cost["review_usd"] == pytest.approx(each, abs=1e-4) and cost["day_usd"] == pytest.approx(12 * each, abs=1e-3)
         c.put("/api/v1/assistant/settings", json={"autopilot_every_minutes": 60, "daily_usd": 0.01})
         cost = c.get("/api/v1/assistant").json()["spending"]["autopilot"]
-        assert cost["reviews_a_day"] == 6 and cost["day_usd"] == 0.01                  # never more than the day's ceiling
+        assert (cost["reviews_asked"], cost["reviews_a_day"]) == (6, 6) and cost["day_usd"] == 0.01     # never more than the day's ceiling
+        c.put("/api/v1/assistant/settings", json={"autopilot_max_per_day": 1})                         # one a day is the one after the close
+        assert c.get("/api/v1/assistant").json()["spending"]["autopilot"]["reviews_a_day"] == 1
         c.put("/api/v1/assistant/settings", json={"autopilot_mode": "after_close"})
         assert c.get("/api/v1/assistant").json()["spending"]["autopilot"]["reviews_a_day"] == 1
         c.put("/api/v1/assistant/settings", json={"autopilot_mode": "off"})
@@ -709,7 +713,10 @@ def test_a_ceiling_reached_in_the_middle_of_the_work_stops_it_before_the_next_ca
 
 
 
-def test_the_daily_ceiling_is_five_dollars_until_the_person_chooses_another(tmp_path):
+def test_the_ceilings_are_five_dollars_a_day_and_sixty_a_month_until_the_person_chooses_others(tmp_path):
     with app_with(tmp_path, Script()) as c:
         s = c.get("/api/v1/assistant").json()
-        assert s["settings"]["daily_usd"] == 5.0 and s["spending"]["daily_limit_usd"] == 5.0 and s["settings"]["monthly_usd"] == 0
+        assert s["settings"]["daily_usd"] == 5.0 and s["spending"]["daily_limit_usd"] == 5.0
+        assert s["settings"]["monthly_usd"] == 60.0 and s["spending"]["monthly_limit_usd"] == 60.0
+        # no ceiling at all is still theirs to choose, and it is kept
+        assert c.put("/api/v1/assistant/settings", json={"daily_usd": 0, "monthly_usd": 0}).json()["settings"]["monthly_usd"] == 0

@@ -6,8 +6,8 @@ For: everyone
 Open: /settings?tab=assistant
 عربي: تحكّم أكتر في المساعد
 
-- What it costs: next to the daily ceiling there is now a monthly one, and Settings, Assistant shows what was spent today (conversations and its own reviews apart), this month and over the last seven days.
-  عربي: التكلفة: جنب السقف اليومي بقى فيه سقف شهري، وصفحة Settings ثم Assistant بتعرض المصروف النهارده (المحادثات والمراجعات الآلية كل واحدة لوحدها)، والشهر ده، وآخر 7 أيام.
+- What it costs: next to the daily ceiling (USD 5) there is now a monthly one (USD 60 unless you change it), and Settings, Assistant shows what was spent today (conversations and its own reviews apart), this month and over the last seven days.
+  عربي: التكلفة: جنب السقف اليومي (5 دولار) بقى فيه سقف شهري (60 دولار لحد ما تغيّره)، وصفحة Settings ثم Assistant بتعرض المصروف النهارده (المحادثات والمراجعات الآلية كل واحدة لوحدها)، والشهر ده، وآخر 7 أيام.
 - How it answers: choose the language it always answers in, and write standing instructions it follows in every conversation and review.
   عربي: طريقة الرد: اختار اللغة اللي يرد بيها دايمًا، واكتب تعليمات ثابتة يمشي عليها في كل محادثة ومراجعة.
 - Autopilot: set the most reviews in one day, and choose whether your devices are told when a review changed something. If a ceiling holds a review back, you are told once.

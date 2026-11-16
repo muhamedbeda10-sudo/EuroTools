@@ -32,9 +32,15 @@ export default function RealAutoSettings() {
     if (enabled && !data.box.enabled && !confirm(
       "Switch automatic orders on?\n\nFrom then on, during the session, an order the assistant proposes inside this box is sent to the broker " +
       "with real money WITHOUT asking you first. You can stop it at any moment from the Real account page.")) return;
+    // An empty field means "not set". Anything else must be a number: text that is not one is refused here, never sent as "not set".
+    const amount = (v: string) => (String(v).trim() === "" ? null : Number(v));
+    const typed = [d.budget, d.max_order_value, d.max_day_buys, d.max_day_value, d.max_loss, d.max_stop_pct];
+    if (typed.some((v) => String(v).trim() !== "" && !Number.isFinite(Number(v)))) {
+      setMsg({ ok: false, text: "One of the amounts is not a number. Write digits only, such as 15000 or 15000.50." });
+      return;
+    }
     setBusy(true);
     setMsg(null);
-    const amount = (v: string) => (v.trim() === "" ? null : Number(v));
     try {
       if (!enabled && data.box.enabled) await api("/api/v1/real-orders/auto/stop", { method: "POST" });   // also cancels its open buys
       await api("/api/v1/real-orders/auto", { method: "PUT", json: {

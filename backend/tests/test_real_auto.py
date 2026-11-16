@@ -1019,3 +1019,7 @@ def test_the_owner_can_cap_what_it_buys_in_one_day_in_money(floor):
     told, _ = suggest(c, qty=5, limit_price=35.7)                               # 178.50 fits under it
     assert told["what_happens_next"].startswith("AUTOMATIC") and len(look(c)["sent"]) == 1
     assert "it may buy in one day" in " ".join(assistant._real_note(core_of(c)))
+    # a page loaded before this limit existed saves the box without naming it: the limit stays; cleared on purpose, it goes
+    kept = {k: v for k, v in auto(c)["box"].items() if k not in ("max_day_value", "enabled_at")}
+    assert float(c.put("/api/v1/real-orders/auto", json=kept).json()["box"]["max_day_value"]) == 1100
+    assert c.put("/api/v1/real-orders/auto", json={**kept, "max_day_value": None}).json()["box"]["max_day_value"] is None

@@ -196,18 +196,20 @@ broker.
   places by hand are not limited.
 - Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
   (optionally also during the session) and act inside those limits following the user's written mandate. The
-  user sets the most reviews in one day (12 unless changed); past it, no review runs until the next day.
+  user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
+  session and always leaves a place for the one after the close, which is never skipped for it.
 
 ## The assistant's own settings (Settings, Assistant)
-- What it costs: a daily ceiling and a monthly one, in US dollars (0 means none; the daily one cannot be above
-  the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
+- What it costs: a daily ceiling and a monthly one, in US dollars (USD 5 a day and USD 60 a month unless the
+  user changes them; 0 means none; the daily one cannot be above the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
   next day or month, or until the user raises it. The page shows what was spent today (conversations and the
   autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
   model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
   the middle when it is reached ("The assistant stopped here"); what was already done stays done.
-- What the autopilot can cost in a day is shown in its card: the most reviews the saved schedule asks for (one
-  after the close; during the session, one at the open and one every so many minutes; never more than the
-  day's limit), times what a review cost on average over the last seven days. It never passes the daily
+- What the autopilot can cost in a day is shown in its card: the reviews the saved schedule runs (one after the
+  close; during the session, one at the open and one every so many minutes, as far as the day's limit lets
+  through; the card says when the schedule asks for more than the limit allows), times what a review cost on
+  average over the last seven days. It never passes the daily
   ceiling. Only reviews and conversations cost money: the app's own looks at the real account, its stop-losses
   and the sending of what was decided use no model and cost nothing.
 - How it answers: the language (the one the user writes in, always Egyptian Arabic, or always English) and
@@ -217,7 +219,9 @@ broker.
   one day, 20 unless changed, and 0 for none at all. The limits on real orders themselves and the automatic box
   are in Settings, Real trading.
 - Autopilot notices: the owner's devices with notifications on are told when a review changed something, unless
-  the user switched that off. A review that failed is always told, and one held back by a ceiling is told once.
+  the user switched that off. The notice gives the number of changes only; the report is read in the app. A
+  review that failed is always told. One held back by the day's ceiling is told once that day, and by the
+  month's ceiling once that month.
 - The assistant cannot change any of these itself.
 
 ## What the simulation leaves out

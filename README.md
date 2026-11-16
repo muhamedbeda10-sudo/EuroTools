@@ -344,7 +344,7 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 | `ASSISTANT_EFFORT` | `low`, `medium` (default), `high`, `xhigh`, `max`: how much the model thinks, and costs. |
 | `ASSISTANT_USERS` | `admins` (default) or `all`: who may spend from the key when several people have accounts. |
 | `ASSISTANT_DAILY_USD` | Rough daily ceiling per account, default `5`. `0` removes it. |
-| `ASSISTANT_MONTHLY_USD` | Rough monthly ceiling per account, default `0` (none). |
+| `ASSISTANT_MONTHLY_USD` | Rough monthly ceiling per account, default `60`. `0` removes it. |
 
 - The Claude API is billed per use by Anthropic and is separate from a Claude subscription. The panel shows an
   estimate of what a conversation and the day have cost.
@@ -374,8 +374,10 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   is open, the page asks the server to run a review. The server decides whether one is due, claims it (so two
   tabs cannot both run it), builds a briefing from the portfolio and the user's written mandate, and lets the
   assistant act inside the limits. Each review is a stored conversation. A day has a largest number of reviews
-  (12 by default); a review that changed something is pushed to the owner's devices unless they switched that
-  off (`push.review`), and one held back by a ceiling is told once. It runs only while the app is open in
+  (12 by default), which holds back the ones during the session and always leaves a place for the one after
+  the close. A review that changed something is pushed to the owner's devices unless they switched that off
+  (`push.review`): the count only, never the model's words. One held back by a ceiling is told once (once in
+  the month for the monthly ceiling). It runs only while the app is open in
   a browser; with anything less than full access it looks and reports only.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
   description on the second, then the text under `## ` headings). `app-guide` describes the app; any other

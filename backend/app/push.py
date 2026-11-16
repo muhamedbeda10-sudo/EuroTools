@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import real_orders
 from .config import Settings
+from .data.calendar import cairo_now
 from .services import App, now_iso
 from .store.errors import ConflictError
 
@@ -47,6 +48,7 @@ log = logging.getLogger(__name__)
 
 SUBS = "push_subs"
 SEEN = ("settings", "push_seen")     # which remarks were already sent, so the same one is not sent every minute
+LONG, LONG_SECONDS = "once:", 35 * 86400.0   # what is told a single time, and for how long that is remembered
 MAX_DEVICES = 8
 MIN_SECRET = 16                      # a secret shorter than this is no secret: the features that need one stay off
 MAX_REMARKS = 4                      # remarks told in one look; the rest are told at the next
@@ -265,20 +267,29 @@ def send(core: App, title: str, message: str, *, tag: str | None = None, url: st
     return out
 
 
-def remark(core: App, title: str, message: str, *, every: float = SAME_REMARK_SECONDS, tag: str | None = None, post=None) -> dict:
-    """Tell the owner's devices one thing, and not again until `every` seconds have passed. Marked as told only once a device has it."""
+def _kept(seen: dict) -> dict:
+    """What is still remembered as told: a day for most things, the month through for what is told once a month."""
+    return {k: v for k, v in seen.items() if real_orders._age(v) < (LONG_SECONDS if k.startswith(LONG) else 86400)}
+
+
+def remark(core: App, title: str, message: str, *, every: float = SAME_REMARK_SECONDS, tag: str | None = None,
+           once: str | None = None, post=None) -> dict:
+    """Tell the owner's devices one thing, and not again until `every` seconds have passed. Marked as told only once a device has it.
+
+    `once` names what is told a single time over a long while (a month's ceiling: "2026-11"), whatever the words.
+    """
     out = {"sent": 0, "failed": 0, "removed": 0}
     try:
         if _signing_key(core.settings) is None or not core.store.list(SUBS):
             return out
-        key = hashlib.sha256(f"{title}|{message}".encode()).hexdigest()[:16]
+        key = LONG + once if once else hashlib.sha256(f"{title}|{message}".encode()).hexdigest()[:16]
         seen = core.store.get(*SEEN) or {}
-        if key in seen and real_orders._age(seen[key]) < every:
+        if key in seen and real_orders._age(seen[key]) < (LONG_SECONDS if once else every):
             return out
         out = send(core, title, message, tag=tag or f"note-{key}", post=post)
         if out["sent"]:
             try:
-                core.store.put(*SEEN, {**{k: v for k, v in seen.items() if real_orders._age(v) < 86400}, key: now_iso()})
+                core.store.put(*SEEN, {**_kept(seen), key: now_iso()})
             except ConflictError:
                 pass
     except Exception:  # noqa: BLE001
@@ -292,11 +303,12 @@ def review(core: App, done: dict, post=None) -> dict:
         if done.get("error"):
             return send(core, "Autopilot", f"The assistant's review stopped: {done['error']}", tag="autopilot", url="/", post=post)
         if done.get("changes") and done.get("notify", True):
-            words = (done.get("summary") or "").strip().replace("\n", " ")[:220]
-            return send(core, "Autopilot", f"The assistant reviewed and made {done['changes']} change(s). {words}".strip(),
+            # The count only: the report is the model's own words, and may name a balance. It is read in the app.
+            return send(core, "Autopilot", f"The assistant reviewed and made {done['changes']} change(s). Open the app to read its report.",
                         tag="autopilot", url="/", post=post)
     elif done.get("skipped") in ("the budget is used up", "today's reviews are used up") and done.get("why"):
-        return remark(core, "Autopilot", f"No review was made: {done['why']}", every=20 * 3600.0, post=post)   # once a day is enough
+        month = f"{cairo_now():%Y-%m}" if done.get("ceiling") == "month" else None   # a month's ceiling is told once in that month
+        return remark(core, "Autopilot", f"No review was made: {done['why']}", every=20 * 3600.0, once=month, post=post)
     return {"sent": 0, "failed": 0, "removed": 0}
 
 
@@ -341,7 +353,7 @@ def report(core: App, result: dict, post=None) -> dict:
         notes = result.get("notes") or []
         if notes:
             seen = core.store.get(*SEEN) or {}
-            fresh = {k: v for k, v in seen.items() if real_orders._age(v) < 86400}   # kept a day: some remarks are told once a day
+            fresh = _kept(seen)   # kept a day: some remarks are told once a day
             told = 0
             for note in notes:
                 key = hashlib.sha256(note.encode()).hexdigest()[:16]

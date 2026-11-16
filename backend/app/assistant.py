@@ -309,13 +309,17 @@ def spent_month(core: App) -> float:
 SESSION_MINUTES = 270   # 10:00 to 14:30 Cairo
 
 
-def reviews_a_day(auto: dict) -> int:
-    """The most reviews the saved schedule can ask for in one day: one after the close, and during the session
-    one at the open and one every so many minutes; never more than the day's own limit."""
+def reviews_a_day(auto: dict) -> tuple[int, int]:
+    """What the saved schedule asks for in one day, and what the day's limit lets through.
+
+    Asked: one review after the close, and during the session one at the open and one every so many minutes.
+    The review after the close always runs; the day's limit holds back the ones during the session, so that
+    one place is always left for it.
+    """
     if auto["mode"] == "off":
-        return 0
-    asked = 1 if auto["mode"] == "after_close" else 2 + SESSION_MINUTES // int(auto["every_minutes"])
-    return min(int(auto["max_per_day"]), asked)
+        return 0, 0
+    during = 0 if auto["mode"] == "after_close" else 1 + SESSION_MINUTES // int(auto["every_minutes"])
+    return 1 + during, 1 + min(during, max(int(auto["max_per_day"]) - 1, 0))
 
 
 def spending(core: App) -> dict:
@@ -332,7 +336,7 @@ def spending(core: App) -> dict:
     now = docs[days[0]]
     reviews = sum(int(d.get("reviews") or 0) for d in docs.values())
     each = sum(float((d.get("by") or {}).get("autopilot") or 0.0) for d in docs.values()) / reviews if reviews else None
-    at_most = reviews_a_day(chosen["autopilot"])
+    asked, at_most = reviews_a_day(chosen["autopilot"])
     a_day = at_most * each if each is not None else None
     if a_day is not None and chosen["daily_usd"] > 0:
         a_day = min(a_day, chosen["daily_usd"])
@@ -341,20 +345,25 @@ def spending(core: App) -> dict:
             "month_usd": round(spent_month(core), 4), "monthly_limit_usd": chosen["monthly_usd"],
             "days": [{"date": d, "usd": round(float(docs[d].get("cost_usd") or 0.0), 4), "calls": int(docs[d].get("calls") or 0)}
                      for d in days],
-            "autopilot": {"reviews_a_day": at_most, "reviews_counted": reviews,
+            "autopilot": {"reviews_a_day": at_most, "reviews_asked": asked, "reviews_counted": reviews,
                           "review_usd": round(each, 4) if each is not None else None,
                           "day_usd": round(a_day, 4) if a_day is not None else None}}
 
 
-def over_budget(core: App) -> str | None:
-    """Which ceiling the person set has been reached, in words for them; None when there is room."""
+def reached(core: App) -> tuple[str, str] | None:
+    """The ceiling the person set that has been reached ("day" or "month"), with words for them; None when there is room."""
     chosen = prefs(core)
     if chosen["daily_usd"] > 0 and spent_today(core) >= chosen["daily_usd"]:
-        return f"Today's assistant budget (about USD {chosen['daily_usd']:.2f}) is used up. It resets at midnight Cairo time."
+        return "day", f"Today's assistant budget (about USD {chosen['daily_usd']:.2f}) is used up. It resets at midnight Cairo time."
     if chosen["monthly_usd"] > 0 and spent_month(core) >= chosen["monthly_usd"]:
-        return (f"This month's assistant budget (about USD {chosen['monthly_usd']:.2f}) is used up. It resets on the first of "
-                "the month, or raise it in Settings → Assistant.")
+        return "month", (f"This month's assistant budget (about USD {chosen['monthly_usd']:.2f}) is used up. It resets on the first "
+                         "of the month, or raise it in Settings → Assistant.")
     return None
+
+
+def over_budget(core: App) -> str | None:
+    hit = reached(core)
+    return hit[1] if hit else None
 
 
 def _record(core: App, chat: dict, model: str, usage: dict) -> None:
@@ -369,11 +378,14 @@ def _record(core: App, chat: dict, model: str, usage: dict) -> None:
     by = dict(doc.get("by") or {})
     by[kind] = round(float(by.get(kind) or 0.0) + cost, 6)
     doc.update(cost_usd=round(float(doc.get("cost_usd") or 0.0) + cost, 6), calls=int(doc.get("calls") or 0) + 1, by=by)
-    month, total = _month(core)   # stored, or added up from the days, which do not yet hold this call
-    total.update(cost_usd=round(float(total.get("cost_usd") or 0.0) + cost, 6), calls=int(total.get("calls") or 0) + 1)
+    if kind == "autopilot" and total["calls"] == 1:
+        doc["reviews"] = int(doc.get("reviews") or 0) + 1   # a review is counted when its first call is paid for
+    month, sum_ = _month(core)   # stored, or added up from the days, which do not yet hold this call
+    sum_.update(cost_usd=round(float(sum_.get("cost_usd") or 0.0) + cost, 6), calls=int(sum_.get("calls") or 0) + 1)
     try:
-        core.store.put("assistant_usage", day, doc)
-        core.store.put("assistant_usage", month, total)
+        with core.store.transaction():   # together or not at all, so the month never falls behind its days
+            core.store.put("assistant_usage", day, doc)
+            core.store.put("assistant_usage", month, sum_)
     except ConflictError:
         pass  # two conversations at once: the running totals are an estimate, never a reason to stop
 
@@ -699,14 +711,17 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
     if not state["due"]:
         return {"ran": False, **state}
     chosen = prefs(core)
-    spent = over_budget(core)
-    if spent:
-        return {"ran": False, **state, "skipped": "the budget is used up", "why": spent}
+    hit = reached(core)
+    if hit:
+        return {"ran": False, **state, "skipped": "the budget is used up", "ceiling": hit[0], "why": hit[1]}
     auto, today = chosen["autopilot"], cairo_now().date().isoformat()
     done = auto["count"] if auto["day"] == today else 0
-    if done >= auto["max_per_day"]:
+    # The day's limit holds back the reviews during the session, and always leaves a place for the one after the
+    # close: that one is never skipped for it (there is one per session, and the money ceilings still bound it).
+    if state["due"] != "close" and done >= auto["max_per_day"] - 1:
         return {"ran": False, **state, "skipped": "today's reviews are used up",
-                "why": f"The assistant has made its {auto['max_per_day']} reviews for today (Settings → Assistant)."}
+                "why": f"The assistant has made the {done} review(s) it may make during the session today, of {auto['max_per_day']} "
+                       "in one day; the review after the close still runs (Settings → Assistant)."}
     try:
         with core.store.transaction():
             chat = new_chat(core, title=f"Autopilot · {cairo_now():%Y-%m-%d %H:%M}", kind="autopilot")
@@ -714,12 +729,6 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
                            last_session=state["session"] if state["due"] == "close" else chosen["autopilot"]["last_session"])
     except ConflictError:
         return {"ran": False, **state, "skipped": "another window is already running it"}
-    day, usage = _usage_doc(core)   # the day's reviews are counted, so the page can say what one costs on average
-    usage["reviews"] = int(usage.get("reviews") or 0) + 1
-    try:
-        core.store.put("assistant_usage", day, usage)
-    except ConflictError:
-        pass   # a conversation wrote its cost at the same moment: the count is for an estimate only
     # Without full access the review only looks and reports: nothing can be approved while nobody is there.
     access = "full" if chosen["access"] == "full" else "read"
     trades, error, text = 0, None, []
