@@ -826,9 +826,12 @@ def knowledge_index() -> list[dict]:
             for r in library()]
 
 
+ABOUT_THE_APP = ("app-guide", "whats-new")   # the app's own guide and its release notes: not trading references
+
+
 def trading_references() -> list[str]:
-    """The names of the references that teach a trading method, which is every one but the app's own guide."""
-    return [r.name for r in library() if r.name != "app-guide"]
+    """The names of the references that teach a trading method: every one but the app's own guide and release notes."""
+    return [r.name for r in library() if r.name not in ABOUT_THE_APP]
 
 
 def library_note() -> str:

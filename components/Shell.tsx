@@ -17,6 +17,7 @@ import { SHOW_TOAST } from "@/lib/realAuto";
 import InstallApp from "./InstallApp";
 import MarketStrip from "./MarketStrip";
 import RealAutoRunner from "./RealAutoRunner";
+import WhatsNew from "./WhatsNew";
 import SymbolSearch from "./SymbolSearch";
 
 /** The owner's real brokerage account (read-only). Listed only for the sign-in the server names as its owner. */
@@ -434,6 +435,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
                 ))}
               </div>
             ))}
+            <WhatsNew />
             <InstallApp />
           </nav>
           <div className="side-foot">
