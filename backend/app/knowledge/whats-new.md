@@ -1,6 +1,23 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.5.1 · 2026-11-16 · Price depth shows what the feed really sends
+For: everyone
+عربي: «Price depth» بيعرض اللي التغذية بتبعته فعلًا
+
+- The market-data feed sends the best bid and the best ask with their sizes, and the shares waiting on each side in total. It sends no price levels behind them. The panel on the stock page used to draw an empty chart and a one-row table as if the rest were missing by mistake; it now shows the best prices, the spread and buyers against sellers, and says that the other levels do not reach the app.
+  عربي: تغذية البيانات بتبعت أفضل طلب وأفضل عرض بكمياتهم، وإجمالي الأسهم المنتظرة في كل ناحية، ومش بتبعت مستويات الأسعار اللي وراهم. اللوحة في صفحة السهم كانت بترسم شارت فاضي وجدول بسطر واحد كأن الباقي ناقص بالغلط؛ دلوقتي بتعرض أفضل الأسعار والفرق بينهم ونسبة المشترين للبائعين، وبتقول إن باقي المستويات مش بتوصل للتطبيق.
+- The assistant is told the same, so it does not speak of sizes at prices it cannot see.
+  عربي: المساعد اتبلّغ بنفس الكلام، فمش هيتكلم عن كميات عند أسعار مش شايفها.
+
+## 0.5.1 · 2026-11-16 · Automatic exits: what the app said about their price is corrected
+For: owner
+Open: /settings?tab=real
+عربي: الخروج الآلي: تصحيح الكلام المكتوب عن سعر البيع
+
+- Nothing changes in what the app does; what it said was wrong. A stop-loss or take-profit sale was described as priced "a few levels into the bids". The feed sends the best bid alone, so the sale is priced at the best bid, inside your price band. One that does not fill is still cancelled and priced again, up to six times a day.
+  عربي: مفيش تغيير في اللي التطبيق بيعمله؛ الكلام المكتوب هو اللي كان غلط. بيع وقف الخسارة أو جني الربح كان مكتوب إنه بيتسعّر «كام مستوى جوه الطلبات». التغذية بتبعت أفضل طلب بس، فالبيع بيتسعّر على أفضل طلب، جوه نطاق السعر بتاعك. واللي ما يتنفذش لسه بيتلغي ويتسعّر تاني، لحد 6 مرات في اليوم.
+
 ## 0.5.0 · 2026-11-16 · The app watches, and wakes the assistant only when needed
 For: everyone
 Open: /alerts

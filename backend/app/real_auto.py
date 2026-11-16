@@ -32,7 +32,8 @@ Only while the app is open
 
 What a stop-loss here can and cannot do
     It is watched by the app, not left at the broker. When the live price reaches it, the app sends a
-    sale priced a few levels into the bids, so that it fills; one that does not fill is cancelled and
+    sale priced at the best bid (a few levels into the bids, should the feed ever send them); one that
+    does not fill is cancelled and
     priced again. Shares the broker does not yet show as free to sell cannot be sold that way; the stop
     waits until it does. On EGX that is usually two sessions after the purchase, so the stop on a fresh
     purchase may not be able to act at once. After several failed attempts in a day the app stops trying
@@ -633,6 +634,8 @@ def _gate(core: App, bk: dict, today: str):
 # ---- getting out of a position ----------------------------------------------------------
 def _exit_price(core: App, symbol: str, pos: dict, last: float, band_pct: float, at_least: float | None) -> Decimal:
     """A price for getting out now: a few levels into the bids, so that it fills.
+
+    The feed sends the best bid alone (see data/depth.py), so in practice this is the best bid.
 
     Never further under the market than the owner's price band, never under the lowest price the exchange
     takes today, and for a take-profit never under the target. A level of the book is a price the exchange
