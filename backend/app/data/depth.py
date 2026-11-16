@@ -161,10 +161,13 @@ def build(row: dict) -> dict:
     near = last or best_bid or best_ask
     bids = sorted(parse_side(row.get("m_BidBook"), near), key=lambda lv: -lv["price"])
     asks = sorted(parse_side(row.get("m_AskBook"), near), key=lambda lv: lv["price"])
+    top_only = []  # the sides for which the feed gave no levels: only its best price is known
     if not bids and best_bid and num("m_BidVol"):
         bids = [{"price": best_bid, "size": num("m_BidVol"), "orders": None}]
+        top_only.append("bids")
     if not asks and best_ask and num("m_AskVol"):
         asks = [{"price": best_ask, "size": num("m_AskVol"), "orders": None}]
+        top_only.append("asks")
     best_bid = best_bid or (bids[0]["price"] if bids else None)
     best_ask = best_ask or (asks[0]["price"] if asks else None)
     total_bids = num("m_TotalBids") or sum(lv["size"] for lv in bids) or None
@@ -181,6 +184,8 @@ def build(row: dict) -> dict:
         "total_bids": total_bids, "total_asks": total_asks,
         "bid_share_pct": total_bids / both * 100 if both and total_bids else None,
         "bids": bids, "asks": asks,
+        # The sides that hold the feed's best price and nothing behind it, because no levels came with it.
+        "top_only": top_only or None,
         # Present only when the book text could not be read into levels: a short sample of it.
         "unread": unread or None,
     }
