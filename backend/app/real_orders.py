@@ -45,7 +45,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import broker
+from . import assistant_prefs, broker
 from .data.calendar import SESSION_CLOSE, cairo_now, is_trading_day, market_open
 from .data.younit import OrderRefused, OrderUncertain, YounitError
 from .domain.fees import compute_fees
@@ -57,7 +57,6 @@ SETTINGS = ("settings", "real_trading")
 STATE = ("settings", "real_orders_state")   # how many proposals wait, and the trading profile: one small read for the menu
 ID = re.compile(r"\d{6}[0-9a-f]{10}")
 MAX_WAITING = 10            # proposals waiting for the owner at one time
-MAX_ASSISTANT_PER_DAY = 20  # proposals the assistant may write in a day
 STALE_SENDING_SECONDS = 120.0   # a send that never reported back is treated as doubtful after this
 LIST_SECONDS = 10.0         # the broker's order list serves every look within this time
 OPEN_STATES = ("open", "partial")
@@ -400,6 +399,17 @@ def _as_order(rec: dict) -> OrderIn:
 
 
 # ---- proposals --------------------------------------------------------------------------
+def assistant_quota(core: App, records: list[dict] | None = None, now: datetime | None = None) -> dict:
+    """How many real-order proposals the assistant may write in one day (the owner's choice in Settings →
+    Assistant, none at all when 0), and how many it has written today."""
+    now = now or cairo_now()
+    today = now.date().isoformat()
+    records = _records(core, now) if records is None else records
+    allowed = int(assistant_prefs.prefs(core)["real_proposals_per_day"])
+    written = sum(1 for r in records if r["origin"] == "assistant" and r["created_day"] == today)
+    return {"allowed": allowed, "written": written, "left": max(0, allowed - written)}
+
+
 def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant", "automation"] = "manual",
             chat: str | None = None, *, protective: bool = False, hold: bool = False) -> dict:
     """Write a proposal down. Nothing is sent by this: it waits, for the owner or for the automation's next look.
@@ -415,8 +425,11 @@ def propose(core: App, order: OrderIn, origin: Literal["manual", "assistant", "a
         raise OrderError(f"{MAX_WAITING} proposals are already waiting for a decision. Decide on those first.")
     today = now.date().isoformat()
     if origin == "assistant":
-        if sum(1 for r in records if r["origin"] == "assistant" and r["created_day"] == today) >= MAX_ASSISTANT_PER_DAY:
-            raise OrderError(f"The assistant has already written {MAX_ASSISTANT_PER_DAY} proposals today, which is its limit.")
+        quota = assistant_quota(core, records, now)
+        if quota["allowed"] == 0:
+            raise OrderError("The owner has not allowed the assistant to propose real orders (Settings → Assistant).")
+        if quota["left"] == 0:
+            raise OrderError(f"The assistant has already written {quota['allowed']} proposals today, which is its limit.")
         if len(order.reason.strip()) < 15:
             raise OrderError("Say why: a proposal from the assistant needs its reasoning in a sentence or two.")
     result = examine(core, order, records, now, sending=False, protective=protective)

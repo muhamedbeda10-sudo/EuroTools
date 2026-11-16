@@ -109,8 +109,8 @@ broker.
   real orders the owner approved themselves were accepted by the broker and at least one of them filled.
 - With it on, a real order the assistant proposes is sent without waiting for the owner, if it fits the box
   the owner set: one of the named stocks; worth no more than the limit for one automatic order; within what is
-  free of the budget and the number of automatic buys for the day; and, for a buy, carrying a stop-loss no
-  further under its price than the owner allows. Everything else waits for the owner as before, and the page
+  free of the budget, the number of automatic buys for the day and, when the owner set one, the most it may buy
+  in one day in EGP; and, for a buy, carrying a stop-loss no further under its price than the owner allows. Everything else waits for the owner as before, and the page
   says why next to each waiting proposal.
 - Only the assistant's proposals go out by themselves, and only those written after the switch was turned on.
   An order the owner prepares always waits for the owner. The assistant can also mark a proposal to wait.
@@ -195,7 +195,34 @@ broker.
   trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
   places by hand are not limited.
 - Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
-  (optionally also during the session) and act inside those limits following the user's written mandate.
+  (optionally also during the session) and act inside those limits following the user's written mandate. The
+  user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
+  session and always leaves a place for the one after the close, which is never skipped for it.
+
+## The assistant's own settings (Settings, Assistant)
+- What it costs: a daily ceiling and a monthly one, in US dollars (USD 5 a day and USD 60 a month unless the
+  user changes them; 0 means none; the daily one cannot be above the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
+  next day or month, or until the user raises it. The page shows what was spent today (conversations and the
+  autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
+  model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
+  the middle when it is reached ("The assistant stopped here"); what was already done stays done.
+- What the autopilot can cost in a day is shown in its card: the reviews the saved schedule runs (one after the
+  close; during the session, one at the open and one every so many minutes, as far as the day's limit lets
+  through; the card says when the schedule asks for more than the limit allows), times what a review cost on
+  average over the last seven days. It never passes the daily
+  ceiling. Only reviews and conversations cost money: the app's own looks at the real account, its stop-losses
+  and the sending of what was decided use no model and cost nothing.
+- How it answers: the language (the one the user writes in, always Egyptian Arabic, or always English) and
+  standing instructions the user writes once, followed in every conversation and review. Instructions change
+  how it works and answers; they do not widen what its tools may do or any limit.
+- Real money (the brokerage account's owner only): how many real-order proposals the assistant may write in
+  one day, 20 unless changed, and 0 for none at all. The limits on real orders themselves and the automatic box
+  are in Settings, Real trading.
+- Autopilot notices: the owner's devices with notifications on are told when a review changed something, unless
+  the user switched that off. The notice gives the number of changes only; the report is read in the app. A
+  review that failed is always told. One held back by the day's ceiling is told once that day, and by the
+  month's ceiling once that month.
+- The assistant cannot change any of these itself.
 
 ## What the simulation leaves out
 Splits, bonus shares and dividends; partial fills, price limits and trading halts; the official closing price

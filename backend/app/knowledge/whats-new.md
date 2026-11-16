@@ -1,6 +1,30 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.4.0 · 2026-11-16 · More control over the assistant
+For: everyone
+Open: /settings?tab=assistant
+عربي: تحكّم أكتر في المساعد
+
+- What it costs: next to the daily ceiling (USD 5) there is now a monthly one (USD 60 unless you change it), and Settings, Assistant shows what was spent today (conversations and its own reviews apart), this month and over the last seven days.
+  عربي: التكلفة: جنب السقف اليومي (5 دولار) بقى فيه سقف شهري (60 دولار لحد ما تغيّره)، وصفحة Settings ثم Assistant بتعرض المصروف النهارده (المحادثات والمراجعات الآلية كل واحدة لوحدها)، والشهر ده، وآخر 7 أيام.
+- How it answers: choose the language it always answers in, and write standing instructions it follows in every conversation and review.
+  عربي: طريقة الرد: اختار اللغة اللي يرد بيها دايمًا، واكتب تعليمات ثابتة يمشي عليها في كل محادثة ومراجعة.
+- Autopilot: set the most reviews in one day, and choose whether your devices are told when a review changed something. If a ceiling holds a review back, you are told once.
+  عربي: الطيار الآلي: حدد أقصى عدد مراجعات في اليوم، واختار يوصلك إشعار لما مراجعة تغيّر حاجة ولا لأ. ولو سقف منع مراجعة، بيوصلك تنبيه مرة واحدة.
+- What a day of the autopilot can cost is shown on the same page: how many reviews your schedule asks for, and what a review has cost you on average. The ceilings now hold in the middle of a piece of work too.
+  عربي: نفس الصفحة بتعرض الطيار الآلي ممكن يكلّف كام في اليوم: عدد المراجعات اللي جدولك بيطلبها، ومتوسط تكلفة المراجعة عندك. والسقف بقى بيتطبق كمان في نص الشغل، مش في أوله بس.
+
+## 0.4.0 · 2026-11-16 · Daily money limits for the assistant on the real account
+For: owner
+Open: /settings?tab=real
+عربي: حدود يومية بالفلوس للمساعد على الحساب الحقيقي
+
+- Automatic orders have a new limit: the most it may buy in one day, in EGP (Settings, Real trading, Automatic orders).
+  عربي: الأوامر الآلية بقى ليها حد جديد: أقصى مبلغ يشتري بيه في اليوم بالجنيه (Settings ثم Real trading ثم Automatic orders).
+- You choose how many real-order proposals the assistant may write in one day, down to none at all (Settings, Assistant, Real money).
+  عربي: إنت اللي بتحدد عدد اقتراحات الأوامر الحقيقية اللي المساعد يكتبها في اليوم، ولحد صفر (Settings ثم Assistant ثم Real money).
+
 ## 0.3.0 · 2026-11-16 · What's new: every update is shown here
 For: everyone
 عربي: «الجديد»: كل تحديث بيظهر هنا

@@ -101,7 +101,24 @@ _younit.hold((1, "COMI", "Commercial International Bank", 120, 120, 33.4, 35.9),
 _settings = Settings(broker_account_uids="local", live_trading_enabled=True, cron_secret="local-timer", background_key="local",
                      background_secret="local-only-not-a-real-secret")
 _store = Store(_settings.data_dir / "egx.sqlite3")
-app = create_app(_settings, _store, younit=_younit)
+
+
+class StandInModel:
+    """The assistant without a model behind it: one fixed answer, priced like a real turn, so its screens,
+    its ceilings and what it spent can be opened locally. No API key, nothing is charged."""
+
+    name = "claude-opus-5-5"
+
+    def turn(self, *, system, tools, messages):
+        text = "This is the local stand-in for the assistant: no model is behind it here."
+        yield {"type": "text", "text": text}
+        yield {"type": "final", "message": {
+            "content": [{"type": "text", "text": text}], "tool_calls": [], "model": self.name, "refusal_category": None,
+            "usage": {"input": 60000, "output": 9000, "cache_read": 0, "cache_write": 0},
+            "stop_reason": "end_turn"}}
+
+
+app = create_app(_settings, _store, younit=_younit, assistant_model=StandInModel())
 
 
 @app.post("/e2e/assistant-proposal")

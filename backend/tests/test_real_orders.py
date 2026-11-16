@@ -703,6 +703,7 @@ def test_the_assistant_can_propose_and_nothing_more(tmp_path, monkeypatch):
         assert fake.sent == []
         seen = run("real_orders")[0]
         assert seen["can_propose_now"] and [w["reason"] for w in seen["waiting_for_the_owner"]] == [why]
+        assert seen["your_proposals_today"] == {"allowed": 20, "written": 1, "left": 19}
         # the owner's limits bind the assistant exactly as they bind the owner
         out, failed = run("propose_real_order", symbol="COMI", side="BUY", qty=500, limit_price=comi, reason=why)
         assert failed and "limit per order" in out["error"]
@@ -713,10 +714,13 @@ def test_the_assistant_can_propose_and_nothing_more(tmp_path, monkeypatch):
         out, failed = run("withdraw_real_order_proposal", id=owners["id"])
         assert failed and "Only a proposal the assistant wrote" in out["error"]
         # its proposals are capped for a day
-        monkeypatch.setattr(real_orders, "MAX_ASSISTANT_PER_DAY", 2)
+        store.put("settings", "assistant", {"real_proposals_per_day": 2})        # the owner's choice in Settings → Assistant
         out, failed = run("propose_real_order", symbol="NEWCO", side="BUY", qty=1, limit_price=55.9, reason=why)
         assert failed and "its limit" in out["error"]
         assert fake.sent == [] and fake.cancels == []
+        store.put("settings", "assistant", {"real_proposals_per_day": 0})        # and with none allowed, it cannot write one at all
+        out, failed = run("propose_real_order", symbol="NEWCO", side="BUY", qty=1, limit_price=55.9, reason=why)
+        assert failed and "has not allowed the assistant to propose real orders" in out["error"]
 
         # the owner approves the assistant's proposal: only then does it go out, and the assistant can see what became of it
         first = next(w for w in c.get("/api/v1/real-orders").json()["waiting"] if w["origin"] == "assistant")
@@ -773,4 +777,9 @@ def test_the_autopilot_hears_about_real_orders_only_when_its_owner_switched_them
         arm(c)
         propose(c)
         assert "1 proposal(s)" in note() and "only if the mandate asks for real orders" in note() and "PAPER" in note()
+        assert "You may write 20 more proposal(s) today" in note()
         assert note(owner=False) == "" and note(server=False) == ""
+        # the owner's allowance for the day: when none is left, or none was given, the review is told not to write one
+        store.put("settings", "assistant", {"real_proposals_per_day": 0})
+        assert "the owner allows you none" in note() and "propose_real_order" not in note() and "PAPER" in note()
+        store.delete("settings", "assistant")

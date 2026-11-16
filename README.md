@@ -134,7 +134,7 @@ is settled no further order for that stock and side can be approved.
 and take its own proposal back. It has no tool that approves, sends, cancels or changes the limits,
 and tests keep it so (`test_the_assistant_can_propose_and_nothing_more`,
 `test_orders_reach_the_broker_from_one_place_only`). Its proposals are bound by the same limits and
-capped at 20 a day.
+by a number per day the owner sets in Settings → Assistant (20 by default, 0 for none).
 
 Proposals, orders and what became of them are kept in the owner's own data (`real_orders_YYYYMM`)
 and every step is in the activity log. The paper ledger is never written by any of this.
@@ -153,7 +153,7 @@ Automatic orders. It goes out through the same path as a hand-approved order
 once more at the last moment in the owner's place. Whatever does not fit simply waits for the owner.
 
 - **The box.** Named stocks (required, at most 20); the most for one automatic order; the most
-  automatic buys in a day; a budget; a stop-loss on every buy, no further under its price than the
+  automatic buys in a day and, optionally, the most it may buy in one day in EGP; a budget; a stop-loss on every buy, no further under its price than the
   owner allows; and a loss for the day at which it stops buying. The owner's own limits for real
   orders apply on top of it.
 - **The budget is real.** It is the most the automation may have in the market at once, at cost,
@@ -344,6 +344,7 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 | `ASSISTANT_EFFORT` | `low`, `medium` (default), `high`, `xhigh`, `max`: how much the model thinks, and costs. |
 | `ASSISTANT_USERS` | `admins` (default) or `all`: who may spend from the key when several people have accounts. |
 | `ASSISTANT_DAILY_USD` | Rough daily ceiling per account, default `5`. `0` removes it. |
+| `ASSISTANT_MONTHLY_USD` | Rough monthly ceiling per account, default `60`. `0` removes it. |
 
 - The Claude API is billed per use by Anthropic and is separate from a Claude subscription. The panel shows an
   estimate of what a conversation and the day have cost.
@@ -356,15 +357,27 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 - A conversation is one document in the user's own data and only ever grows: the instructions and tool list
   are fixed and anything that varies (time, current page) is written into the user's message when it is sent.
 - **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): model, thinking effort, access,
-  daily ceiling, the limits on the assistant's own trades, and the autopilot. The environment values above are
-  only the defaults.
+  the daily and monthly ceilings, the language it answers in, standing instructions, the limits on the
+  assistant's own trades, the autopilot and, for the brokerage account's owner, how many real-order proposals
+  it may write in a day. The environment values above are only the defaults.
+- **Spending** is recorded per day and per month in the account's own data (`assistant_usage`), split into
+  conversations and autopilot reviews; the page shows today, the month and the last seven days. Both ceilings
+  are checked before every model call, so a turn stops in the middle when one is reached. The autopilot card
+  shows what a day can cost: the reviews the schedule asks for (`reviews_a_day`) times the measured average.
+- **What the person chose** (language, standing instructions) is appended at the very end of the system prompt,
+  after the text everyone shares, so the shared part stays cacheable. Instructions are the person's own words:
+  they are kept out of the activity log, and the prompt says they do not widen any tool or limit.
 - **Limits on its trades** are enforced in code on every trade the assistant places (`check_trade`): largest
   single trade and largest holding as a share of the portfolio, cash always kept, trades per day. Its trades are
   marked `origin: assistant` in the ledger.
 - **Autopilot** (off by default): after each completed session, and optionally every N minutes while the market
   is open, the page asks the server to run a review. The server decides whether one is due, claims it (so two
   tabs cannot both run it), builds a briefing from the portfolio and the user's written mandate, and lets the
-  assistant act inside the limits. Each review is a stored conversation. It runs only while the app is open in
+  assistant act inside the limits. Each review is a stored conversation. A day has a largest number of reviews
+  (12 by default), which holds back the ones during the session and always leaves a place for the one after
+  the close. A review that changed something is pushed to the owner's devices unless they switched that off
+  (`push.review`): the count only, never the model's words. One held back by a ceiling is told once (once in
+  the month for the monthly ceiling). It runs only while the app is open in
   a browser; with anything less than full access it looks and reports only.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
   description on the second, then the text under `## ` headings). `app-guide` describes the app; any other

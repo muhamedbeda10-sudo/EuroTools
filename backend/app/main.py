@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, whats_new
 from .accounts import AccountError, Accounts
-from .assistant_prefs import PrefsIn, save_prefs
+from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
 from .data.calendar import market_open
 from .data.feed import Feed, FirestoreDocs, StoreDocs
@@ -200,6 +200,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @api.exception_handler(real_orders.OrderError)
+    @api.exception_handler(PrefsError)
     @api.exception_handler(whats_new.ReleaseNotesError)
     @api.exception_handler(background.BackgroundError)
     @api.exception_handler(push.PushError)
@@ -799,7 +800,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         """Let the assistant review the portfolio by itself if a review is due. The page calls this; it does nothing otherwise."""
         if assistant_model is None or not assistant_allowed(request, core):
             return {"ran": False, "mode": "off"}
-        return assistant.run_autopilot(core, assistant_model)
+        done = assistant.run_autopilot(core, assistant_model)
+        push.review(core, done)   # the owner's other devices hear of it too
+        return done
 
     @api.post("/api/v1/assistant/chats", status_code=201)
     def assistant_new_chat(request: Request, core: App = Depends(get_core)):

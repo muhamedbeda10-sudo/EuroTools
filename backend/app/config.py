@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     assistant_users: str = "admins"
     # Rough daily spending ceiling per account, in USD (0 = no ceiling).
     assistant_daily_usd: float = 5.0
+    # The same for a calendar month (0 = no ceiling). Each person can set their own in Settings → Assistant.
+    assistant_monthly_usd: float = 60.0
     # The real brokerage account behind the Younit credentials can be looked at (never traded) by these
     # sign-ins only: Firebase user IDs, separated by commas. Empty = nobody. A server without sign-in
     # (local SQLite) may look only if the list contains the word "local". See app/broker.py.

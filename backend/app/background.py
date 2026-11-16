@@ -317,9 +317,8 @@ def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
             except Exception as exc:  # noqa: BLE001 - a review that failed must not hide what the look did
                 log.exception("background: the assistant's review failed")
                 review = {"ran": True, "error": f"{type(exc).__name__}"}
-            if review.get("ran") and review.get("error"):
-                push.send(core, "Autopilot", f"The assistant's review stopped: {review['error']}", tag="autopilot")
-            elif review.get("ran") and review.get("changes") and clock.monotonic() - started < SECOND_LOOK_LATEST:
+            push.review(core, review)   # what it changed, that it stopped, or that a ceiling the owner set held it back
+            if review.get("ran") and not review.get("error") and review.get("changes") and clock.monotonic() - started < SECOND_LOOK_LATEST:
                 # What it just proposed is judged now, not a minute from now. Minutes may have passed: everything is
                 # read again first, the owner's switches included, and the prices are read anew.
                 core.store.fresh()

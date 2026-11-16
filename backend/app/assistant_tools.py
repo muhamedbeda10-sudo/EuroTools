@@ -343,12 +343,16 @@ def _real_orders(core: App, a: NoArgs) -> dict:
             "next_session": v["session"], "limits_set_by_the_owner": v["limits"], "sent_today": v["today"],
             "waiting_for_the_owner": [pick(o, *REAL_ORDER) for o in v["waiting"]],
             "earlier": [pick(o, *REAL_ORDER) for o in v["orders"][:20]], "note": v["sync_problem"],
+            "your_proposals_today": real_orders.assistant_quota(core),
             "automatic_orders": real_auto.brief(core),
             "rules": "Limit orders for one day only. You can propose; you cannot approve, send or cancel. A proposal is sent "
                      "either when the owner approves it on the Real account page, or by itself when automatic_orders.on is "
-                     "true and it fits automatic_orders.box (an allowed stock, within the limit per order and what is free "
-                     "of the budget, a buy carrying a stop-loss no further under its price than max_stop_pct; a sale only "
+                     "true and it fits automatic_orders.box (an allowed stock, within the limit per order, what is free "
+                     "of the budget and, when the owner set one, the most it may buy in one day (max_day_value); a buy "
+                     "carrying a stop-loss no further under its price than max_stop_pct; a sale only "
                      "of shares listed in automatic_orders.positions). approved_by says which: owner or auto. "
+                     "your_proposals_today is how many proposals the owner lets you write in a day (allowed 0: none at "
+                     "all) and how many are left. "
                      "broker.status is the broker's own word for a sent order; broker.state is how the app reads it."}
 
 
