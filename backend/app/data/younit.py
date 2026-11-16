@@ -43,8 +43,6 @@ INDEX_PROBE = 25
 QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
 DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m_AskPrice", "m_AskVol",
                 "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
-# Asked for with a single look at the book only: what the feed says about the stock and this account's data.
-BOOK_STATUS_FIELDS = ["m_DataFeedSubscribtionStatus", "m_SymbolStatusUI", "m_TOP", "m_TOV"]   # the feed's own spelling
 TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_TradedValue",
                              "m_TradesCount", "m_LastTradeVolume", "m_Change", "m_PercentChange", "m_LastUpdated"]
 MARKET_TICK_FIELDS = ["m_LastTradePrice", "m_PercentChange", "m_TradedVolume"]
@@ -59,20 +57,21 @@ EXECUTION_DEFAULT = 1
 
 
 book_log = logging.getLogger("egx.depth")
-if not book_log.handlers:   # one line now and then; the host shows what is written here
-    book_log.addHandler(logging.StreamHandler())
-    book_log.setLevel(logging.INFO)
 BOOK_NOTE_SECONDS = 600
 _BOOK_NOTED: dict[str, float] = {}
 
 
 def _note_book(item: str, row: dict, book: dict) -> None:
-    """Leave a line every ten minutes per stock that says what the feed sent for its book.
+    """Say in the server's log what the feed sent for a stock's book, on the day it sends one.
 
-    The layout of the book fields is not documented. The line lets what this code read be checked
-    against what arrived, and tells a layout it does not read from a feed that sent no levels.
+    Seen on 16 November 2026, in the session: the feed sends the best bid and ask and the totals, and
+    leaves both book fields out. Their layout is not documented, and real exits are priced from the bids
+    read out of them. So when one does arrive, a line every ten minutes per stock sets what arrived next
+    to what was read from it.
     """
     from . import depth
+    if all(row.get(key) is None for key in depth.BOOK_KEYS):
+        return
     now = time.monotonic()
     if now - _BOOK_NOTED.get(item, -1e9) < BOOK_NOTE_SECONDS:
         return
@@ -480,8 +479,7 @@ class YounitClient:
         item = f"sy{int(stock_id)}"
         try:
             got = stream.snapshot(STREAM_URL, STREAM_ADAPTER,
-                                  [{"items": [item], "fields": DEPTH_FIELDS + BOOK_STATUS_FIELDS,
-                                    "data_adapter": STREAM_ADAPTER}],
+                                  [{"items": [item], "fields": DEPTH_FIELDS, "data_adapter": STREAM_ADAPTER}],
                                   user=self._trading_id, password=token, timeout=timeout, grace=0.2)
         except stream.StreamError as exc:
             raise YounitError(f"Younit price depth: {exc}") from None

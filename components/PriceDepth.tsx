@@ -42,7 +42,11 @@ function DepthChart({ bids, asks }: { bids: Level[]; asks: Level[] }) {
 type Stream = { tick: any; state: "connecting" | "live" | "failed"; error: string | null; at: Date | null };
 
 /** The order book of a stock. Given a working live stream it shows every change as it
- *  happens; without one (or if the stream fails) it asks again every 15 seconds. */
+ *  happens; without one (or if the stream fails) it asks again every 15 seconds.
+ *
+ *  The feed usually sends the best bid and ask and the totals, and no price levels behind
+ *  them (`top_only`). The panel then says so, and leaves out the chart and the table, which
+ *  would have one step and one row to show. */
 export default function PriceDepth({ symbol, stream }: { symbol: string; stream?: Stream }) {
   const [polled, setPolled] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,11 +90,13 @@ export default function PriceDepth({ symbol, stream }: { symbol: string; stream?
   const rows = Math.min(Math.max(bids.length, asks.length), 15);
   const maxSize = Math.max(1, ...bids.slice(0, rows).map((l) => l.size), ...asks.slice(0, rows).map((l) => l.size));
   const share = book.bid_share_pct;
+  const topOnly: string[] = book.top_only ?? [];   // sides for which the feed sent a best price and no levels
+  const bestOnly = topOnly.length === 2;           // neither side has levels: nothing to chart or to list
 
   return (
     <div>
       <p className="muted" style={{ fontSize: 12 }}>
-        Buy orders (green) and sell orders (red) waiting at each price.{" "}
+        {bestOnly ? "The best buy price (green) and the best sell price (red), and the shares waiting on each side." : "Buy orders (green) and sell orders (red) waiting at each price."}{" "}
         {book.streamed
           ? <><span className="badge ok">● live</span> updating as orders change · last change {stream!.at?.toLocaleTimeString()}</>
           : <>As of {String(book.as_of).slice(11, 19)} Cairo{book.market_open ? ", refreshed every 15 seconds." : ". The market is closed: this is the book as it was left."}</>}
@@ -105,8 +111,8 @@ export default function PriceDepth({ symbol, stream }: { symbol: string; stream?
             <div><div className="label">Highest bid</div><div className="v up" style={{ fontSize: 20 }}>EGP {px(book.best_bid)}</div><div className="muted">× {int(book.best_bid_size)}</div></div>
             <div style={{ textAlign: "right" }}><div className="label">Lowest ask</div><div className="v down" style={{ fontSize: 20 }}>EGP {px(book.best_ask)}</div><div className="muted">× {int(book.best_ask_size)}</div></div>
           </div>
-          <DepthChart bids={bids} asks={asks} />
-          <p style={{ margin: "12px 0 6px" }}><strong>Spread</strong> EGP {px(book.spread)} {book.spread_pct != null && <span className="muted">({num(book.spread_pct)}%)</span>}</p>
+          {!bestOnly && <DepthChart bids={bids} asks={asks} />}
+          <p style={{ margin: bestOnly ? "0 0 6px" : "12px 0 6px" }}><strong>Spread</strong> EGP {px(book.spread)} {book.spread_pct != null && <span className="muted">({num(book.spread_pct)}%)</span>}</p>
           {share != null && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
@@ -121,7 +127,14 @@ export default function PriceDepth({ symbol, stream }: { symbol: string; stream?
               </div>
             </div>
           )}
-          <div className="table-wrap">
+          {topOnly.length > 0 && !book.unread && (
+            <div className="note info" role="note" style={{ marginBottom: bestOnly ? 0 : 12 }}>
+              {bestOnly
+                ? "The market-data feed sends the best bid and the best ask only. The price levels behind them, which a broker's own app lists, do not reach this app."
+                : `The market-data feed sent no price levels behind the best ${topOnly[0] === "bids" ? "bid" : "ask"}.`}
+            </div>
+          )}
+          {!bestOnly && <div className="table-wrap">
             <table>
               <thead><tr><th>#</th><th>Size</th><th>Bid</th><th className="l">Ask</th><th className="l">Size</th><th className="l">#</th></tr></thead>
               <tbody>
@@ -140,7 +153,7 @@ export default function PriceDepth({ symbol, stream }: { symbol: string; stream?
                 })}
               </tbody>
             </table>
-          </div>
+          </div>}
         </>
       )}
       {book.unread && (

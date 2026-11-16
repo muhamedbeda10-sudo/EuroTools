@@ -17,7 +17,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | --- | --- |
 | Dashboard | Indices, breadth, movers (re-ranked live), paper portfolio (gross vs net), watchlist, signals, latest research, data status |
 | Market & Categories | Sector performance, all stocks, search/filters, custom categories |
-| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and price depth (best bid and ask, spread, buyers against sellers), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; real orders, each sent on the owner's approval; and automatic orders (what fits the owner's box, with stop-losses watched by the app, and a one-tap stop). Owner only |
@@ -174,8 +174,9 @@ once more at the last moment in the owner's place. Whatever does not fit simply 
   nothing is sold and the owner is told: a wrong figure in the feed can neither sell a position nor
   hide that its stop was reached. A reading stamped in the future is not a reading.
 - **Stop-loss and take-profit** are watched by the app, not left at the broker (the API takes day
-  limit orders only). When a fresh live price reaches the level, a sale is sent a few levels into
-  the bids, inside the owner's price band; one that does not fill is cancelled and priced again; a
+  limit orders only). When a fresh live price reaches the level, a sale is sent at the best bid,
+  inside the owner's price band (the feed sends no bid levels behind the best one; if it ever does,
+  the sale goes a few levels into them); one that does not fill is cancelled and priced again; a
   sale in doubt is never followed by another; other orders of the automation's in that stock are
   taken back first (a sale resting above the market, a buy still open); a stop-loss and a
   take-profit keep separate counts, only a sale that reached the broker counts, and after six in a
