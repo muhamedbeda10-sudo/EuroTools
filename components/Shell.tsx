@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { clientAuth, firebaseConfigured } from "@/lib/client/firebase";
 import { api } from "@/lib/api";
-import { LiveProvider } from "@/lib/live";
+import { LiveProvider, useStreaming } from "@/lib/live";
 import Assistant from "./Assistant";
 import { ASSISTANT_SETTINGS } from "./AssistantSettings";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
@@ -140,7 +140,8 @@ let feedUpdateStarted = false; // once per page load, however many times the she
 
 /** Pulls the day's prices from the feed in short batches and says what it is doing. */
 export function useFeedUpdate() {
-  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean; changed?: number; paused?: boolean }>({ running: false });
+  const [state, setState] = useState<{ running: boolean; left?: number; total?: number; error?: string; done?: boolean; changed?: number; paused?: boolean;
+    skipped?: number; reason?: string }>({ running: false });
   const run = async () => {
     setState({ running: true });
     let failures = 0;
@@ -161,7 +162,9 @@ export function useFeedUpdate() {
         failures = 0;
         changed += r.updated;
         seen = { left: r.remaining, total: r.total };
-        if (r.remaining === 0) return setState({ running: false, done: true, total: r.total, changed });
+        // `failed`: stocks the feed would not give this time. They are set aside and asked for again later;
+        // the update is over for everything else.
+        if (r.remaining === 0) return setState({ running: false, done: true, total: r.total, changed, skipped: r.failed || 0, reason: r.errors?.[0] });
         if (r.rate_limited) {
           if (await pause(r.retry_after)) continue;
           return setState({ running: false, done: true, total: r.total, changed }); // the next scheduled check picks it up
@@ -174,7 +177,8 @@ export function useFeedUpdate() {
           return setState({ running: false, done: true, changed });
         }
         // One slow batch is not a failure: whatever it saved is kept, so try the next one.
-        const transient = [0, 502, 503, 504].includes(e.status) && !/rejected|rate limit|could not be read/i.test(e.message);
+        // (A database that has used up its day says so with 503: asking again would only be refused again.)
+        const transient = [0, 502, 503, 504].includes(e.status) && !/rejected|rate limit|could not be read|usage limit/i.test(e.message);
         if (!transient || ++failures >= 3) {
           const text = e.status === 504 ? "The data feed is answering too slowly right now. Try again in a few minutes." : e.message;
           return setState({ running: false, error: text });
@@ -188,12 +192,19 @@ export function useFeedUpdate() {
 
 const RECHECK_MS = 15 * 60 * 1000;
 const LIVE_MS = 15 * 1000;
+/** While prices stream in, the figures the server works out (portfolio value, breadth) are re-read this often. */
+const REREAD_STREAMING_MS = 60 * 1000;
+let skippedTold = 0; // the count last told about, so the same note is not shown again on every re-check
 
 function FeedUpdater({ provider }: { provider: any }) {
   const { state, run } = useFeedUpdate();
   const [notice, setNotice] = useState(false);
+  const [skipNote, setSkipNote] = useState(false);
   const [liveError, setLiveError] = useState<string | null>(null);
   const first = provider.with_history === 0;
+  const streaming = useRef(false);
+  streaming.current = useStreaming();
+  const reread = useRef(0);
   const running = useRef(false);
   running.current = state.running;
 
@@ -219,7 +230,13 @@ function FeedUpdater({ provider }: { provider: any }) {
       try {
         const r = await api("/api/v1/data/live", { method: "POST" });
         setLiveError(null);
-        if (r.updated) window.dispatchEvent(new Event(DATA_UPDATED));
+        // Every screen re-reads on this. While the stream is live the prices on screen already move with each
+        // trade, so the re-read (which costs the database reads) is only for the figures worked out on the
+        // server, and once a minute is enough for them. Without the stream it is what moves the prices: every time.
+        if (r.updated && (!streaming.current || Date.now() - reread.current >= REREAD_STREAMING_MS)) {
+          reread.current = Date.now();
+          window.dispatchEvent(new Event(DATA_UPDATED));
+        }
       } catch (e: any) {
         // One missed minute is not worth an alarm; say so only when the feed itself reports a problem.
         setLiveError(e.status === 502 ? e.message : null);
@@ -239,6 +256,15 @@ function FeedUpdater({ provider }: { provider: any }) {
     return () => clearTimeout(t);
   }, [state.done, state.changed]);
 
+  // Some stocks were set aside: said once for a while, and again only when their number changes.
+  useEffect(() => {
+    if (!state.done || !state.skipped || state.skipped === skippedTold) return;
+    skippedTold = state.skipped;
+    setSkipNote(true);
+    const t = setTimeout(() => setSkipNote(false), 12000);
+    return () => clearTimeout(t);
+  }, [state.done, state.skipped]);
+
   if (state.running && state.paused)
     return (
       <Banner tone="info" title="The data feed asked for a short pause.">
@@ -255,6 +281,12 @@ function FeedUpdater({ provider }: { provider: any }) {
     );
   if (state.error)
     return <Banner tone="danger" title="Market data was not updated.">{state.error}</Banner>;
+  if (skipNote && state.skipped)
+    return (
+      <Banner title={`${state.skipped} stock${state.skipped === 1 ? "" : "s"} could not be updated.`}>
+        {state.reason ? `${state.reason}. ` : ""}The feed is asked for {state.skipped === 1 ? "it" : "them"} again in half an hour. Every other stock is up to date.
+      </Banner>
+    );
   if (notice) return <Banner tone="info">Market data updated.</Banner>;
   if (liveError) return <Banner title="Live prices are not coming through.">{liveError} Showing the last saved prices.</Banner>;
   return null;
@@ -302,13 +334,14 @@ function Background() {
           const review = await api("/api/v1/assistant/autopilot", { method: "POST" });
           if (review.mode === "off") autopilot = false;
           // Something the app saw waits for it (the pause after its last review is not over): ask again in a minute.
-          if (review.waiting > 0 && !review.ran && (review.mode === "events" || review.mode === "intraday")) lastAuto = Date.now() - AUTOPILOT_MS + 60_000;
+          if (review.waiting > 0 && !review.ran && !review.blocked && (review.mode === "events" || review.mode === "intraday")) lastAuto = Date.now() - AUTOPILOT_MS + 60_000;
           if (review.ran && !stopped) {
             if (review.changes > 0) window.dispatchEvent(new Event(DATA_UPDATED));
             const did = `${review.changes} change${review.changes === 1 ? "" : "s"}`;
-            setToasts((t) => [{ seq: `auto-${review.chat}`, title: "Autopilot", chat: review.chat,
+            setToasts((t) => [{ seq: `auto-${review.chat}`, title: review.account === "real" ? "Autopilot · real account" : "Autopilot", chat: review.chat,
                                 message: review.error ? `The review stopped: ${review.error}`
-                                  : review.reason === "event" ? `Woken by what it was watching: ${did}.` : `Reviewed the portfolio: ${did}.`,
+                                  : review.reason === "event" ? `Woken by what it was watching: ${did}.`
+                                  : `Reviewed the ${review.account === "real" ? "real account" : "portfolio"}: ${did}.`,
                                 note: review.error ? undefined : review.summary?.slice(0, 180) }, ...t].slice(0, 5));
           }
         }

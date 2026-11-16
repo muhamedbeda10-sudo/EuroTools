@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .store.errors import AuthError
+from .store.errors import AuthError, database_error
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
@@ -64,7 +64,8 @@ class Accounts:
             return None
         if res.status_code == 401:
             raise AuthError("sign in again")
-        res.raise_for_status()
+        if res.status_code >= 400:
+            raise database_error("read", res.status_code, res.text)
         return _fields(res.json())
 
     def can_manage(self) -> bool:
@@ -83,7 +84,8 @@ class Accounts:
                               params={"pageSize": 300} | ({"pageToken": page} if page else {}))
             if res.status_code in (401, 403):
                 raise AuthError("only an administrator can see the accounts")
-            res.raise_for_status()
+            if res.status_code >= 400:
+                raise database_error("read", res.status_code, res.text)
             data = res.json()
             for d in data.get("documents", []):
                 out.append({"uid": d["name"].rsplit("/", 1)[1], **_fields(d)})

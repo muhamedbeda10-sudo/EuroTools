@@ -9,7 +9,8 @@ having the assistant look again every so many minutes, it can leave the watching
 - When it fires, what happened is put in a small queue here. The autopilot then runs a short review about
   that event only ("event"), in the modes that wake it; otherwise the next review is told of it.
 - The automation's own way out of a real position (a stop-loss or take-profit sale it sent) is queued the
-  same way, so the assistant hears that the position is going.
+  same way, so the assistant hears that the position is going. Not when the owner set the autopilot to the
+  paper portfolio only: the real account is then none of a review's business, and waking it would cost for nothing.
 
 Nothing here calls the model or sends an order: it only remembers what happened until a review reads it.
 """
@@ -79,10 +80,13 @@ def wakes_now(core: App) -> bool:
 
 def note_exits(core: App, result: dict) -> int:
     """After a look by the automation: each sale it sent on its own way out of a position is queued for the
-    assistant, when events wake it. Never raises: word of a look must not break the look."""
+    assistant, when events wake it and its reviews have the real account in them. Never raises: word of a look
+    must not break the look."""
     try:
         exits = [o for o in (result.get("exits") or []) if o.get("status") == "sent"]
-        if not exits or not wakes_now(core):
+        # An exit exists only for the account's owner, so what they chose is what counts: set to the paper portfolio
+        # only, the autopilot is not told about the real account.
+        if not exits or not wakes_now(core) or prefs(core)["autopilot"]["account"] == "paper":
             return 0
         events = [{"ts": now_iso(), "kind": "real_exit", "symbol": o["symbol"], "note": "",
                    "message": f"The app sent a sale of {o['qty']:,} {o['symbol']} at {float(o['price']):g} on the real account, "

@@ -367,7 +367,13 @@ export default function Settings() {
                   ? `Updating… ${feed.state.total ? `${feed.state.total - (feed.state.left ?? feed.state.total)} of ${feed.state.total}` : ""}`
                   : "Update market data now"}
               </button>
-              {feed.state.done && <div className="note info" role="status" style={{ marginTop: 10 }}>Market data is up to date. Prices are re-checked at most every 15 minutes.</div>}
+              {feed.state.done && (
+                <div className="note info" role="status" style={{ marginTop: 10 }}>
+                  {feed.state.skipped
+                    ? `Market data is up to date, except ${feed.state.skipped} stock${feed.state.skipped === 1 ? "" : "s"} the feed did not give: ${feed.state.skipped === 1 ? "it is" : "they are"} asked for again in half an hour.`
+                    : "Market data is up to date."} Prices are re-checked at most every 15 minutes.
+                </div>
+              )}
               {feed.state.error && <div className="note danger" role="alert" style={{ marginTop: 10 }}>{feed.state.error}</div>}
               {pv.errors?.length > 0 && !feed.state.error && (
                 <div className="note" style={{ marginTop: 10 }}>Some stocks failed on the last update: {pv.errors.join("; ")}</div>

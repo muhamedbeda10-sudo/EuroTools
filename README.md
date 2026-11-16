@@ -88,6 +88,24 @@ Settings → Connections has a manual update button. The feed provides no sector
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
 
+A stock whose history the feed does not give (an empty or unreadable answer) is noted in the index
+(`tried`) and asked for again after 30 minutes. It is counted as `failed`, not as `remaining`, so it
+neither stops the update for the stocks after it nor is requested again on every page load. A sign-in
+the feed refuses (429) is not repeated until the pause it asked for is over.
+
+### Database reads
+
+Firestore counts every document read, and each request's security-rule lookups, against the
+project's daily allowance (50,000 reads on the free plan, shared with everything else in the
+project). When it is used up Firestore answers 429 and the API answers **503** with a sentence that
+says so (`store/errors.py`), not a 500. What keeps the count down:
+
+- the shared `egxMarket/meta` document is read at most once every few seconds per server instance;
+- an account's own imports (`instruments`, `bars`) are read once per import (`data_version`), not per request;
+- a batch that changed no bars does not move the shared version, so no instance reloads the price tables;
+- the browser shares requests for the same path made at the same moment, and while prices stream it
+  re-reads the server's figures once a minute instead of every 15 seconds.
+
 ## Install on a phone
 
 The site is an installable web app: it opens from the home screen in its own window, with no store
@@ -385,7 +403,8 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 - **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): model, thinking effort, access,
   the daily and monthly ceilings, the language it answers in, standing instructions, the limits on the
   assistant's own trades, the autopilot and, for the brokerage account's owner, how many real-order proposals
-  it may write in a day. The environment values above are only the defaults.
+  it may write in a day and which account the autopilot works on. The environment values above are only the
+  defaults.
 - **Spending** is recorded per day and per month in the account's own data (`assistant_usage`), split into
   conversations and autopilot reviews; the page shows today, the month and the last seven days. Both ceilings
   are checked before every model call, so a turn stops in the middle when one is reached. The autopilot card
@@ -405,6 +424,17 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   (`push.review`): the count only, never the model's words. One held back by a ceiling is told once (once in
   the month for the monthly ceiling). It runs only while the app is open in
   a browser; with anything less than full access it looks and reports only.
+- **The account the autopilot works on** (`autopilot.account`, the owner's choice; `assistant_prefs.autopilot_account`):
+  `paper`, `real` or `both`. `both` is the default and is how it worked before the choice existed: the briefing
+  is the paper portfolio, with a paragraph about real orders, to be used only when the mandate asks. With `real`
+  the briefing is built from the broker's own figures, the owner's limits and the automatic box instead
+  (`_real_side`); with `paper` real orders are left out of it. The choice is kept in code, not by the briefing:
+  each tool that moves money names its account (`Tool.account`), and a review made for one account is refused
+  the other account's tools in the loop (`_converse`), whatever the mandate says. That applies to the review
+  alone; a conversation is not affected. Only the brokerage account's owner can choose `real`; for anyone else
+  `both` is the paper portfolio. Set to `real` without a reachable account, no review runs
+  (`autopilot_blocked`) rather than turning it loose on the paper portfolio. Nothing here is a new way to the
+  broker: a review still only writes proposals, which go out through `real_orders._approve` as before.
 - **Watches** (`backend/app/wakes.py`): the app watches, the assistant is woken. An alert marked `wake` (by the
   person on the Alerts page, or by the assistant with `save_alert(wake_me=…)`) is checked in code like any
   alert; when it fires it is switched off and what happened is queued (`settings/assistant_wakes`, in the same
@@ -459,7 +489,7 @@ ledger (`origin: order:<id>`) with the usual fees. One stop and one target per s
   refused (409) instead of silently overwriting. User actions retry once.
 - Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
 - The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and
-  resumes it, keeping what was already saved.
+  resumes it, keeping what was already saved. A stock that failed is retried after 30 minutes.
 
 ## Known limits
 

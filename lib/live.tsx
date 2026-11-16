@@ -131,6 +131,8 @@ function useStore<T>(read: (s: Store) => T, fallback: T): T {
 export const useTick = (symbol: string): Tick | undefined =>
   useStore((s) => (s.state === "live" ? s.quotes.get(symbol) : undefined), undefined);
 export const useIndexTick = (name: string) => useStore((s) => (s.state === "live" ? s.indices.get(name) : undefined), undefined);
+/** Whether prices are arriving over the stream right now. Changes only when the stream starts or stops. */
+export const useStreaming = () => useStore((s) => s.state === "live", false);
 /** Connection state and a counter that moves whenever any price moved (for lists that re-rank). */
 export const useLiveState = () => {
   const state = useStore((s) => s.state, "off" as Store["state"]);

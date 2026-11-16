@@ -39,7 +39,7 @@ from .identity import AccountGate, TokenVerifier, ask_firestore
 from .llm import ClaudeModel
 from .services import App, NotFound, clean
 from .store import migrate
-from .store.errors import AuthError, ConflictError, StoreUnavailable
+from .store.errors import AuthError, ConflictError, DatabaseError
 from .store.firestore_store import FirestoreStore, uid_from_token
 from .store.postgres_store import Database, PostgresDocs, PostgresStore
 from .store.sqlite_store import Store
@@ -214,10 +214,6 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     async def _auth(_: Request, exc: AuthError):
         return JSONResponse({"detail": str(exc)}, status_code=401)
 
-    @api.exception_handler(StoreUnavailable)
-    async def _no_database(_: Request, exc: StoreUnavailable):
-        return JSONResponse({"detail": str(exc)}, status_code=503, headers={"Retry-After": "15"})
-
     @api.exception_handler(migrate.MigrationError)
     async def _not_moved(_: Request, exc: migrate.MigrationError):
         logging.getLogger("egx.migrate").error("migrate: %s", exc)
@@ -227,6 +223,12 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.exception_handler(ConflictError)
     async def _conflict(_: Request, exc: ConflictError):
         return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @api.exception_handler(DatabaseError)
+    async def _database_down(_: Request, exc: DatabaseError):
+        """The database refused or did not answer (its daily allowance used up, for one): said plainly, not as a crash."""
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        return JSONResponse({"detail": str(exc), "database": type(exc).__name__}, status_code=503, headers=headers)
 
     @api.exception_handler(NotFound)
     async def _not_found(_: Request, exc: NotFound):
@@ -316,7 +318,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     @api.get("/api/v1/status")
     def status(core: App = Depends(get_core)):
-        core.store.warm(gets=[("settings", "fees")], lists=["instruments", "bars"])
+        core.store.warm(gets=[("settings", "fees")], lists=core.import_lists())
         real = broker.access(core)
         live = real_orders.menu_state(core)
         # Whether this open app should ask for the automation's looks. Sending without the owner is decided
