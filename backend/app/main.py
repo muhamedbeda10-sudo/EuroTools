@@ -26,7 +26,7 @@ from . import assistant, background, broker, orders, paper, push, real_auto, rea
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
-from .data.calendar import market_open
+from .data.calendar import cairo_now, market_open
 from .data.feed import Feed, FirestoreDocs, StoreDocs
 from .data.market import DataError
 from .data.younit import YounitClient, YounitError, YounitRateLimit
@@ -35,10 +35,13 @@ from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
 from .extras import AlertError, AlertIn, Extras, JournalIn, ResearchIn
+from .identity import AccountGate, TokenVerifier, ask_firestore
 from .llm import ClaudeModel
 from .services import App, NotFound, clean
-from .store.errors import AuthError, ConflictError
+from .store import migrate
+from .store.errors import AuthError, ConflictError, StoreUnavailable
 from .store.firestore_store import FirestoreStore, uid_from_token
+from .store.postgres_store import Database, PostgresDocs, PostgresStore
 from .store.sqlite_store import Store
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
@@ -118,17 +121,50 @@ class BacktestIn(BaseModel):
 MAX_CACHED_USERS = 20
 
 
-def create_app(settings: Settings | None = None, store: Store | None = None, younit=None, assistant_model=None) -> FastAPI:
+def create_app(settings: Settings | None = None, store: Store | None = None, younit=None, assistant_model=None, *,
+               database: Database | None = None, verifier: TokenVerifier | None = None, account_ask=None,
+               firestore_source=None, market_source=None) -> FastAPI:
+    """The API. The keyword arguments stand in for the outside world in tests: the Postgres database, the check of
+    a sign-in, the administrator's record of an account, and the Firestore data an account is brought over from."""
     settings = settings or get_settings()
     if younit is None and settings.younit_trading_id and settings.younit_api_key:
         younit = YounitClient(settings.younit_trading_id, settings.younit_api_key)
     if assistant_model is None and settings.anthropic_api_key:
         assistant_model = ClaudeModel(settings.anthropic_api_key, settings.assistant_model, settings.assistant_effort)
-    firestore = settings.store_backend == "firestore"
+    if settings.store_backend not in ("sqlite", "firestore", "postgres"):
+        raise RuntimeError("STORE_BACKEND is sqlite, firestore or postgres")
+    postgres = settings.store_backend == "postgres"
+    firestore = settings.store_backend in ("firestore", "postgres")   # deployed: people sign in, each has their own data
     if firestore and not settings.firebase_project_id:
-        raise RuntimeError("FIREBASE_PROJECT_ID is required when STORE_BACKEND=firestore")
+        raise RuntimeError("FIREBASE_PROJECT_ID is required when people sign in (STORE_BACKEND=firestore or postgres)")
+    if postgres and database is None:
+        if not settings.database_url:
+            raise RuntimeError("DATABASE_URL is required when STORE_BACKEND=postgres")
+        database = Database(settings.database_url)
+    if postgres:
+        verifier = verifier or TokenVerifier(settings.firebase_project_id)
+        gate = AccountGate(database, account_ask or (lambda uid, token: ask_firestore(settings.firebase_project_id, uid, token)))
     local_store = None if firestore else (store or Store(settings.data_dir / "egx.sqlite3"))
     caches: OrderedDict[str, dict] = OrderedDict()
+
+    def postgres_core(uid: str | None, token: str) -> tuple[App, str]:
+        """One person's application object on Postgres. Nothing of theirs is read before all three checks pass.
+
+        The token is genuine and current (verified here, against the sign-in service's keys). It is for the
+        account the caller says it is for. And an administrator's record says that account may use the app.
+        """
+        proven = verifier.verify(token)
+        if uid is not None and uid != proven:
+            raise AuthError("invalid sign-in token")
+        database.ensure_schema()
+        gate.check(proven, token)
+        if settings.migrate_from_firestore:
+            source = ((lambda: firestore_source(proven)) if firestore_source
+                      else (lambda: FirestoreStore(settings.firebase_project_id, token, proven)))
+            migrate.bring_account(database, proven, source, cairo_now().date())
+            if younit:
+                migrate.bring_market(database, market_source() if market_source else FirestoreDocs(settings.firebase_project_id, token))
+        return App(PostgresStore(database, proven), settings, {}, Feed(PostgresDocs(database)) if younit else None, younit), proven
 
     def core_for(uid: str | None, token: str | None) -> App:
         """The application object for one person: the signed-in caller of a request, or the owner the timer works for."""
@@ -137,12 +173,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
             core = App(local_store, settings, caches.setdefault("local", {}), feed, younit).bootstrap()
             core.real_account_allowed = broker.may_view(settings, None, signed_in=False)
             return core
-        # bootstrap() reads the user's settings first; Firestore rejects that read
-        # unless the token is genuine, so the cache below is never reached by a forgery.
-        core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {},
-                   Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
+        if postgres:
+            core, uid = postgres_core(uid, token)
+        else:
+            # bootstrap() reads the user's settings first; Firestore rejects that read
+            # unless the token is genuine, so the cache below is never reached by a forgery.
+            core = App(FirestoreStore(settings.firebase_project_id, token, uid), settings, {},
+                       Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
         core.bootstrap()
-        # Only now is the uid proven: the read above was refused unless the token is genuine.
+        # Only now is the uid proven: by the server's own check on Postgres, and on Firestore by the read
+        # above, which was refused unless the token is genuine.
         core.uid, core.signed_in, core.id_token = uid, True, token
         core.real_account_allowed = broker.may_view(settings, uid, signed_in=True)
         core.cache = caches.setdefault(uid, {})
@@ -160,7 +200,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         if not header.lower().startswith("bearer "):
             raise AuthError("sign in to use the app")
         token = header[7:].strip()
-        return core_for(uid_from_token(token), token)
+        return core_for(None if postgres else uid_from_token(token), token)
 
     api = FastAPI(title="EGX Intelligence API", version=whats_new.version(),
                   docs_url=None if firestore else "/docs", redoc_url=None, openapi_url=None if firestore else "/openapi.json")
@@ -173,6 +213,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.exception_handler(AuthError)
     async def _auth(_: Request, exc: AuthError):
         return JSONResponse({"detail": str(exc)}, status_code=401)
+
+    @api.exception_handler(StoreUnavailable)
+    async def _no_database(_: Request, exc: StoreUnavailable):
+        return JSONResponse({"detail": str(exc)}, status_code=503, headers={"Retry-After": "15"})
+
+    @api.exception_handler(migrate.MigrationError)
+    async def _not_moved(_: Request, exc: migrate.MigrationError):
+        logging.getLogger("egx.migrate").error("migrate: %s", exc)
+        return JSONResponse({"detail": f"Your data could not be moved to the new database: {exc}. Nothing was lost; "
+                                       "tell the administrator."}, status_code=503)
 
     @api.exception_handler(ConflictError)
     async def _conflict(_: Request, exc: ConflictError):
@@ -220,7 +270,28 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def health(probe: bool = False):
         out = {"status": "ok", "environment": settings.app_env, "region": os.environ.get("VERCEL_REGION"),
                "assistant": assistant_model is not None}  # whether a key is saved; never the key
-        if probe and firestore:
+        if probe and postgres:
+            # How far is the database from this server? Timed with a question that reads nothing.
+            times = []
+            for _ in range(6):
+                started = time.monotonic()
+                database.one("select 1")
+                times.append(round((time.monotonic() - started) * 1000))
+            out["database_ms"] = {"first": times[0], "then": sorted(times[1:])}
+        elif probe and settings.database_url:
+            # A Postgres database is named but not yet in use: can this server reach it? Nothing is read or made.
+            try:
+                waiting = Database(settings.database_url, max_size=1)
+                try:
+                    started = time.monotonic()
+                    version = waiting.one("select current_setting('server_version')")[0]
+                    out["postgres_waiting"] = {"reached": True, "ms": round((time.monotonic() - started) * 1000), "version": version,
+                                               "has_schema": waiting.one("select to_regclass('egx.accounts') is not null")[0]}
+                finally:
+                    waiting.close()
+            except Exception as exc:  # noqa: BLE001 - whatever it is, the answer is "not reached", with the kind of failure only
+                out["postgres_waiting"] = {"reached": False, "why": type(exc).__name__}
+        if probe and firestore and not postgres:
             # How far is the database from this server? Timed with requests that carry no
             # credentials and are refused, so nothing is read.
             url = (f"https://firestore.googleapis.com/v1/projects/{settings.firebase_project_id}"

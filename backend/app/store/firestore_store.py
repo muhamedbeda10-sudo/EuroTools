@@ -214,6 +214,11 @@ class FirestoreStore:
             self._lists[coll] = [dict(doc, **{"__id": id}) for id, doc in out]
         return [{k: v for k, v in d.items() if k != "__id"} for d in json.loads(json.dumps(self._lists[coll]))]
 
+    def rows(self, coll: str) -> list[tuple[str, dict[str, Any]]]:
+        """A whole collection with each document's id: what is needed to copy it somewhere else."""
+        self.list(coll)
+        return [(d["__id"], {k: v for k, v in d.items() if k != "__id"}) for d in json.loads(json.dumps(self._lists[coll]))]
+
     def _remember(self, coll: str, id: str, doc: dict | None) -> None:
         self._docs[(coll, id)] = doc
         if coll in self._lists:

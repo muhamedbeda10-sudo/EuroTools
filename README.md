@@ -49,6 +49,31 @@ so `firestore.rules` authorises every read and write. The ledger and the audit t
 append-only in the rules themselves. Pushing a change to `firestore.rules` publishes the
 rules through `.github/workflows/rules.yml`; that workflow never touches Firebase Hosting.
 
+### The Postgres backend
+
+`STORE_BACKEND=postgres` with `DATABASE_URL` (a Postgres connection string, Sensitive, in the
+server's environment only) keeps the same data in Postgres instead (`backend/app/store/postgres_store.py`).
+Sign-in stays with Firebase Authentication. What changes is who decides:
+
+- **The server verifies each sign-in itself** (`backend/app/identity.py`): the token's signature
+  against Google's published keys, that it is for this project, and that it has not expired. Then
+  it asks whether an administrator's record (`egxAccounts`, or `users` of the quality system, both
+  still in Firestore) allows the account, with the caller's own token; the answer is kept for a
+  minute, and for a day in the database for when Firestore cannot be asked.
+- **The server holds the database's password.** Every statement is tied to the verified account;
+  there is none that reads another account's rows. The ledger and the audit trail are append-only
+  in the table itself: a trigger refuses any change or removal, whoever asks.
+- **Tables** live in the schema `egx` (not exposed by Supabase's Data API), are created by the
+  server the first time it connects, and have row level security on with no policy.
+- **Data comes over by itself** (`backend/app/store/migrate.py`): the first time a person uses the
+  app, their Firestore data is read with their own sign-in, written in one transaction, read back
+  and compared; only an identical copy is kept. Firestore is only read.
+- `GET /health?probe=true` says whether a database named in `DATABASE_URL` can be reached, before
+  it is switched to.
+
+Tests: `TEST_DATABASE_URL=postgresql://... pytest tests/test_postgres.py tests/test_identity.py
+tests/test_migrate.py` (skipped without a database).
+
 ## Market data (Younit)
 
 When `YOUNIT_TRADING_ID` and `YOUNIT_API_KEY` are set on the server, prices come from the
