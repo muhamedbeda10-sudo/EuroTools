@@ -26,7 +26,19 @@ def _emulator_up() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _emulator_up(), reason="Firestore emulator not running")
+def _closed_to_writing() -> bool:
+    """firestore.rules closed the egx tree to writing when the data moved to Postgres (16 November 2026)."""
+    from pathlib import Path
+    rules = (Path(__file__).resolve().parents[2] / "firestore.rules").read_text()
+    tree = rules[rules.index("match /egx/{uid}/{coll}/{docId}"):]
+    return "allow write: if false;" in tree[:tree.index("match /egxMarket/")]
+
+
+# These tests write an account's data to Firestore through the API, which the rules no longer allow. They are kept
+# for the day the Firestore backend is wanted again (open the tree in firestore.rules and they run as before); what
+# is deployed is covered by test_postgres.py, test_identity.py and test_migrate.py.
+pytestmark = [pytest.mark.skipif(not _emulator_up(), reason="Firestore emulator not running"),
+              pytest.mark.skipif(_closed_to_writing(), reason="firestore.rules: the egx tree is closed to writing since the move to Postgres")]
 
 
 def token(uid: str) -> str:

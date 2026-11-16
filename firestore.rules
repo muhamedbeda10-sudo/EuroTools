@@ -294,9 +294,8 @@ service cloud.firestore {
     // forwards the caller's sign-in token, so these rules are what authorise
     // every one of its reads and writes too.
     //
-    // The trade ledger and the audit trail are append-only here, not just in
-    // the application: an entry can be created once and never changed or
-    // removed, by anyone, including the account that owns it.
+    // (While this tree was written to, the trade ledger and the audit trail
+    // were append-only here. The same is now kept by a trigger in Postgres.)
     match /egx/{uid}/{coll}/{docId} {
       // Either a provisioned account of the quality system, or an account an
       // administrator created for EGX Intelligence alone (see /egxAccounts).
@@ -306,18 +305,17 @@ service cloud.firestore {
               || (exists(/databases/$(database)/documents/egxAccounts/$(uid))
                   && get(/databases/$(database)/documents/egxAccounts/$(uid)).data.active == true));
       }
-      function appendOnly() {
-        return coll == 'audit' || coll.matches('ledger_.*');
-      }
+      // Closed to writing since 16 November 2026: EGX Intelligence keeps its data in its own Postgres database
+      // now. What is here is the copy each account is brought over from, the first time it is used after the
+      // move, and it must not change under that copy: an old deployment or an old address still pointed here
+      // could otherwise go on writing where nothing reads any more. Reading stays the owner's.
       allow read: if owner();
-      allow create: if owner();
-      allow update, delete: if owner() && !appendOnly();
+      allow write: if false;
     }
 
     // Market prices shared by every EGX Intelligence account: the same data for
-    // everyone, so it is stored once instead of per account. Any account that
-    // may use the app can read it and refresh it (the API server writes it with
-    // the caller's token while pulling prices from the data feed). Nothing here
+    // everyone, so it was stored once instead of per account. Any account that
+    // may use the app can read it (and, until the move, could refresh it). Nothing here
     // is personal, and nothing can be deleted.
     match /egxMarket/{docId} {
       function egxUser() {
@@ -326,8 +324,9 @@ service cloud.firestore {
               || (exists(/databases/$(database)/documents/egxAccounts/$(request.auth.uid))
                   && get(/databases/$(database)/documents/egxAccounts/$(request.auth.uid)).data.active == true));
       }
-      allow read, create, update: if egxUser();
-      allow delete: if false;
+      // Closed to writing with the account trees above: the prices are in Postgres too.
+      allow read: if egxUser();
+      allow write: if false;
     }
 
     // Who may use EGX Intelligence without being part of the quality system.
