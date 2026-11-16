@@ -8,8 +8,9 @@ import { browserLocalPersistence, connectAuthEmulator, getAuth, setPersistence, 
  *
  *  These values identify the Firebase project and grant nothing. They are
  *  public by design (every Firebase web app ships them in its bundle); access
- *  is decided by firestore.rules. Environment variables override them, which
- *  is how local development points at the emulator project instead.
+ *  is decided by the API, which verifies every sign-in itself. Environment
+ *  variables override them, which is how local development points at an
+ *  emulator project instead.
  */
 const config = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "AIzaSyA9XdUMM1KXbkthRnUGpgbqVnTjJbWWdlE",

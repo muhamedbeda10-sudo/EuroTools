@@ -43,47 +43,39 @@ The data is in a Postgres database (Supabase), named to the server by `DATABASE_
 string, Sensitive, in the server's environment only): each account's documents, the market prices
 all accounts share, and the record of who may use the app and who administers it (`egx.accounts`).
 Sign-in uses Firebase Authentication of the existing project (`eurotools-a1ea6`): email and
-password, accounts created by an administrator from Settings.
+password, accounts created by an administrator from Settings. Nothing else of Firebase is used.
 
-Until 16 November 2026 the data was in Firestore too, one private tree per account under
-`egx/{uid}/`, read and written with the caller's own token so that `firestore.rules` decided
-everything and the server held no credentials. Firestore's daily allowance, shared with the
-quality system, stopped the app that morning, and the owner had the data moved. That tree is
-still there, closed to writing by the rules, as the copy each account is brought over from. Deployed,
-the server asks Firestore nothing (`MIGRATE_FROM_FIRESTORE=false` in `api/index.py`, set the same
-day once the owner's data and the market prices had come over): an account the database has no row
-for is not let in, and one whose data was left in Firestore is refused with a plain message rather
-than given an empty account. Setting it to `true` brings such an account over on its next visit.
-Pushing a change to `firestore.rules` publishes the rules through `.github/workflows/rules.yml`;
-that workflow never touches Firebase Hosting. `STORE_BACKEND=firestore` runs the API on Firestore
-as before (`backend/app/store/firestore_store.py`).
+Until 16 November 2026 the data was in that project's Firestore. Its daily allowance, shared with
+the quality system, stopped the app that morning, and the owner had the data moved and then the
+Firestore code removed. What each account had there is still there, closed to writing.
 
-### The Postgres backend
+`firestore.rules` and `.github/workflows/rules.yml` stay in this repository for one reason: the
+file is the security rules of the whole Firebase project, the quality system's included, and this
+is where they are published from. For EGX Intelligence it only says that its old tree and
+`egxMarket` can no longer be written.
 
-`backend/app/store/postgres_store.py`. With a database the server opens itself, the server decides
-what Firestore's rules used to decide:
+### The database
+
+`backend/app/store/postgres_store.py`. The server opens the database itself, so the server decides
+who may read what:
 
 - **The server verifies each sign-in itself** (`backend/app/identity.py`): the token's signature
   against Google's published keys, that it is for this project, and that it has not expired. Then
   the account's row in `egx.accounts` says whether it may use the app (read at most once a minute,
-  so closing an account takes effect within a minute). An account with no row yet is looked up
-  once in the records Firestore held (`egxAccounts`, or `users` of the quality system), with the
-  caller's own token, and what is found becomes its row; an administrator's first visit brings the
-  whole list. Opening and closing accounts (`backend/app/accounts.py`, `PgAccounts`) is then a
-  matter of that table, and only a row marked `admin` may do it.
+  so closing an account takes effect within a minute). An account without a row is not let in.
+  Opening and closing accounts (`backend/app/accounts.py`) works on that table, and only a row
+  marked `admin` may do it. The first administrator's row is made by hand, in the database.
 - **The server holds the database's password.** Every statement is tied to the verified account;
   there is none that reads another account's rows. The ledger and the audit trail are append-only
   in the table itself: a trigger refuses any change or removal, whoever asks.
-- **Tables** live in the schema `egx` (not exposed by Supabase's Data API), are created by the
-  server the first time it connects, and have row level security on with no policy.
-- **Data comes over by itself** (`backend/app/store/migrate.py`): the first time a person uses the
-  app, their Firestore data is read with their own sign-in, written in one transaction, read back
-  and compared; only an identical copy is kept. Firestore is only read.
-- `GET /health?probe=true` says whether a database named in `DATABASE_URL` can be reached, before
-  it is switched to.
+- **Tables** live in the schema `egx` (not exposed by Supabase's Data API), are created and brought
+  up to date by the server the first time it connects, and have row level security on with no policy.
+- `GET /health?probe=true` times the database from the server.
+- A preview deployment is not given `DATABASE_URL`, so its API does not start. Give a preview a
+  database of its own, never the production one.
 
 Tests: `TEST_DATABASE_URL=postgresql://... pytest tests/test_postgres.py tests/test_identity.py
-tests/test_migrate.py` (skipped without a database).
+tests/test_postgres_api.py` (skipped without a database).
 
 ## Market data (Younit)
 
@@ -106,10 +98,9 @@ the feed refuses (429) is not repeated until the pause it asked for is over.
 
 ### Database reads
 
-Firestore counts every document read, and each request's security-rule lookups, against the
-project's daily allowance (50,000 reads on the free plan, shared with everything else in the
-project). When it is used up Firestore answers 429 and the API answers **503** with a sentence that
-says so (`store/errors.py`), not a 500. What keeps the count down:
+Postgres has no allowance of reads, but a round trip is still a round trip, and Supabase's free
+plan counts what leaves the database (5 GB a month). A database that cannot be asked answers
+**503** with a sentence that says so (`store/errors.py`), not a 500. What keeps the traffic down:
 
 - the shared `egxMarket/meta` document is read at most once every few seconds per server instance;
 - an account's own imports (`instruments`, `bars`) are read once per import (`data_version`), not per request;
@@ -145,7 +136,7 @@ account summary, holdings, and the holder's name with a masked account number.
   Connections shows whether the current sign-in may look, and its user ID to copy into the
   variable. A local run without sign-in may look only when the variable contains the word `local`.
 - **Nothing is stored.** A reading lives in the server's memory for 20 seconds (a refresh reuses one
-  younger than 5), so several looks cost one call to the broker. Nothing is written to Firestore,
+  younger than 5), so several looks cost one call to the broker. Nothing is written to the database,
   and nothing enters the paper portfolio.
 - **Checks on every reading.** The holdings add up to the broker's own total; the total equals cash
   plus stocks; the broker's price for each holding is within 1% of the app's. A failed check is
@@ -260,8 +251,7 @@ once more at the last moment in the owner's place. Whatever does not fit simply 
 
 The assistant still has no tool that sends, approves or cancels, or that touches the box; it reads
 the box (`real_orders`) and is told for each proposal whether it will go out by itself. Tests:
-`backend/tests/test_real_auto.py`, and with the Firestore emulator
-`test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order`.
+`backend/tests/test_real_auto.py`.
 
 Like order sending itself, **none of this has been exercised against the real broker from here.**
 In particular the broker's words for order states, and how soon bought shares show as free to
@@ -340,8 +330,8 @@ cd backend && .venv/bin/python -m pytest -q && .venv/bin/ruff check app tests
 npm run typecheck && npm run build
 ```
 
-`backend/tests/test_firestore.py` runs the API against the Firestore emulator with the real
-security rules. Start it first with `npm run emulators`; without it those tests are skipped.
+`backend/tests/test_postgres.py`, `test_identity.py` and `test_postgres_api.py` run the store, the sign-in
+check and the API against a real Postgres named in `TEST_DATABASE_URL`; without it those tests are skipped.
 
 ## Accounting rules
 
@@ -496,8 +486,8 @@ ledger (`origin: order:<id>`) with the usual fees. One stop and one target per s
 
 ## Concurrency
 
-- A document read in a request is written back only if it is still the version that was read (`version` in
-  Postgres, `updateTime` in Firestore); a stale write is refused (409) instead of silently overwriting. User
+- A document read in a request is written back only if it is still the version that was read (`version`, a
+  number no document has had before); a stale write is refused (409) instead of silently overwriting. User
   actions retry once. All the writes of one transaction are committed together or not at all.
 - Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
 - The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and

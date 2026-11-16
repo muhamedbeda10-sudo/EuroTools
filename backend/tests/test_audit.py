@@ -487,7 +487,7 @@ def test_a_rate_limit_pauses_the_update_instead_of_failing_it(tmp_path, clock):
 
 
 class GuardedDocs:
-    """Shared documents with versions, like Firestore: a guarded write of a stale version is refused."""
+    """Shared documents with versions, like the deployed store: a guarded write of a stale version is refused."""
 
     def __init__(self, shared: dict):
         self.shared, self.seen = shared, {}

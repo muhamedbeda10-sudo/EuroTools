@@ -1,7 +1,7 @@
 """Persistence layer.
 
 A small document store (collections of JSON documents) used for local runs and
-tests. `firestore_store.FirestoreStore` implements the same interface for the
+tests. `postgres_store.PostgresStore` implements the same interface for the
 deployed app. All writes go through `transaction()`,
 which serialises writers so ledger postings cannot interleave.
 """
@@ -114,7 +114,7 @@ class Store:
         """Nothing is kept between reads here: every read is already the database as it is now."""
 
     def warm(self, gets=(), lists=()) -> None:
-        """Nothing to do locally; the Firestore store uses this to read in parallel."""
+        """Nothing to do locally; the Postgres store uses this to read in one round trip."""
 
     def recent(self, coll: str, limit: int) -> list[dict[str, Any]]:
         with self._lock:

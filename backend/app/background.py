@@ -234,23 +234,23 @@ def check_timer(settings: Settings, header: str | None) -> None:
         raise AuthError("not the timer")
 
 
-def wake(settings: Settings, build_core, model, *, firestore: bool, may_review=None) -> dict:
+def wake(settings: Settings, build_core, model, *, signed_in: bool, may_review=None) -> dict:
     """The timer rang. Sign in as the owner and take a look; say plainly why not, when not."""
-    out = _wake(settings, build_core, model, firestore=firestore, may_review=may_review)
+    out = _wake(settings, build_core, model, signed_in=signed_in, may_review=may_review)
     auto = out.get("auto") or {}
     rings.info("timer: ran=%s why=%s sent=%s exits=%s review=%s region=%s", out.get("ran"), out.get("why") or auto.get("why"),
                auto.get("sent", 0), auto.get("exits", 0), bool((out.get("review") or {}).get("ran")), os.environ.get("VERCEL_REGION", "-"))
     return out
 
 
-def _wake(settings: Settings, build_core, model, *, firestore: bool, may_review=None) -> dict:
+def _wake(settings: Settings, build_core, model, *, signed_in: bool, may_review=None) -> dict:
     now = cairo_now()
     if not (is_trading_day(now.date()) and EARLIEST <= now.time() <= LATEST):
         return {"ran": False, "why": "outside the session"}
     sealed = settings.background_key.strip()
     if not sealed:
         return {"ran": False, "why": "no background key on the server"}
-    if not firestore:   # a local run has no sign-in to lend: it looks only when told to in so many words
+    if not signed_in:   # a local run has no sign-in to lend: it looks only when told to in so many words
         return look(build_core(None, None), model, may_review=may_review) if sealed == "local" else \
             {"ran": False, "why": "no background key on the server"}
     creds = unseal(settings, sealed)

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 import zlib
@@ -18,10 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
-import httpx
 import pandas as pd
 
-from ..store.errors import AuthError, ConflictError, DatabaseError, database_error
+from ..store.errors import ConflictError
 from .calendar import CAIRO, cairo_now, last_settle, market_open  # noqa: F401 - CAIRO re-exported for tests
 from .younit import YounitClient, YounitError, YounitRateLimit
 
@@ -55,63 +53,6 @@ class StoreDocs:
 
     def put(self, id: str, doc: dict, *, guard: bool = False) -> None:
         self.store.put("egxMarket", id, doc)  # one writer at a time locally: nothing to guard against
-
-
-class FirestoreDocs:
-    """Shared documents in Firestore, read and written with the caller's own token."""
-
-    _client = httpx.Client(timeout=20.0)
-
-    def __init__(self, project_id: str, token: str):
-        emulator = os.environ.get("FIRESTORE_EMULATOR_HOST")
-        origin = f"http://{emulator}" if emulator else "https://firestore.googleapis.com"
-        self._db = f"projects/{project_id}/databases/(default)/documents"
-        self._root = f"{origin}/v1/{self._db}"
-        self._url = f"{self._root}/egxMarket"
-        self._headers = {"Authorization": f"Bearer {token}"}
-        self._seen: dict[str, str | None] = {}  # document -> its version when this request read it (None: absent)
-
-    def _request(self, method: str, url: str, **kw) -> httpx.Response:
-        try:
-            return self._client.request(method, url, headers=self._headers, **kw)
-        except httpx.HTTPError as exc:
-            raise DatabaseError(f"database unreachable: {exc.__class__.__name__}", retry_after=15) from None
-
-    def get(self, id: str) -> dict | None:
-        res = self._request("GET", f"{self._url}/{id}")
-        if res.status_code == 404:
-            self._seen[id] = None
-            return None
-        if res.status_code in (401, 403):
-            raise AuthError("not signed in, or this account is not allowed to use the app")
-        if res.status_code >= 400:
-            raise database_error("read", res.status_code, res.text)
-        body = res.json()
-        self._seen[id] = body.get("updateTime")
-        return json.loads(body["fields"]["body"]["stringValue"])
-
-    def put(self, id: str, doc: dict, *, guard: bool = False) -> None:
-        """Write a document. With `guard`, only if it is still the version this request read:
-        two people refreshing at once cannot silently overwrite each other's work."""
-        write: dict = {"update": {"name": f"{self._db}/egxMarket/{id}",
-                                  "fields": {"body": {"stringValue": json.dumps(doc, separators=(",", ":"))}}}}
-        if guard and id in self._seen:
-            seen = self._seen[id]
-            write["currentDocument"] = {"exists": False} if seen is None else {"updateTime": seen}
-        res = self._request("POST", f"{self._root}:commit", json={"writes": [write]})
-        if res.status_code in (401, 403):
-            raise AuthError("not signed in, or this account is not allowed to use the app")
-        if "currentDocument" in write and (res.status_code == 409 or res.status_code in (400, 404) and any(
-                word in res.text for word in ("FAILED_PRECONDITION", "ALREADY_EXISTS", "NOT_FOUND"))):
-            self._seen.pop(id, None)
-            raise ConflictError("the shared market data changed while it was being updated")
-        if res.status_code >= 400:
-            raise database_error("write", res.status_code, res.text)
-        stamp = ((res.json().get("writeResults") or [{}])[0]).get("updateTime")
-        if stamp:
-            self._seen[id] = stamp
-        else:
-            self._seen.pop(id, None)
 
 
 def chunk_of(symbol: str) -> str:

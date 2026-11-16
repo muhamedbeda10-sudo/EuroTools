@@ -10,19 +10,13 @@ class Settings(BaseSettings):
     data_dir: Path = Path(__file__).resolve().parent.parent / "var"
     initial_capital_egp: Decimal = Decimal("50000")
     seed_sample_data: bool = True
-    # "sqlite" for local runs and tests. Deployed, with per-user data behind a Firebase sign-in: "postgres"
-    # (the server verifies the sign-in and holds the database's password), or "firestore" as it was before
-    # (the database verifies the caller's own token; the server holds nothing).
+    # "sqlite" for local runs and tests (no sign-in). "postgres" when deployed: per-user data behind a Firebase
+    # sign-in that the server verifies itself (app/identity.py).
     store_backend: str = "sqlite"
+    # The Firebase project whose sign-ins are accepted. Only its Authentication is used.
     firebase_project_id: str = ""
-    # "postgres" when deployed on a Postgres database: its address and password, as one connection string.
-    # Server-side only, like every secret here. With it the server verifies each sign-in itself (app/identity.py).
+    # The database's address and password, as one connection string. Server-side only, like every secret here.
     database_url: str = ""
-    # On Postgres, bring each account over from Firestore the first time it is used: its record of being allowed
-    # (app/identity.py) and its data (app/store/migrate.py). Switch it off once every account is over and Firestore
-    # is never asked again: an account the database does not know is then not let in, and one whose data was never
-    # brought over is refused rather than given an empty account.
-    migrate_from_firestore: bool = True
     # Public web API key of the Firebase project (identifies it, grants nothing).
     firebase_web_api_key: str = ""
     # Younit market-data credentials. Server-side only: never sent to the browser,

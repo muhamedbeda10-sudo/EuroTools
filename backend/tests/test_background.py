@@ -269,7 +269,7 @@ def test_the_assistants_review_runs_last_and_what_it_proposed_is_judged_at_once(
         suggest(c)                                                                  # the review writes a proposal inside the box
         return {"ran": True, "chat": "c1", "changes": 1, "error": None, "reason": "intraday"}
     monkeypatch.setattr(assistant, "run_autopilot", review)
-    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, signed_in, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
     out = wake(c).json()
     assert calls == ["a-model"] and out["review"] == {"ran": True, "reason": "intraday", "changes": 1, "error": None}
     assert out["auto"]["sent"] == 1 and len(c.fake.sent) == 1                       # sent in the same look, not a minute later
@@ -339,7 +339,7 @@ def test_the_owner_lends_their_own_sign_in_and_a_new_key_retires_the_old(floor, 
 
 
 def test_the_sign_in_is_renewed_when_needed_and_a_refused_one_stops_the_look(monkeypatch):
-    here = Settings(store_backend="firestore", firebase_project_id="p", firebase_web_api_key="web-key", cron_secret="s",
+    here = Settings(store_backend="postgres", firebase_project_id="p", firebase_web_api_key="web-key", cron_secret="s",
                     background_secret="only-this-server-knows")
     asked = []
 
@@ -363,19 +363,19 @@ def test_the_sign_in_is_renewed_when_needed_and_a_refused_one_stops_the_look(mon
     monkeypatch.setattr(background, "look", lambda core, model, kid=None, may_review=None: {"ran": True, "core": core, "kid": kid})
     sealed = background.seal(here, creds)
     background.reset()
-    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: built.append((uid, token)) or "core", None, firestore=True)
+    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: built.append((uid, token)) or "core", None, signed_in=True)
     assert out == {"ran": True, "core": "core", "kid": "k1"} and built[0][0] == "owner-1" and built[0][1].startswith("token-")
-    assert background.wake(here.model_copy(update={"background_key": "bk1.junk"}), None, None, firestore=True)["why"] == \
+    assert background.wake(here.model_copy(update={"background_key": "bk1.junk"}), None, None, signed_in=True)["why"] == \
         "the background key on the server cannot be read"
-    assert background.wake(here, None, None, firestore=True)["why"] == "no background key on the server"
+    assert background.wake(here, None, None, signed_in=True)["why"] == "no background key on the server"
     # the owner changed their password: the key no longer signs in, and nothing is built
     background.reset()
     monkeypatch.setattr(background.httpx, "post", lambda url, **kw: httpx.Response(400, json={"error": {"message": "TOKEN_EXPIRED"}}))
-    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, firestore=True)
+    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, signed_in=True)
     assert out["ran"] is False and "Create a new key" in out["why"]
     # a refusal that is about the server, not about the sign-in, is not blamed on the password
     monkeypatch.setattr(background.httpx, "post", lambda url, **kw: httpx.Response(403, json={"error": {"message": "Requests from referer <empty> are blocked."}}))
-    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, firestore=True)
+    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, signed_in=True)
     assert out["ran"] is False and "refused the server's request (403)" in out["why"] and "password" not in out["why"]
 
 
@@ -397,7 +397,7 @@ def test_after_a_long_review_everything_is_read_again_before_anything_more_is_se
         assert c.post("/api/v1/real-orders/auto/stop").status_code == 200         # during which the owner presses Stop
         return {"ran": True, "chat": "c1", "changes": 1, "error": None, "reason": "intraday"}
     monkeypatch.setattr(assistant, "run_autopilot", review)
-    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model"))
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, signed_in, may_review=None: background.look(build(None, None), "a-model"))
     out = wake(c).json()
     after = steps[steps.index("review"):]
     assert after[:2] == ["review", "read afresh"] and after.index("read afresh") < after.index("look")
@@ -515,7 +515,7 @@ def test_the_server_checks_the_alerts_too_and_what_it_saw_wakes_the_review_in_th
     c.post("/api/v1/alerts", json={"kind": "price_below", "symbol": "TMGH", "value": 40})
     waiting = []
     monkeypatch.setattr(assistant, "run_autopilot", lambda core, model: waiting.append(len(wakes.pending(core))) or {"ran": False})
-    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, signed_in, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
     out = wake(c).json()
     assert out["alerts"] == {"fired": 0, "active": 2, "wake": False} and waiting == [0] and c.posted == []
     c.clock["now"] += timedelta(seconds=40)
