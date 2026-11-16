@@ -1,6 +1,20 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.6.2 · 2026-11-16 · The price now, beside the price of each trade
+For: everyone
+Open: /trades
+عربي: السعر الحالي جنب سعر كل صفقة
+
+- The ledger in Trades has a new column, "Now": the stock's latest price beside the price you bought or sold at, and under it how far it has moved since that trade, in per cent. While the market is open it follows the live price.
+  عربي: دفتر الصفقات في Trades بقى فيه عمود جديد «Now»: آخر سعر للسهم جنب السعر اللي اشتريت أو بعت بيه، وتحته نسبة تحرّكه من وقت الصفقة. وطول ما السوق مفتوح بيمشي مع السعر الحي.
+- The move is of the price alone, before fees. On a buy, green means the shares are worth more than you paid; on a sell, green means the stock went up after you sold.
+  عربي: النسبة دي للسعر بس، قبل المصاريف. في الشراء الأخضر معناه إن الأسهم بقت أغلى من اللي دفعته؛ وفي البيع الأخضر معناه إن السهم طلع بعد ما بعت.
+- On a narrower window the "Value" column steps aside to make room for it. The value is still in each entry's details (the arrow at the end of the row).
+  عربي: على الشاشة الأضيق عمود «Value» بيتشال علشان يفسح مكان. القيمة لسه موجودة في تفاصيل كل قيد (السهم اللي في آخر الصف).
+- The CSV export has the same figures as they were when the file was made, and the assistant sees them when it reads your trades. Nothing in the ledger itself changed.
+  عربي: ملف الـ CSV فيه نفس الأرقام زي ما كانت وقت عمل الملف، والمساعد بيشوفها لما يقرا صفقاتك. والدفتر نفسه ماتغيّرش فيه حاجة.
+
 ## 0.6.1 · 2026-11-16 · Your data moved to a new database
 For: everyone
 عربي: بياناتك اتنقلت لقاعدة بيانات جديدة

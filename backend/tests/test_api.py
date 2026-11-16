@@ -86,8 +86,16 @@ def test_paper_trading_flow(client):
     sell = t["transactions"][0]
     assert sell["type"] == "SELL" and sell["remaining_qty"] == 6
     assert sell["realized_net"] == pytest.approx(sell["realized_gross"] - sell["buy_fees_allocated"] - sell["fees_total"])
+    # what the stock is at now sits beside what each trade was filled at; a deposit has neither
+    now = client.get("/api/v1/stocks/COMI").json()["bars"][-1]
+    for row in t["transactions"][:2]:
+        assert row["last"] == pytest.approx(now["close"]) and row["last_as_of"] == now["time"]
+        assert row["since_pct"] == pytest.approx((row["last"] - row["price"]) / row["price"] * 100, abs=0.005)
+    assert "last" not in t["transactions"][-1] and "since_pct" not in t["transactions"][-1]
     csv_text = client.get("/api/v1/trades/export.csv").text
     assert csv_text.splitlines()[0].startswith("seq,ts,trade_date") and len(csv_text.splitlines()) == 4
+    assert csv_text.splitlines()[0].endswith("note,last,last_as_of,since_pct")
+    assert csv_text.splitlines()[1].endswith(",,,")        # the deposit: no stock, so nothing to compare
 
     # chronological ledger: cannot back-date before the last trade
     old = client.get("/api/v1/stocks/COMI").json()["bars"][0]["time"]

@@ -485,7 +485,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     def export_trades(core: App = Depends(get_core)):
         buf = io.StringIO()
         cols = ["seq", "ts", "trade_date", "type", "symbol", "qty", "price", "gross", "fees_total", "cash_delta",
-                "cash_after", "avg_cost", "realized_gross", "buy_fees_allocated", "realized_net", "price_source", "note"]
+                "cash_after", "avg_cost", "realized_gross", "buy_fees_allocated", "realized_net", "price_source", "note",
+                # the stock's price when the file was made, the day it is from, and its move since the trade (%)
+                "last", "last_as_of", "since_pct"]
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for row in reversed(core.trades()["transactions"]):

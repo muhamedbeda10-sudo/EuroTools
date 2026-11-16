@@ -405,7 +405,8 @@ def _trades(core: App, a: Trades) -> dict:
     t = core.trades()
     rows = [r for r in t["transactions"] if not a.symbol or r.get("symbol") == a.symbol.upper()]
     keys = ("seq", "trade_date", "type", "symbol", "qty", "price", "gross", "fees_total", "cash_delta", "cash_after",
-            "avg_cost", "realized_gross", "realized_net", "remaining_qty", "origin", "note", "backdated")
+            "avg_cost", "realized_gross", "realized_net", "remaining_qty", "origin", "note", "backdated",
+            "last", "last_as_of", "since_pct")
     return {"totals": t["totals"], "matching": len(rows), "transactions": [pick(r, *keys) for r in rows[:a.limit]]}
 
 
@@ -1033,7 +1034,9 @@ TOOLS: list[Tool] = [
          "sector allocation, concentration warnings and recent value history.", NoArgs, _portfolio,
          label=lambda a: "Reading the portfolio"),
     Tool("trades", "The paper ledger: the latest transactions with price, fees, cash movement and realized profit, and "
-         "the totals.", Trades, _trades, label=lambda a: "Reading the trade ledger"),
+         "the totals. Each trade also carries the stock's price now (last, from the day last_as_of) and how far it "
+         "has moved since the fill (since_pct, before fees).", Trades, _trades,
+         label=lambda a: "Reading the trade ledger"),
     Tool("real_account", "The user's REAL brokerage account at EFG Hermes, which is separate from the paper portfolio: "
          "cash, total value, each holding with its cost, the broker's price, profit and the shares free to sell, and "
          "the checks the app made on those figures. Read-only: it cannot be traded from this app. Only the "
