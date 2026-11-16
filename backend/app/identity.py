@@ -24,6 +24,7 @@ import os
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -76,9 +77,13 @@ class TokenVerifier:
             unknown = kid not in self._keys and now - self._fetched >= KEYS_MIN_AGE
             if unknown or now >= self._expires or not self._fetched:
                 try:
-                    self._keys, life = self._fetch()
+                    found, life = self._fetch()
+                    usable = {kid: k for kid, k in found.items() if isinstance(k, dict) and k.get("n") and k.get("e")}
+                    if not usable:
+                        raise ValueError("the key service answered without a usable key")
+                    self._keys = usable
                     self._expires = now + max(life, KEYS_MIN_AGE)
-                except (httpx.HTTPError, ValueError, KeyError):
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
                     if not self._keys:
                         raise StoreUnavailable("sign-ins cannot be checked right now; try again in a moment") from None
                     self._expires = now + KEYS_MIN_AGE   # keep the keys there are, and ask again soon
@@ -129,13 +134,17 @@ def ask_firestore(project_id: str, uid: str, token: str) -> bool | None:
 
     Asked with the caller's own token, which the Firestore rules let read exactly two things about
     itself: its `egxAccounts` document, and its `users` document while that account is active.
+
+    "The token was not accepted" (401) is not an answer about the account: Firestore allows a clock no
+    leeway and this server allows a minute, so a sign-in in its last seconds is refused there and not
+    here. It counts as "cannot be asked", never as "closed".
     """
     emulator = os.environ.get("FIRESTORE_EMULATOR_HOST")
     root = f"{'http://' + emulator if emulator else 'https://firestore.googleapis.com'}/v1/projects/{project_id}/databases/(default)/documents"
     unknown = False
     for coll in ("egxAccounts", "users"):
         try:
-            res = _http.get(f"{root}/{coll}/{uid}", headers={"Authorization": f"Bearer {token}"})
+            res = _http.get(f"{root}/{coll}/{quote(uid, safe='')}", headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError:
             unknown = True
             continue
@@ -145,8 +154,8 @@ def ask_firestore(project_id: str, uid: str, token: str) -> bool | None:
                     return True
             except (ValueError, KeyError, TypeError):
                 pass
-        elif res.status_code not in (401, 403, 404):
-            unknown = True     # refusing requests (429) or failing (5xx): this is not an answer about the account
+        elif res.status_code not in (403, 404):
+            unknown = True     # the token refused (401), requests refused (429), or failing (5xx): not an answer about the account
     return None if unknown else False
 
 

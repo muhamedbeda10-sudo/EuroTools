@@ -173,3 +173,33 @@ def test_when_the_sign_in_service_cannot_be_asked_the_last_answer_serves_for_a_d
         AccountGate(db, lambda u, t: False).check(closed, "t")
     with pytest.raises(AuthError):
         AccountGate(db, lambda u, t: None).check(closed, "t")  # an outage does not reopen a closed account
+
+
+def test_an_answer_from_the_key_service_without_usable_keys_does_not_throw_the_good_ones_away():
+    answers = [({"k1": jwk(KEY, "k1")}, 3600.0), ({}, 3600.0), ({"k1": {"kty": "RSA", "kid": "k1"}}, 3600.0)]
+    v = TokenVerifier(PROJECT, fetch_keys=lambda: answers.pop(0))
+    assert v.verify(sign("abc")) == "abc"
+    for _ in range(2):
+        v._expires = 0                                         # due again; the service answers, with nothing to use
+        assert v.verify(sign("abc")) == "abc"
+    with pytest.raises(StoreUnavailable):                      # and a server that never had keys says it cannot check, not "invalid"
+        TokenVerifier(PROJECT, fetch_keys=lambda: ({"k1": {"kty": "RSA", "kid": "k1"}}, 3600.0)).verify(sign())
+
+
+def test_a_token_firestore_does_not_accept_is_not_an_account_that_was_closed(monkeypatch):
+    import app.identity as identity
+
+    def answers(by_coll):
+        def get(url, headers=None):
+            return httpx.Response(by_coll[url.rsplit("/", 2)[-2]], json={"fields": {"active": {"booleanValue": True}}})
+        return get
+    for by_coll, want in (({"egxAccounts": 200, "users": 403}, True), ({"egxAccounts": 404, "users": 200}, True),
+                          ({"egxAccounts": 404, "users": 403}, False),          # no record anywhere: not allowed
+                          ({"egxAccounts": 401, "users": 401}, None),           # the token was not accepted: not an answer
+                          ({"egxAccounts": 429, "users": 429}, None), ({"egxAccounts": 404, "users": 503}, None)):
+        monkeypatch.setattr(identity._http, "get", answers(by_coll))
+        assert identity.ask_firestore(PROJECT, "user/with slash", "t") is want, by_coll
+    seen = []
+    monkeypatch.setattr(identity._http, "get", lambda url, headers=None: (seen.append(url), httpx.Response(404))[1])
+    identity.ask_firestore(PROJECT, "a/b", "t")
+    assert all(url.endswith("/a%2Fb") for url in seen)         # an account id is one path segment, whatever is in it

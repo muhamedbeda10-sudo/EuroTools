@@ -25,12 +25,16 @@ def test_every_collection_the_application_uses_is_one_the_copy_knows():
     used = set()
     for path in APP.rglob("*.py"):
         text = path.read_text()
-        used |= set(re.findall(r"""store\.(?:get|put|create|delete|list|append|recent|rows)\(\s*f?"([a-zA-Z_{}]+)""", text))
+        calls = r"store\.(?:get|put|create|delete|list|append|recent|rows)\(\s*"
+        used |= set(re.findall(calls + r"""f?"([a-zA-Z_{}]+)""", text))
         used |= set(re.findall(r"""_(?:save|delete)\(\s*"([a-z_]+)\"""", text))
-        used |= set(re.findall(r"""^[A-Z_]+ = \("([a-z_]+)", "[a-z_]+"\)\s*(?:#.*)?$""", text, re.M)) & {"settings"}
-        used |= set(re.findall(r"""^SUBS = "([a-z_]+)\"""", text, re.M))
-        for group in re.findall(r"lists=\[([^\]]*)\]", text):
-            used |= set(re.findall(r'"([a-z_]+)"', group))
+        # a collection named through a constant: store.get(*NAME) with NAME = ("coll", "id"), or store.list(NAME)
+        for name in set(re.findall(calls + r"\*?([A-Z][A-Z_]+)\b", text)):
+            found = re.search(rf"""^{name} = \(?"([a-z_]+)\"""", text, re.M)
+            assert found, f"{path.name}: the collection behind {name} could not be read"
+            used.add(found.group(1))
+        for group in re.findall(r"(?:lists|gets)=\[(.*?)\](?=[,)])", text, re.S):
+            used |= set(re.findall(r'\(?"([a-z_]+)"', group)) - set(re.findall(r'\("[a-z_]+",\s*"([a-z_]+)"\)', group))
         used |= set(re.findall(r"""return f"([a-z_]+_)\{""", text))           # names made up as they are needed
     used -= {"egxMarket", "chunk_"}                                             # shared by all accounts: brought over apart
     families = {migrate.LEDGER, migrate.REAL_ORDERS}

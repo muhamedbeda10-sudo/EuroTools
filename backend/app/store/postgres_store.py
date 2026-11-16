@@ -33,8 +33,14 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .errors import ConflictError, StoreUnavailable
 
+SCHEMA_VERSION = "2"   # raise it with any change to SCHEMA: a server then brings its database up to date once
 SCHEMA = r"""
 create schema if not exists egx;
+create table if not exists egx.meta (key text primary key, value text not null);
+
+-- A document's version is a number no document has had before. Were it a count from 1, a document removed and made
+-- again would carry a version an earlier reader still holds, and that reader's stale write would be let through.
+create sequence if not exists egx.versions;
 
 create table if not exists egx.docs (
     uid     text   not null,
@@ -42,7 +48,7 @@ create table if not exists egx.docs (
     id      text   not null,
     seq     bigint,
     body    text   not null,
-    version bigint not null default 1,
+    version bigint not null default nextval('egx.versions'),
     primary key (uid, coll, id)
 );
 create index if not exists docs_newest on egx.docs (uid, coll, seq desc) where seq is not null;
@@ -51,8 +57,12 @@ create index if not exists docs_newest on egx.docs (uid, coll, seq desc) where s
 create table if not exists egx.market (
     id      text   primary key,
     body    bytea  not null,
-    version bigint not null default 1
+    version bigint not null default nextval('egx.versions')
 );
+alter table egx.docs alter column version set default nextval('egx.versions');
+alter table egx.market alter column version set default nextval('egx.versions');
+select setval('egx.versions', greatest(nextval('egx.versions'), (select coalesce(max(version), 0) from egx.docs) + 1,
+                                       (select coalesce(max(version), 0) from egx.market) + 1));
 
 -- What is known about each account: whether it may use the app (asked of the sign-in service, kept here for the
 -- minutes it cannot be asked), and whether its data has been brought over from the previous database.
@@ -83,6 +93,7 @@ create trigger keep_records before update or delete on egx.docs
 alter table egx.docs enable row level security;
 alter table egx.market enable row level security;
 alter table egx.accounts enable row level security;
+alter table egx.meta enable row level security;
 """
 
 
@@ -100,7 +111,8 @@ class Database:
         # prepare_threshold=None: the host's connection pooler hands each transaction to any backend, where a
         # statement prepared on another one does not exist.
         self._pool = ConnectionPool(url, min_size=0, max_size=max_size, timeout=10.0, max_idle=120.0, open=True,
-                                    kwargs={"autocommit": True, "prepare_threshold": None},
+                                    reconnect_timeout=30.0,
+                                    kwargs={"autocommit": True, "prepare_threshold": None, "connect_timeout": 10},
                                     check=ConnectionPool.check_connection)
         self._ready = False
 
@@ -115,7 +127,11 @@ class Database:
             raise StoreUnavailable("the database is not answering; try again in a moment") from None
         except psycopg.errors.RaiseException as exc:
             raise RuntimeError(str(exc.diag.message_primary or exc)) from None
-        except psycopg.OperationalError as exc:
+        except (psycopg.errors.DeadlockDetected, psycopg.errors.SerializationFailure):
+            raise _Stale from None       # another request was changing the same documents: nothing was written
+        except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled):
+            raise StoreUnavailable("the database was busy with another change to the same data; try again in a moment") from None
+        except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
             raise StoreUnavailable(f"the database cannot be reached ({exc.__class__.__name__})") from None
 
     def all(self, sql: str, params: tuple = ()) -> list[tuple]:
@@ -125,18 +141,27 @@ class Database:
         return self.run(lambda conn: conn.execute(sql, params).fetchone())
 
     def ensure_schema(self) -> None:
-        """Create the tables if this database has none yet. Asked once per server instance: one small query.
+        """Create the tables if this database has none, or bring them up to date. Asked once per server instance.
 
         Two servers starting at the same moment take turns (an advisory lock), so the second finds the work done.
         """
         if self._ready:
             return
 
+        def current(conn) -> str | None:
+            if conn.execute("select to_regclass('egx.meta')").fetchone()[0] is None:
+                return None
+            row = conn.execute("select value from egx.meta where key='schema'").fetchone()
+            return row[0] if row else None
+
         def work(conn) -> None:
-            if conn.execute("select to_regclass('egx.accounts')").fetchone()[0] is None:
+            if current(conn) != SCHEMA_VERSION:
                 with conn.transaction():
                     conn.execute("select pg_advisory_xact_lock(%s)", (SCHEMA_LOCK,))
-                    conn.execute(SCHEMA)
+                    if current(conn) != SCHEMA_VERSION:      # another server may have done it while this one waited
+                        conn.execute(SCHEMA)
+                        conn.execute("insert into egx.meta (key, value) values ('schema', %s) on conflict (key) do update "
+                                     "set value=excluded.value", (SCHEMA_VERSION,))
         self.run(work)
         self._ready = True
 
@@ -211,13 +236,22 @@ class PostgresStore:
         def work(conn) -> dict[tuple[str, str], int | None]:
             after: dict[tuple[str, str], int | None] = {}
             with conn.transaction():
-                for (coll, id), write in zip(keys, writes, strict=True):
+                conn.execute("set local lock_timeout = '8s'")
+                conn.execute("set local statement_timeout = '25s'")
+                # Always in the same order, so that two requests writing the same documents wait for each other
+                # instead of each holding what the other needs.
+                for (coll, id), write in sorted(zip(keys, writes, strict=True), key=lambda pair: pair[0]):
                     guard = write["guard"]
                     if write["op"] == "delete":
                         if guard and guard[0] == "version":
                             done = conn.execute("delete from egx.docs where uid=%s and coll=%s and id=%s and version=%s",
                                                 (uid, coll, id, guard[1])).rowcount
                             if done != 1:
+                                raise _Stale
+                        elif guard:
+                            # Read as absent, written and removed again in this transaction: nothing to do, unless
+                            # somebody made it meanwhile. That one is theirs and is not removed.
+                            if conn.execute("select 1 from egx.docs where uid=%s and coll=%s and id=%s", (uid, coll, id)).fetchone():
                                 raise _Stale
                         else:
                             conn.execute("delete from egx.docs where uid=%s and coll=%s and id=%s", (uid, coll, id))
@@ -229,14 +263,14 @@ class PostgresStore:
                             "on conflict do nothing returning version", (uid, coll, id, write["seq"], write["body"])).fetchone()
                     elif guard:
                         row = conn.execute(
-                            "update egx.docs set body=%s, seq=%s, version=version+1 "
+                            "update egx.docs set body=%s, seq=%s, version=nextval('egx.versions') "
                             "where uid=%s and coll=%s and id=%s and version=%s returning version",
                             (write["body"], write["seq"], uid, coll, id, guard[1])).fetchone()
                     else:
                         row = conn.execute(
                             "insert into egx.docs (uid, coll, id, seq, body) values (%s,%s,%s,%s,%s) "
                             "on conflict (uid, coll, id) do update set body=excluded.body, seq=excluded.seq, "
-                            "version=egx.docs.version+1 returning version",
+                            "version=nextval('egx.versions') returning version",
                             (uid, coll, id, write["seq"], write["body"])).fetchone()
                     if row is None:
                         raise _Stale
@@ -400,12 +434,12 @@ class PostgresDocs:
             if seen is None:
                 row = self.db.one("insert into egx.market (id, body) values (%s,%s) on conflict do nothing returning version", (id, body))
             else:
-                row = self.db.one("update egx.market set body=%s, version=version+1 where id=%s and version=%s returning version",
+                row = self.db.one("update egx.market set body=%s, version=nextval('egx.versions') where id=%s and version=%s returning version",
                                   (body, id, seen))
             if row is None:
                 self._seen.pop(id, None)
                 raise ConflictError("the shared market data changed while it was being updated")
         else:
             row = self.db.one("insert into egx.market (id, body) values (%s,%s) on conflict (id) do update "
-                              "set body=excluded.body, version=egx.market.version+1 returning version", (id, body))
+                              "set body=excluded.body, version=nextval('egx.versions') returning version", (id, body))
         self._seen[id] = row[0]
