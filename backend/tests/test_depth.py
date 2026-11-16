@@ -59,15 +59,18 @@ def test_describe_says_what_arrived_for_the_book_in_one_line():
     assert "m_AskBook[9]='1,2|3,4x.'" in describe({"m_AskBook": "1,2|3,4x."}) and len(describe({"m_AskBook": "9" * 5000})) < 1500
 
 
-def test_the_server_notes_what_the_feed_sent_once_per_stock(caplog):
+def test_the_server_notes_a_book_only_when_the_feed_sends_one(caplog):
     from app.data import younit
     younit._BOOK_NOTED.clear()
-    row = {"m_BidPrice": "9.9", "m_BidVol": "500", "m_AskPrice": "10.1", "m_AskVol": "700", "m_BidBook": ""}
+    top = {"m_BidPrice": "9.9", "m_BidVol": "500", "m_AskPrice": "10.1", "m_AskVol": "700"}
+    sent = {**top, "m_LastTradePrice": "10", "m_BidBook": "9.9,500,2|9.8,100,1", "m_AskBook": ""}
     with caplog.at_level("INFO", logger="egx.depth"):
-        younit._note_book("sy7", row, build(row))
-        younit._note_book("sy7", row, build(row))          # again within ten minutes: nothing more
-        younit._note_book("sy8", row, build(row))
+        younit._note_book("sy7", top, build(top))            # the usual case, no book fields: nothing to say
+        younit._note_book("sy7", sent, build(sent))
+        younit._note_book("sy7", sent, build(sent))          # again within ten minutes: nothing more
+        younit._note_book("sy8", sent, build(sent))
     lines = [r.getMessage() for r in caplog.records]
-    assert len(lines) == 2 and "sy7 read as 1 bids and 1 asks (best price only: bids,asks)" in lines[0]
-    assert "m_BidBook[0]=''" in lines[0] and "m_AskBook=absent" in lines[0]
+    assert len(lines) == 2 and "sy7 read as 2 bids and 1 asks (best price only: asks)" in lines[0]
+    assert "m_BidBook[19]='9.9,500,2|9.8,100,1'" in lines[0] and "m_AskBook[0]=''" in lines[0]
+    assert lines[1].startswith("depth: sy8 ")
     younit._BOOK_NOTED.clear()

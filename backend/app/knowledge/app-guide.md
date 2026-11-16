@@ -17,7 +17,9 @@ broker.
 - **Stock page**: price with day range, candlestick chart (daily, weekly, monthly) with 20/50/200-day
   averages, RSI and MACD, a rule-based technical and momentum read, support and resistance (low and high of the
   last 60 sessions), candle patterns (arrows on the chart and a "Candle patterns" card with each pattern's
-  direction, status and the level it defends, for the chosen candle period), the live order book ("price depth") when the feed is connected, saved research, and the
+  direction, status and the level it defends, for the chosen candle period), "price depth" when the feed is connected (the best bid and ask with their sizes, the spread, and the shares
+  waiting to buy against those waiting to sell; the feed sends no price levels behind the best price, so the app
+  cannot list them the way a broker's own app does), saved research, and the
   order ticket for a paper trade.
 - **Watchlist**: watched stocks and custom lists.
 - **Portfolio**: holdings, cost, market value, gross profit, estimated net profit after fees, allocation by
@@ -151,7 +153,8 @@ broker.
 - Before a stop is acted on, the app's own price for the stock and the broker's own price must agree (within
   1.5%). If they disagree nothing is sold, and the owner is told to look at the position themselves.
 - Stop-loss and take-profit: watched by the app, not left at the broker. When the live price reaches the
-  level, the app sends a sale priced a few levels into the bids so that it fills. If it does not fill it is
+  level, the app sends a sale priced at the best bid, inside the owner's price band (the feed sends no bid
+  levels behind the best one; if it ever does, the sale goes a few levels into them). If it does not fill it is
   cancelled and priced again. Shares the broker does not show as free to sell yet cannot be sold; the app
   waits. On EGX shares usually settle two sessions after the purchase (T+2), so the stop on a fresh purchase
   may not be able to act for up to two sessions. After six attempts in a day it stops and tells the owner to

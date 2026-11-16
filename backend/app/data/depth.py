@@ -1,6 +1,11 @@
 """Order-book ("price depth") parsing.
 
-The feed sends each side of the book as one text field whose layout is not
+What the feed sends today (seen in the session, 16 November 2026): the best bid
+and the best ask with their sizes, and the total waiting on each side. It names
+two fields for the levels behind them and leaves both out, so `build` usually
+has the top of the book and nothing more, and says so (`top_only`).
+
+Should it send them: each side of the book is one text field whose layout is not
 documented. `parse_side` accepts JSON or delimited text. Which column is the
 price, which the size and which the number of orders is decided ONCE for the
 whole side (a book is a table: every level has the same layout), not level by
@@ -19,6 +24,7 @@ OTHER_SEPARATOR = re.compile(r"\d[^\d.,-]+-?\d")  # two numbers with something o
 RECORD_SEPARATORS = ["\n", "|", ";", "#", "~", "^"]
 MAX_LEVELS = 200
 MAX_DISTANCE = 0.6  # a book price further than this from the last trade is not a price
+BOOK_KEYS = ("m_BidBook", "m_AskBook")  # the feed's two book fields: one text each, when it sends them
 
 
 def _tokens(part: str) -> list[str]:
@@ -140,10 +146,10 @@ def parse_side(text: str | None, near: float | None = None) -> list[dict]:
 def describe(row: dict) -> str:
     """What the feed sent for one stock's book, in one line, for the server's log. Market data only."""
     parts = []
-    for key in ("m_BidBook", "m_AskBook"):
+    for key in BOOK_KEYS:
         text = str(row.get(key) or "")
         parts.append(f"{key}[{len(text)}]={text[:500]!r}" if row.get(key) is not None else f"{key}=absent")
-    rest = {k: str(v)[:40] for k, v in sorted(row.items()) if k not in ("m_BidBook", "m_AskBook")}
+    rest = {k: str(v)[:40] for k, v in sorted(row.items()) if k not in BOOK_KEYS}
     return " ".join(parts) + " " + json.dumps(rest, separators=(",", ":"))[:900]
 
 
