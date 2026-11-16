@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .errors import AuthError, ConflictError
+from .errors import AuthError, ConflictError, DatabaseError, database_error
 
 
 def uid_from_token(token: str) -> str:
@@ -70,7 +70,7 @@ class FirestoreStore:
         try:
             res = _client.request(method, url, headers=self._headers, **kw)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"database unreachable: {exc.__class__.__name__}") from None
+            raise DatabaseError(f"database unreachable: {exc.__class__.__name__}", retry_after=15) from None
         if res.status_code in (401, 403):
             raise AuthError("not signed in, or this account is not allowed to use the app")
         return res
@@ -140,7 +140,7 @@ class FirestoreStore:
             raise ConflictError("the data changed in another window; reload and try again")
         if res.status_code >= 400:
             self._forget()
-            raise RuntimeError(f"database write failed ({res.status_code})")
+            raise database_error("write", res.status_code, res.text)
         # Remember the new version of everything just written, for a later write in this request.
         results = res.json().get("writeResults") or []
         for i, (key, write) in enumerate(zip(keys, writes, strict=True)):
@@ -178,7 +178,7 @@ class FirestoreStore:
                 self._docs[key] = None
                 self._times.setdefault(key, None)
             elif res.status_code >= 400:
-                raise RuntimeError(f"database read failed ({res.status_code})")
+                raise database_error("read", res.status_code, res.text)
             else:
                 body = res.json()
                 self._docs[key] = self._decode(body)
@@ -194,7 +194,7 @@ class FirestoreStore:
                 params = {"pageSize": 300} | ({"pageToken": token} if token else {})
                 res = self._request("GET", f"{self._url}/{self._path(coll)}", params=params)
                 if res.status_code >= 400:
-                    raise RuntimeError(f"database read failed ({res.status_code})")
+                    raise database_error("read", res.status_code, res.text)
                 data = res.json()
                 for d in data.get("documents", []):
                     if "fields" in d:
@@ -286,5 +286,5 @@ class FirestoreStore:
         parent = f"{self._url}/egx/{quote(self.uid, safe='')}"
         res = self._request("POST", f"{parent}:runQuery", json=query)
         if res.status_code >= 400:
-            raise RuntimeError(f"database read failed ({res.status_code})")
+            raise database_error("read", res.status_code, res.text)
         return [self._decode(r["document"]) for r in res.json() if "document" in r]

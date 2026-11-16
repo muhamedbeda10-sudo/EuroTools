@@ -142,6 +142,13 @@ class App:
                                  feed=feed_state)
         return self
 
+    def import_lists(self) -> list[str]:
+        """The collections holding this account's own imports, when they still have to be read (for `store.warm`).
+
+        Empty once they are in memory: they are read again only after an import, not on every request.
+        """
+        return [] if self.market.imports_held() else ["instruments", "bars"]
+
     def provider_status(self) -> dict:
         if self.feed is None:
             return {"name": None, "configured": False}
@@ -307,7 +314,7 @@ class App:
         return clean(df.astype(object).where(df.notna(), None).to_dict("records"))
 
     def stock_rows(self, sector: str | None = None, q: str | None = None, category: str | None = None) -> list[dict]:
-        self.store.warm(lists=["watchlist", "instruments", "bars"])
+        self.store.warm(lists=["watchlist", *self.import_lists()])
         df = self.quotes()
         if df.empty:
             return []
@@ -640,7 +647,7 @@ class App:
     def portfolio(self) -> dict:
         pid = self.app_settings()["active_portfolio_id"]
         self.store.warm(gets=[("settings", "fees"), ("portfolios", pid)],
-                        lists=[self._ledger_coll(), "instruments", "bars"])
+                        lists=[self._ledger_coll(), *self.import_lists()])
         txs = self.store.list(self._ledger_coll())
         state = replay(txs)
         schedule = self.fee_schedule()
