@@ -206,6 +206,12 @@ broker.
   and act inside those limits following the user's written mandate. The
   user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
   session and always leaves a place for the one after the close, which is never skipped for it.
+- The owner chooses which account the autopilot works on, in the same card (everyone else: the paper
+  portfolio). "Paper portfolio only": a review writes no real-order proposal, whatever the mandate says.
+  "Real account only": a review is about the real account; it only writes proposals, inside the owner's
+  limits, and leaves the paper portfolio alone. "Both" (the default, as before): the paper portfolio, and
+  proposals only when the mandate asks. In a review the app refuses the other account's tools; conversations
+  are not affected. A real order still goes out only on approval or inside the automatic box.
 
 ## The app watches for the assistant (watches)
 - A review by the assistant costs money every time; a rule the app checks costs nothing. So an alert can be

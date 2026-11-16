@@ -72,6 +72,10 @@ class Tool:
     run: Callable[[App, Any], Any]
     kind: Literal["read", "write", "confirm"] = "read"
     label: Callable[[Any], str] = lambda a: ""
+    # The account whose money the tool moves, where it moves any: "paper" for a paper trade, a protective order or an
+    # automatic run, "real" for a proposal of a real order. A review the autopilot makes for one account is refused
+    # the other account's tools (assistant.py); in a conversation it changes nothing.
+    account: Literal["paper", "real"] | None = None
 
 
 def r4(value):
@@ -1044,28 +1048,31 @@ TOOLS: list[Tool] = [
          "only the owner can approve it there. But when the owner has switched automatic orders on (see real_orders) and "
          "the proposal fits their box, it IS sent to the broker without them, within about a minute; the result tells "
          "you which of the two it is. Set hold_for_owner when the user wants to decide themselves. Use it only when the "
-         "user asked for a real order to be prepared, or their autopilot mandate says to.",
-         ProposeRealOrder, _propose_real_order, kind="write",
+         "user asked for a real order to be prepared, or in a review of your own whose brief says the real account is "
+         "part of it (the owner chooses in Settings → Assistant which account the autopilot works on).",
+         ProposeRealOrder, _propose_real_order, account="real", kind="write",
          label=lambda a: f"Preparing a real {a.side.lower()} order for {a.qty:,} {a.symbol.upper()} at {a.limit_price}"),
     Tool("withdraw_real_order_proposal", "Take back a waiting proposal for a real order that you wrote and no longer stand behind.",
-         WithdrawRealOrder, _withdraw_real_order, kind="write", label=lambda a: "Withdrawing a real order proposal"),
+         WithdrawRealOrder, _withdraw_real_order, account="real", kind="write", label=lambda a: "Withdrawing a real order proposal"),
     Tool("preview_trade", "What a paper order would cost before placing it: fill price, every fee line, total cash, and "
          "whether it would be accepted.", TradeArgs, _preview_trade,
          label=lambda a: f"Pricing a {a.side.lower()} of {a.qty} {a.symbol.upper()}"),
     Tool("size_position", "How many shares to buy so that a stop-loss at a given price costs no more than a chosen share "
-         "of the portfolio, within the user's limits and the cash available. Use it before buying.", Size, _size,
+         "of the portfolio, within the user's limits and the cash available. Use it before buying. It works from the "
+         "paper portfolio's value and cash: for a real order, work the size out from the real account's own figures.",
+         Size, _size,
          label=lambda a: f"Sizing a position in {a.symbol.upper()}"),
     Tool("place_trade", "Record a paper trade in the ledger at the stock's latest price, with fees. Paper only: nothing "
          "is sent to a broker. The user's limits on your trading (size per trade and per stock, trades per day, cash "
-         "kept) are enforced; a refused trade says which limit.", PlaceTrade, _place_trade, kind="confirm",
+         "kept) are enforced; a refused trade says which limit.", PlaceTrade, _place_trade, account="paper", kind="confirm",
          label=lambda a: f"{'Buy' if a.side == 'BUY' else 'Sell'} {a.qty:,} {a.symbol.upper()} (paper trade)"),
     Tool("protective_orders", "The stop-loss and take-profit orders on the holdings, how far the price is from each, and "
          "which holdings have no stop.", OrdersList, _orders, label=lambda a: "Reading the protective orders"),
     Tool("set_protective_order", "Put a stop-loss or a take-profit on a holding. The app carries it out by itself when "
          "the price is reached, also when nobody is looking. A new one replaces the old one of the same kind.", SetOrder,
-         _set_order, kind="confirm",
+         _set_order, account="paper", kind="confirm",
          label=lambda a: f"{'Stop-loss' if a.kind == 'stop' else 'Take-profit'} on {a.symbol.upper()} at {a.price:g}"),
-    Tool("cancel_protective_order", "Cancel an open stop-loss or take-profit.", CancelOrder, _cancel_order, kind="confirm",
+    Tool("cancel_protective_order", "Cancel an open stop-loss or take-profit.", CancelOrder, _cancel_order, account="paper", kind="confirm",
          label=lambda a: "Cancel a protective order"),
     Tool("watchlist", "The stocks on the watchlist with their quotes, and the user's custom stock lists.", NoArgs, _watchlist,
          label=lambda a: "Reading the watchlist"),
@@ -1090,10 +1097,10 @@ TOOLS: list[Tool] = [
     Tool("paper_runs", "Automatic paper-trading runs: status, capital, cash, open positions, profit, pending orders and notes.",
          NoArgs, _paper_runs, label=lambda a: "Reading the automatic runs"),
     Tool("start_paper_run", "Start an automatic paper-trading run: a saved strategy trades the paper portfolio by itself "
-         "with the capital set aside for it.", StartRun, _start_run, kind="confirm",
+         "with the capital set aside for it.", StartRun, _start_run, account="paper", kind="confirm",
          label=lambda a: f"Start an automatic run with EGP {a.capital:,.0f}"),
     Tool("set_paper_run_status", "Pause, resume or stop an automatic run. Stopping is final.", RunStatus, _run_status,
-         kind="confirm", label=lambda a: {"active": "Resume", "paused": "Pause", "stopped": "Stop"}[a.status] + " an automatic run"),
+         account="paper", kind="confirm", label=lambda a: {"active": "Resume", "paused": "Pause", "stopped": "Stop"}[a.status] + " an automatic run"),
     Tool("alerts", "The alerts, what kinds exist, and the alerts that fired recently. `wake` marks a watch (it wakes you when "
          "it fires) and `by` says who set it.", NoArgs, _alerts,
          label=lambda a: "Reading the alerts"),
@@ -1118,12 +1125,12 @@ TOOLS: list[Tool] = [
     Tool("settings", "The app's settings: starting capital, the fee schedule and whether it was verified, the state of "
          "the market-data feed and data quality.", NoArgs, _settings, label=lambda a: "Reading the settings"),
     Tool("update_settings", "Change the starting capital or the benchmark.", UpdateSettings, _update_settings,
-         kind="confirm", label=lambda a: "Change the settings"),
+         account="paper", kind="confirm", label=lambda a: "Change the settings"),
     Tool("update_fee_schedule", "Replace the fee schedule used for every later trade and backtest. Read the current one "
          "first and send the complete list.", UpdateFees, _update_fees, kind="confirm",
          label=lambda a: f"Replace the fee schedule ({len(a.items)} lines)"),
     Tool("reset_portfolio", "Start a fresh paper portfolio with the starting capital. The old ledger is kept but no "
-         "longer active.", NoArgs, _reset_portfolio, kind="confirm", label=lambda a: "Reset the paper portfolio"),
+         "longer active.", NoArgs, _reset_portfolio, account="paper", kind="confirm", label=lambda a: "Reset the paper portfolio"),
     Tool("audit_log", "The record of what was changed in this account and when.", Audit, _audit,
          label=lambda a: "Reading the activity log"),
     Tool("knowledge", "The app's reference library: how the app works, and the owner's trading references (books and "
