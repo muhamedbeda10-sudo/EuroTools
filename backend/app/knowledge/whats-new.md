@@ -1,6 +1,18 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.5.2 · 2026-11-16 · Plain words when a service refuses, and far fewer database reads
+For: everyone
+عربي: كلام واضح لما خدمة ترفض، وقراءات أقل بكتير من قاعدة البيانات
+
+- When the database has used up its allowance for the day, every screen now says so in plain words, with when it comes back (about 10:00 Cairo time), instead of "Request failed (500)". Your data is safe while it lasts.
+  عربي: لما قاعدة البيانات تخلّص حصتها اليومية، كل شاشة بقت تقول ده بكلام واضح ومعاه ميعاد رجوعها (حوالي 10:00 بتوقيت القاهرة)، بدل «Request failed (500)». وبياناتك في أمان طول الفترة دي.
+- The app asks the database far less, so the allowance lasts: parts of a page that show the same thing share one request, and while prices are streaming the figures the server works out (portfolio value, breadth, movers) are re-read once a minute instead of every 15 seconds. The prices themselves still move with every trade.
+  عربي: التطبيق بقى يسأل قاعدة البيانات أقل بكتير علشان الحصة تكفّي: أجزاء الصفحة اللي بتعرض نفس الحاجة بتشترك في طلب واحد، ووقت البث الحي الأرقام اللي السيرفر بيحسبها (قيمة المحفظة، اتساع السوق، الأكثر حركة) بتتقري مرة كل دقيقة بدل كل 15 ثانية. الأسعار نفسها لسه بتتحرك مع كل صفقة.
+- A stock the data feed cannot give no longer stops the market-data update. The others are updated, a note says how many were set aside and why, and the feed is asked for them again in half an hour (Settings, Connections shows the same).
+  عربي: السهم اللي مصدر البيانات مش بيرجّعه ما بقاش يوقّف تحديث بيانات السوق. باقي الأسهم بتتحدّث، وبتظهر ملاحظة بعدد الأسهم اللي اتأجلت والسبب، والمصدر بيتسأل عنها تاني بعد نص ساعة (ونفس الكلام ظاهر في Settings ثم Connections).
+- When the data feed refuses the sign-in for being asked too often, the app waits as long as the feed asks instead of trying again with every request, so live prices come back sooner.
+  عربي: لما مصدر البيانات يرفض تسجيل الدخول علشان الطلبات كتير، التطبيق بيستنى المدة اللي المصدر طالبها بدل ما يحاول مع كل طلب، فالأسعار الحية بترجع أسرع.
 ## 0.5.1 · 2026-11-16 · Price depth shows what the feed really sends
 For: everyone
 عربي: «Price depth» بيعرض اللي التغذية بتبعته فعلًا

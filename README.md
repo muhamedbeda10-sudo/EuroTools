@@ -63,6 +63,24 @@ Settings → Connections has a manual update button. The feed provides no sector
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
 
+A stock whose history the feed does not give (an empty or unreadable answer) is noted in the index
+(`tried`) and asked for again after 30 minutes. It is counted as `failed`, not as `remaining`, so it
+neither stops the update for the stocks after it nor is requested again on every page load. A sign-in
+the feed refuses (429) is not repeated until the pause it asked for is over.
+
+### Database reads
+
+Firestore counts every document read, and each request's security-rule lookups, against the
+project's daily allowance (50,000 reads on the free plan, shared with everything else in the
+project). When it is used up Firestore answers 429 and the API answers **503** with a sentence that
+says so (`store/errors.py`), not a 500. What keeps the count down:
+
+- the shared `egxMarket/meta` document is read at most once every few seconds per server instance;
+- an account's own imports (`instruments`, `bars`) are read once per import (`data_version`), not per request;
+- a batch that changed no bars does not move the shared version, so no instance reloads the price tables;
+- the browser shares requests for the same path made at the same moment, and while prices stream it
+  re-reads the server's figures once a minute instead of every 15 seconds.
+
 ## Install on a phone
 
 The site is an installable web app: it opens from the home screen in its own window, with no store
@@ -434,7 +452,7 @@ ledger (`origin: order:<id>`) with the usual fees. One stop and one target per s
   refused (409) instead of silently overwriting. User actions retry once.
 - Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
 - The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and
-  resumes it, keeping what was already saved.
+  resumes it, keeping what was already saved. A stock that failed is retried after 30 minutes.
 
 ## Known limits
 

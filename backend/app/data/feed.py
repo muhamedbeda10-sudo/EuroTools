@@ -9,6 +9,7 @@ single request never runs long on a serverless host; the page calls
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -20,7 +21,7 @@ from typing import Protocol
 import httpx
 import pandas as pd
 
-from ..store.errors import AuthError, ConflictError
+from ..store.errors import AuthError, ConflictError, DatabaseError, database_error
 from .calendar import CAIRO, cairo_now, last_settle, market_open  # noqa: F401 - CAIRO re-exported for tests
 from .younit import YounitClient, YounitError, YounitRateLimit
 
@@ -32,6 +33,10 @@ REQUEST_GAP = 0.12       # seconds between request starts: a steady pace instead
 WRITE_ATTEMPTS = 3
 MAX_DOC_BYTES = 900_000
 MAX_PER_BATCH = 40  # stocks per call: keeps one request far below the host's time limit
+RETRY_FAILED_MINUTES = 30  # a stock whose history could not be read is asked for again after this, not on every call
+META_SECONDS = 3.0   # how long one server instance trusts its last read of `meta`: a page opens with ten requests at once
+
+log = logging.getLogger("egx.feed")
 
 
 class SharedDocs(Protocol):
@@ -66,14 +71,21 @@ class FirestoreDocs:
         self._headers = {"Authorization": f"Bearer {token}"}
         self._seen: dict[str, str | None] = {}  # document -> its version when this request read it (None: absent)
 
+    def _request(self, method: str, url: str, **kw) -> httpx.Response:
+        try:
+            return self._client.request(method, url, headers=self._headers, **kw)
+        except httpx.HTTPError as exc:
+            raise DatabaseError(f"database unreachable: {exc.__class__.__name__}", retry_after=15) from None
+
     def get(self, id: str) -> dict | None:
-        res = self._client.get(f"{self._url}/{id}", headers=self._headers)
+        res = self._request("GET", f"{self._url}/{id}")
         if res.status_code == 404:
             self._seen[id] = None
             return None
         if res.status_code in (401, 403):
             raise AuthError("not signed in, or this account is not allowed to use the app")
-        res.raise_for_status()
+        if res.status_code >= 400:
+            raise database_error("read", res.status_code, res.text)
         body = res.json()
         self._seen[id] = body.get("updateTime")
         return json.loads(body["fields"]["body"]["stringValue"])
@@ -86,14 +98,15 @@ class FirestoreDocs:
         if guard and id in self._seen:
             seen = self._seen[id]
             write["currentDocument"] = {"exists": False} if seen is None else {"updateTime": seen}
-        res = self._client.post(f"{self._root}:commit", headers=self._headers, json={"writes": [write]})
+        res = self._request("POST", f"{self._root}:commit", json={"writes": [write]})
         if res.status_code in (401, 403):
             raise AuthError("not signed in, or this account is not allowed to use the app")
         if "currentDocument" in write and (res.status_code == 409 or res.status_code in (400, 404) and any(
                 word in res.text for word in ("FAILED_PRECONDITION", "ALREADY_EXISTS", "NOT_FOUND"))):
             self._seen.pop(id, None)
             raise ConflictError("the shared market data changed while it was being updated")
-        res.raise_for_status()
+        if res.status_code >= 400:
+            raise database_error("write", res.status_code, res.text)
         stamp = ((res.json().get("writeResults") or [{}])[0]).get("updateTime")
         if stamp:
             self._seen[id] = stamp
@@ -110,7 +123,12 @@ def _now() -> datetime:
 
 
 def empty_index() -> dict:
-    return {"version": 0, "instruments": [], "last_dates": {}, "checked": {}, "updated_at": None, "errors": []}
+    return {"version": 0, "instruments": [], "last_dates": {}, "checked": {}, "tried": {}, "updated_at": None, "errors": []}
+
+
+def retry_at(tried: str) -> datetime:
+    """When a stock whose history could not be read at `tried` may be asked for again."""
+    return datetime.fromisoformat(tried) + timedelta(minutes=RETRY_FAILED_MINUTES)
 
 
 def _frame(rows: list) -> pd.DataFrame:
@@ -128,13 +146,19 @@ def _meta(index: dict) -> dict:
     """The few numbers every request needs, kept apart from the large index document."""
     current = listed(index["instruments"])
     dates = [d for s in current if (d := index["last_dates"].get(s["symbol"]))]
-    checked = [index["checked"].get(s["symbol"]) for s in current]
+    tried = index.get("tried") or {}
+    failing = [tried[s["symbol"]] for s in current if s["symbol"] in tried]
+    # A stock the feed could not serve waits for its own retry: it does not make every other stock look overdue.
+    checked = [index["checked"].get(s["symbol"]) for s in current if s["symbol"] not in tried]
     return {"version": index["version"], "updated_at": index.get("updated_at"),
             "symbols": len(current), "with_history": len(dates),
             "latest_bar_date": max(dates) if dates else None, "errors": index.get("errors", [])[:5],
             "fields": index.get("fields", []),
             # the oldest look at any stock: when it is older than the last session's close, a refresh is due
-            "checked_min": min(checked) if checked and all(checked) else None}
+            "checked_min": min(checked) if checked and all(checked) else None,
+            # stocks whose history the feed did not give at the last attempt, and when the first of them is tried again
+            "failing": len(failing),
+            "retry_at": retry_at(min(failing)).isoformat() if failing else None}
 
 
 def settled_until(checked: dict) -> dict[str, str]:
@@ -164,20 +188,46 @@ class Feed:
     _state: dict = {"version": None, "meta": None, "instruments": [], "frames": {}, "settled_until": {},
                     "live": None, "live_ts": None}
     _lock = threading.Lock()  # a cold server downloads the price tables once, however many requests arrive together
+    _meta_seen: tuple[float, dict] | None = None   # (when, the `meta` document) as this instance last read or wrote it
+    _meta_lock = threading.Lock()
+    _live_lock = threading.Lock()
 
     def __init__(self, docs: SharedDocs):
         self.docs = docs
 
+    def _read_meta(self) -> dict:
+        """The `meta` document, read from the database at most once every few seconds on this instance.
+
+        Every request starts here, and a page opens with about ten of them at the same moment: they share
+        one read instead of making ten. Each read is counted against the database's daily allowance.
+        """
+        seen = Feed._meta_seen
+        if seen and time.monotonic() - seen[0] < META_SECONDS:
+            return seen[1]
+        with Feed._meta_lock:
+            seen = Feed._meta_seen
+            if seen and time.monotonic() - seen[0] < META_SECONDS:
+                return seen[1]  # a request that arrived with this one has just read it
+            meta = self.docs.get("meta")
+            if meta is None:  # written by an earlier release that had no meta document
+                index = self.docs.get("index")
+                meta = _meta(index) if index else _meta(empty_index())
+            Feed._meta_seen = (time.monotonic(), meta)
+            return meta
+
+    def _write_meta(self, meta: dict) -> None:
+        self.docs.put("meta", meta)
+        Feed._meta_seen = (time.monotonic(), meta)
+
     def load(self) -> dict:
-        meta = self.docs.get("meta")
-        if meta is None:  # written by an earlier release that had no meta document
-            index = self.docs.get("index")
-            meta = _meta(index) if index else _meta(empty_index())
+        meta = self._read_meta()
         st = Feed._state
         if st["version"] == meta["version"] and st["meta"] is not None:
             st["meta"] = meta
             if meta.get("live_ts") != st.get("live_ts"):
-                st["live"], st["live_ts"] = self.docs.get("live"), meta.get("live_ts")
+                with Feed._live_lock:  # requests arriving together read the new prices once
+                    if meta.get("live_ts") != st.get("live_ts"):
+                        st["live"], st["live_ts"] = self.docs.get("live"), meta.get("live_ts")
             return st
         with Feed._lock:
             st = Feed._state
@@ -204,6 +254,7 @@ class Feed:
     def reset() -> None:
         Feed._state = {"version": None, "meta": None, "instruments": [], "frames": {}, "settled_until": {},
                        "live": None, "live_ts": None}
+        Feed._meta_seen = None
 
     def poll_live(self, client: YounitClient, *, now: datetime | None = None, min_age_seconds: float = 12.0) -> dict:
         """Take the latest price of every stock, once, and keep today's running open/high/low.
@@ -219,9 +270,15 @@ class Feed:
             age = (now - datetime.fromisoformat(current["ts"])).total_seconds()
             if -5 <= age < min_age_seconds:   # a reading stamped in the future is not a recent one: the feed is asked again
                 return {"updated": False, "ts": current["ts"], "available": bool(current["quotes"])}
-        index = self.docs.get("index") or empty_index()
-        current_list = listed(index["instruments"])
-        tracked = [i for i in current_list if index["last_dates"].get(i["symbol"])] or current_list
+        st = Feed._state
+        if st["meta"] is not None:
+            # The request has just loaded the stock list and its price tables: the large index is not read again.
+            current_list = listed(st["instruments"])
+            tracked = [i for i in current_list if i["symbol"] in st["frames"]] or current_list
+        else:
+            index = self.docs.get("index") or empty_index()
+            current_list = listed(index["instruments"])
+            tracked = [i for i in current_list if index["last_dates"].get(i["symbol"])] or current_list
         if not tracked:
             return {"updated": False, "ts": None, "available": False}
         got = client.live(tracked)
@@ -239,7 +296,7 @@ class Feed:
         self.docs.put("live", doc)
         meta = self.docs.get("meta") or _meta(self.docs.get("index") or empty_index())
         meta["live_ts"] = doc["ts"]
-        self.docs.put("meta", meta)
+        self._write_meta(meta)
         st = Feed._state
         if st["meta"] is not None:
             st["meta"], st["live"], st["live_ts"] = meta, doc, doc["ts"]
@@ -250,11 +307,18 @@ class Feed:
         meta = self.load()["meta"]
         live = self._state.get("live")
         oldest = meta.get("checked_min")
+        now = now or _now()
+        failing = int(meta.get("failing") or 0)
+        again = meta.get("retry_at")
         # Due when a stock has never been read, or was last read before the latest session closed:
         # the session's final bars are fetched on the first visit after the close, not the next morning.
-        due = not meta["symbols"] or not oldest or datetime.fromisoformat(oldest) < last_settle(now or _now())
+        # A stock the feed could not serve is due again when its pause is over, not on every visit.
+        due = (not meta["symbols"]
+               or (meta["symbols"] > failing and (not oldest or datetime.fromisoformat(oldest) < last_settle(now)))
+               or bool(again and datetime.fromisoformat(again) <= now))
         return {**{k: meta[k] for k in ("symbols", "with_history", "latest_bar_date", "updated_at", "errors")},
                 "refresh_due": due,
+                "failing": failing,
                 "market_open": market_open(),
                 "fields": meta.get("fields", []),
                 "live": {"as_of": live["ts"], "date": live["date"], "stocks": len(live["quotes"]),
@@ -270,15 +334,30 @@ class Feed:
         document actually holds, and chunk and index writes are refused if someone else
         changed the document meanwhile (then re-read and merged again), so two refreshes at
         the same time cannot lose each other's history.
+
+        A stock whose history the feed did not give is noted (`tried`) and left alone for
+        RETRY_FAILED_MINUTES: it is counted in `failed`, not in `remaining`, so the stocks
+        after it are still read and the same request is not sent again on every call.
         """
         started = time.monotonic()
         now = now or _now()
         settle = last_settle(now)
         index = json.loads(json.dumps(self.docs.get("index") or empty_index()))
+        index.setdefault("tried", {})   # an index written before failures were noted
 
-        def due(idx: dict, symbol: str) -> bool:
+        def stale(idx: dict, symbol: str) -> bool:
             checked = idx["checked"].get(symbol)
             return checked is None or datetime.fromisoformat(checked) < settle
+
+        def waiting(idx: dict, symbol: str) -> bool:
+            tried = (idx.get("tried") or {}).get(symbol)
+            return tried is not None and retry_at(tried) > now
+
+        def due(idx: dict, symbol: str) -> bool:
+            return stale(idx, symbol) and not waiting(idx, symbol)
+
+        def held_back(idx: dict, symbols) -> int:
+            return sum(1 for s in symbols if stale(idx, s) and waiting(idx, s))
 
         before = listed(index["instruments"])
         if before and not any(due(index, i["symbol"]) for i in before):
@@ -286,9 +365,11 @@ class Feed:
             if "checked_min" not in meta:  # written by an earlier release: bring it up to date once
                 fresh = _meta(index)
                 fresh["live_ts"] = meta.get("live_ts")
-                self.docs.put("meta", fresh)
+                self._write_meta(fresh)
                 Feed.reset()
-            return {"updated": 0, "remaining": 0, "total": len(before), "errors": [], "stalled": False,
+            failed = held_back(index, [i["symbol"] for i in before])
+            return {"updated": 0, "remaining": 0, "total": len(before), "failed": failed,
+                    "errors": (index.get("errors") or [])[:5] if failed else [], "stalled": False,
                     "rate_limited": False, "retry_after": None, "seconds": round(time.monotonic() - started, 1)}
 
         listed_at = index.get("listed_at")
@@ -315,6 +396,7 @@ class Feed:
             chunks = {name: doc or {"bars": {}} for name, doc in zip(names, pool.map(self.docs.get, names), strict=True)}
         updated: dict[str, list] = {}
         errors: list[str] = []
+        failed_now: list[str] = []
 
         def fetch(stock: dict):
             # How far back to ask is decided by the bars actually held, never by a date noted elsewhere.
@@ -351,6 +433,8 @@ class Feed:
                     limited = exc
                 except YounitError as exc:
                     errors.append(f"{fut.symbol}: {exc}")  # type: ignore[attr-defined]
+                    failed_now.append(fut.symbol)  # type: ignore[attr-defined]
+                    log.warning("history not read: %s", errors[-1])
                     if len(errors) >= 8:  # the feed is failing: stop hammering it
                         for other in running:
                             other.cancel()
@@ -389,30 +473,50 @@ class Feed:
         for attempt in range(WRITE_ATTEMPTS):
             if attempt:  # someone else saved the index meanwhile: apply this batch on top of theirs
                 index = json.loads(json.dumps(self.docs.get("index") or empty_index()))
+                index.setdefault("tried", {})
+            was = json.dumps(index, sort_keys=True)
+            listing = instruments(index)
+            # The price tables every server instance holds are rebuilt when the version moves: it moves only
+            # when they would come out different (new bars, or a stock list that changed), not for a failed batch.
+            moved = bool(updated) or listing != index["instruments"]
             index["fields"] = fields
             index["listed_at"] = listed_at
-            index["instruments"] = instruments(index)
+            index["instruments"] = listing
             kept = {i["symbol"] for i in index["instruments"]}
             for symbol in updated:
                 index["checked"][symbol] = stamp
                 index["last_dates"][symbol] = last_dates.get(symbol)
+                index["tried"].pop(symbol, None)
+            for symbol in failed_now:
+                index["tried"][symbol] = stamp
             index["last_dates"] = {s: d for s, d in index["last_dates"].items() if s in kept}
             index["checked"] = {s: d for s, d in index["checked"].items() if s in kept}
-            index["errors"] = errors[:8]
+            index["tried"] = {s: d for s, d in index["tried"].items() if s in kept}
+            # What the feed answered stays on record for as long as its stock is still set aside.
+            standing = [e for e in index.get("errors") or []
+                        if (name := e.split(":", 1)[0]) in index["tried"] and name not in failed_now]
+            index["errors"] = (errors + standing)[:8]
+            if not updated and json.dumps(index, sort_keys=True) == was:
+                moved = None  # no bars were written and nothing else differs: no write, and nobody reloads anything
+                break
             index["updated_at"] = stamp
-            index["version"] = int(index.get("version", 0)) + 1
+            if moved:
+                index["version"] = int(index.get("version", 0)) + 1
             try:
                 self.docs.put("index", index, guard=True)
                 break
             except ConflictError:
                 if attempt == WRITE_ATTEMPTS - 1:
                     raise
-        meta = _meta(index)
-        meta["live_ts"] = (self.docs.get("meta") or {}).get("live_ts")
-        self.docs.put("meta", meta)  # last: readers switch to the new version only once it is all there
-        Feed.reset()
+        if moved is not None:
+            meta = _meta(index)
+            meta["live_ts"] = (self.docs.get("meta") or {}).get("live_ts")
+            self._write_meta(meta)  # last: readers switch to the new version only once it is all there
+        if moved:
+            Feed.reset()
         remaining = sum(1 for s in stocks if due(index, s["symbol"]))
-        return {"updated": done, "remaining": remaining, "total": len(stocks), "errors": errors[:5],
+        return {"updated": done, "remaining": remaining, "total": len(stocks),
+                "failed": held_back(index, [s["symbol"] for s in stocks]), "errors": errors[:5],
                 "stalled": done == 0 and remaining > 0 and limited is None,
                 "rate_limited": limited is not None, "retry_after": limited.retry_after if limited else None,
                 "seconds": round(time.monotonic() - started, 1)}
