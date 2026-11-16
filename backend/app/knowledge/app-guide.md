@@ -208,11 +208,11 @@ broker.
 - Trades placed by the assistant must stay inside limits the user sets in Settings -> Assistant: largest single
   trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
   places by hand are not limited.
-- Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
-  (optionally also during the session: when something the app watches for it happens, or every so many minutes)
-  and act inside those limits following the user's written mandate. The
-  user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
-  session and always leaves a place for the one after the close, which is never skipped for it.
+- Autopilot, when switched on, has the assistant review after each completed session (optionally during the
+  session: when a watch fires, or every so many minutes) and act inside those limits, following the user's
+  mandate. The user sets the most reviews in a day (default 12); the one after the close always runs.
+- The owner chooses its account: "Paper portfolio only" (no real-order proposal in a review),
+  "Real account only" (proposals only; paper left alone) or "Both" (default). The app enforces it.
 
 ## The app watches for the assistant (watches)
 - A review by the assistant costs money every time; a rule the app checks costs nothing. So an alert can be

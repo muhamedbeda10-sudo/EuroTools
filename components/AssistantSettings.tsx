@@ -24,6 +24,12 @@ const AUTOPILOT: Record<string, [string, string]> = {
   events: ["When a watch fires", "The review after each close, plus a short review whenever something the app is watching for it happens: a level it set, a time, a stop-loss sold. The app does the watching at no cost, so this is the cheapest way to keep it working during the session."],
   intraday: ["During the session too", "The review after each close, plus a check every so many minutes while the market is open, and a short review when a watch fires. The most thorough, and the most expensive."],
 };
+/** The account the autopilot's reviews are for: the name in the list, what it means, and the short form for the badge. */
+const ACCOUNT: Record<string, [string, string, string]> = {
+  paper: ["Paper portfolio only", "It manages the paper (practice) portfolio. In its own reviews it writes no proposal for a real order, whatever your instructions say.", "paper portfolio"],
+  real: ["Real account only", "Its reviews are about your real brokerage account: it reads it and writes proposals for real orders, inside your limits. It leaves the paper portfolio as it is.", "real account"],
+  both: ["Both", "It manages the paper portfolio, and writes proposals for real orders only when your instructions below ask for them. This is how it worked before you could choose.", "paper + real"],
+};
 const LANGUAGE: Record<string, [string, string]> = {
   auto: ["The language I write in", "Arabic when you write Arabic, English when you write English."],
   ar: ["Always Arabic (Egyptian)", "Answers in Egyptian Arabic whatever language you write in. Symbols and screen names stay as they are."],
@@ -59,7 +65,7 @@ export default function AssistantSettings() {
     const s = data?.settings;
     if (s) setDraft({ model: s.model, effort: s.effort, access: s.access, daily_usd: s.daily_usd, monthly_usd: s.monthly_usd,
                       language: s.language, instructions: s.instructions, real_proposals_per_day: s.real_proposals_per_day, ...s.limits,
-                      autopilot_mode: s.autopilot.mode, autopilot_every_minutes: s.autopilot.every_minutes, autopilot_mandate: s.autopilot.mandate,
+                      autopilot_mode: s.autopilot.mode, autopilot_account: s.autopilot.account ?? "both", autopilot_every_minutes: s.autopilot.every_minutes, autopilot_mandate: s.autopilot.mandate,
                       autopilot_max_per_day: s.autopilot.max_per_day, autopilot_notify: s.autopilot.notify });
   }, [data]);
 
@@ -88,6 +94,9 @@ export default function AssistantSettings() {
   const set = (patch: any) => setDraft((d: any) => ({ ...d, ...patch }));
   const model = data?.models?.find((m: any) => m.id === draft?.model);
   const spend = data?.spending;
+  // The real account is its owner's alone: only they choose it. Someone left on it without the account can still leave it.
+  const picksAccount = !!draft && (!!live?.allowed || draft.autopilot_account === "real");
+  const withReal = !!draft && !!live?.allowed && draft.autopilot_mode !== "off" && draft.autopilot_account !== "paper";
 
   return (
     <State loading={loading} error={error}>
@@ -181,7 +190,7 @@ export default function AssistantSettings() {
 
           <div className="card">
             <h2>Limits on the assistant&apos;s own trades</h2>
-            <p className="muted" style={{ marginTop: 0, maxWidth: "110ch" }}>Checked by the app on every trade the assistant places, whatever it was asked. A trade outside them is refused and it is told why. Trades you place yourself are not affected.</p>
+            <p className="muted" style={{ marginTop: 0, maxWidth: "110ch" }}>Checked by the app on every paper trade the assistant places, whatever it was asked. A trade outside them is refused and it is told why. Trades you place yourself are not affected.{live?.allowed && <> Real orders have their own limits, in <Link href="/settings?tab=real">Real trading</Link>.</>}</p>
             <div className="grid cols-4">
               {LIMITS.map(([key, label, unit, min, max]) => (
                 <div className="field" key={key}>
@@ -214,9 +223,16 @@ export default function AssistantSettings() {
 
           <div className="card">
             <div className="card-head"><h2>Autopilot</h2>
-              <span className={`badge ${draft.autopilot_mode === "off" ? "" : "ok"}`}>{draft.autopilot_mode !== "off" && <span className="dot" />}{AUTOPILOT[draft.autopilot_mode]?.[0] ?? draft.autopilot_mode}</span></div>
+              <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                {picksAccount && draft.autopilot_mode !== "off" && (
+                  <span className={`badge ${draft.autopilot_account === "paper" ? "paper" : "warn"}`}>{ACCOUNT[draft.autopilot_account]?.[2] ?? draft.autopilot_account}</span>
+                )}
+                <span className={`badge ${draft.autopilot_mode === "off" ? "" : "ok"}`}>{draft.autopilot_mode !== "off" && <span className="dot" />}{AUTOPILOT[draft.autopilot_mode]?.[0] ?? draft.autopilot_mode}</span>
+              </span></div>
             <p className="muted" style={{ marginTop: 0, maxWidth: "110ch" }}>
-              Lets the assistant review the portfolio and trade by itself, inside the limits above. Each review is a new conversation you can read afterwards,
+              {picksAccount
+                ? "Lets the assistant review and act by itself, inside your limits: on the paper portfolio, on your real account, or on both. You choose which below."
+                : "Lets the assistant review the portfolio and trade by itself, inside the limits above."} Each review is a new conversation you can read afterwards,
               and each one uses the API (typically a few cents to a few tens of cents, depending on the model). It runs while the app is open
               {live?.background ? ", and on the server with the app closed, because you switched on running without the app open." : "; to keep it going with the app closed, see Real trading → Running without the app open."}
             </p>
@@ -239,7 +255,19 @@ export default function AssistantSettings() {
                 Watching stop-losses and sending what was already decided is the app&apos;s own work and costs nothing here.
               </div>
             )}
+            {data.autopilot?.blocked && <div className="note danger" role="alert" style={{ marginBottom: 14 }}>{data.autopilot.blocked}</div>}
             <div className="grid cols-2">
+              {picksAccount && (
+                <div className="field">
+                  <label htmlFor="as-acct">Which account it works on</label>
+                  <select id="as-acct" value={draft.autopilot_account} onChange={(e) => set({ autopilot_account: e.target.value })}>
+                    {(data.autopilot_accounts ?? ["paper", "real", "both"]).map((a: string) => (
+                      <option key={a} value={a} disabled={!live?.allowed && a !== "paper" && a !== draft.autopilot_account}>{ACCOUNT[a]?.[0] ?? a}</option>
+                    ))}
+                  </select>
+                  <p className="foot-note" style={{ marginTop: 6 }}>{ACCOUNT[draft.autopilot_account]?.[1]}</p>
+                </div>
+              )}
               <div className="field">
                 <label htmlFor="as-auto">When it reviews</label>
                 <select id="as-auto" value={draft.autopilot_mode} onChange={(e) => set({ autopilot_mode: e.target.value })}>
@@ -274,8 +302,17 @@ export default function AssistantSettings() {
               <textarea id="as-mandate" dir="auto" rows={5} maxLength={4000} value={draft.autopilot_mandate} onChange={(e) => set({ autopilot_mandate: e.target.value })}
                 placeholder="e.g. Trade only liquid stocks in an uptrend. Risk at most 1% of the portfolio per trade. Hold no more than five positions." />
             </div>
+            {withReal && (
+              !live.ready
+                ? <div className="note" style={{ marginBottom: 12 }}>Real orders are switched off (<Link href="/settings?tab=real">Real trading</Link>), so on the real account the autopilot can only look and report.</div>
+                : Number(draft.real_proposals_per_day) === 0
+                  ? <div className="note" style={{ marginBottom: 12 }}>You allow it no proposals for real orders in a day (Real money, above), so on the real account the autopilot can only look and report.</div>
+                  : live.auto
+                    ? <div className="note danger" style={{ marginBottom: 12 }}><strong>Real money, without you.</strong> Automatic orders are on: a proposal of the autopilot&apos;s that fits the box you set is sent to the broker without you seeing it first. One that does not fit waits for your approval.</div>
+                    : <div className="note info" style={{ marginBottom: 12 }}>On the real account the autopilot only writes proposals. Each one waits for your approval on the <Link href="/account">Real account</Link> page: nothing is sent by itself.</div>
+            )}
             {draft.autopilot_mode !== "off" && draft.access !== "full" && (
-              <div className="note">With “{ACCESS[draft.access]?.[0]}” the autopilot only looks and reports. It trades by itself only with Full access.</div>
+              <div className="note">With “{ACCESS[draft.access]?.[0]}” the autopilot only looks and reports. It trades and proposes by itself only with Full access.</div>
             )}
             {data.autopilot?.last_run && <p className="foot-note">Last review: {String(data.autopilot.last_run).slice(0, 16).replace("T", " ")} UTC.</p>}
           </div>

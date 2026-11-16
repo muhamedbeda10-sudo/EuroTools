@@ -334,13 +334,14 @@ function Background() {
           const review = await api("/api/v1/assistant/autopilot", { method: "POST" });
           if (review.mode === "off") autopilot = false;
           // Something the app saw waits for it (the pause after its last review is not over): ask again in a minute.
-          if (review.waiting > 0 && !review.ran && (review.mode === "events" || review.mode === "intraday")) lastAuto = Date.now() - AUTOPILOT_MS + 60_000;
+          if (review.waiting > 0 && !review.ran && !review.blocked && (review.mode === "events" || review.mode === "intraday")) lastAuto = Date.now() - AUTOPILOT_MS + 60_000;
           if (review.ran && !stopped) {
             if (review.changes > 0) window.dispatchEvent(new Event(DATA_UPDATED));
             const did = `${review.changes} change${review.changes === 1 ? "" : "s"}`;
-            setToasts((t) => [{ seq: `auto-${review.chat}`, title: "Autopilot", chat: review.chat,
+            setToasts((t) => [{ seq: `auto-${review.chat}`, title: review.account === "real" ? "Autopilot · real account" : "Autopilot", chat: review.chat,
                                 message: review.error ? `The review stopped: ${review.error}`
-                                  : review.reason === "event" ? `Woken by what it was watching: ${did}.` : `Reviewed the portfolio: ${did}.`,
+                                  : review.reason === "event" ? `Woken by what it was watching: ${did}.`
+                                  : `Reviewed the ${review.account === "real" ? "real account" : "portfolio"}: ${did}.`,
                                 note: review.error ? undefined : review.summary?.slice(0, 180) }, ...t].slice(0, 5));
           }
         }

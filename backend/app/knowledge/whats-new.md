@@ -1,6 +1,21 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.6.0 · 2026-11-16 · You choose which account the autopilot works on
+For: owner
+Open: /settings?tab=assistant
+عربي: إنت اللي بتختار الطيار الآلي يشتغل على أنهي حساب
+
+- The autopilot has a new choice, "Which account it works on" (Settings, Assistant, Autopilot): the paper portfolio only, the real account only, or both.
+  عربي: الطيار الآلي بقى فيه اختيار جديد «Which account it works on» (Settings ثم Assistant ثم Autopilot): المحفظة التجريبية (الورقية) بس، أو الحساب الحقيقي بس، أو الاتنين.
+- Paper portfolio only: it manages the paper portfolio, and in its own reviews it writes no proposal for a real order, whatever your instructions say. The app itself refuses it.
+  عربي: المحفظة التجريبية بس: بيدير المحفظة الورقية، وفي مراجعاته مابيكتبش أي اقتراح لأمر حقيقي مهما كانت تعليماتك. التطبيق نفسه هو اللي بيرفض.
+- Real account only: its reviews are about your real account. It reads the cash and the holdings from the broker and writes proposals for real orders inside your limits, and it leaves the paper portfolio as it is.
+  عربي: الحساب الحقيقي بس: مراجعاته بتبقى عن حسابك الحقيقي. بيقرا الكاش والأسهم من الوسيط وبيكتب اقتراحات أوامر حقيقية جوه حدودك، وبيسيب المحفظة التجريبية زي ما هي.
+- How a real order goes out has not changed: a proposal waits for your approval, and is sent by itself only when automatic orders are on and it fits the box you set.
+  عربي: طريقة خروج الأمر الحقيقي ماتغيّرتش: الاقتراح بيستنى موافقتك، ومابيتبعتش لوحده إلا لو الأوامر الآلية شغّالة وهو جوه الصندوق اللي إنت محدده.
+- Until you choose, it stays on "Both", which is how it worked before: the paper portfolio, plus proposals for real orders only when your instructions ask for them.
+  عربي: لحد ما تختار، بيفضل على «Both» زي ما كان شغّال قبل كده: المحفظة التجريبية، ومعاها اقتراحات أوامر حقيقية بس لما تعليماتك تطلب كده.
 ## 0.5.2 · 2026-11-16 · Plain words when a service refuses, and far fewer database reads
 For: everyone
 عربي: كلام واضح لما خدمة ترفض، وقراءات أقل بكتير من قاعدة البيانات

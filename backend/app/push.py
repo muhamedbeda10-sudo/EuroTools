@@ -331,7 +331,8 @@ def review(core: App, done: dict, post=None) -> dict:
             return send(core, "Autopilot", f"The assistant's review stopped: {done['error']}", tag="autopilot", url="/", post=post)
         if done.get("changes") and done.get("notify", True):
             # The count only: the report is the model's own words, and may name a balance. It is read in the app.
-            return send(core, "Autopilot", f"The assistant reviewed and made {done['changes']} change(s). Open the app to read its report.",
+            what = "reviewed the real account" if done.get("account") == "real" else "reviewed"   # which account it was for
+            return send(core, "Autopilot", f"The assistant {what} and made {done['changes']} change(s). Open the app to read its report.",
                         tag="autopilot", url="/", post=post)
     elif done.get("skipped") in ("the budget is used up", "today's reviews are used up") and done.get("why"):
         month = f"{cairo_now():%Y-%m}" if done.get("ceiling") == "month" else None   # a month's ceiling is told once in that month

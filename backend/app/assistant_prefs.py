@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from . import broker
 from .data.calendar import CAIRO, cairo_now
 from .domain.ledger import LedgerError, replay
 from .llm import DEFAULT_MODEL, EFFORTS, PRICES, SUPPORTED_MODELS
@@ -19,8 +20,12 @@ from .services import App
 
 ACCESS_LEVELS = ("full", "confirm", "read")
 AUTOPILOT_MODES = ("off", "after_close", "events", "intraday")
+# The account the autopilot's reviews are for. "both" is how it worked before the choice existed: it manages the
+# paper portfolio, and writes proposals for the real account only when the owner's mandate asks for them.
+AUTOPILOT_ACCOUNTS = ("paper", "real", "both")
 DEFAULT_LIMITS = {"max_position_pct": 25.0, "max_trade_pct": 20.0, "max_trades_per_day": 10, "min_cash_pct": 5.0}
-DEFAULT_AUTOPILOT = {"mode": "off", "every_minutes": 30, "mandate": "", "last_run": None, "last_session": None, "last_chat": None,
+DEFAULT_AUTOPILOT = {"mode": "off", "account": "both", "every_minutes": 30, "mandate": "", "last_run": None, "last_session": None,
+                     "last_chat": None,
                      # the most reviews in one day, whether to tell the owner's devices after one that changed something,
                      # and how many ran on which day
                      "max_per_day": 12, "notify": True, "day": None, "count": 0}
@@ -57,6 +62,7 @@ class PrefsIn(BaseModel):
     max_trades_per_day: int | None = Field(default=None, ge=0, le=200)
     min_cash_pct: float | None = Field(default=None, ge=0, le=90)
     autopilot_mode: Literal["off", "after_close", "events", "intraday"] | None = None
+    autopilot_account: Literal["paper", "real", "both"] | None = None
     autopilot_every_minutes: int | None = Field(default=None, ge=15, le=240)
     autopilot_mandate: str | None = Field(default=None, max_length=4000)
 
@@ -76,6 +82,9 @@ def prefs(core: App) -> dict:
         cfg.assistant_model if cfg.assistant_model in SUPPORTED_MODELS else DEFAULT_MODEL)
     effort = doc.get("effort") if doc.get("effort") in EFFORTS else (cfg.assistant_effort if cfg.assistant_effort in EFFORTS else "medium")
     daily, monthly, proposals = doc.get("daily_usd"), doc.get("monthly_usd"), doc.get("real_proposals_per_day")
+    autopilot = {**DEFAULT_AUTOPILOT, **{k: v for k, v in (doc.get("autopilot") or {}).items() if k in DEFAULT_AUTOPILOT}}
+    if autopilot["account"] not in AUTOPILOT_ACCOUNTS:
+        autopilot["account"] = DEFAULT_AUTOPILOT["account"]
     return {
         "access": doc.get("access") if doc.get("access") in ACCESS_LEVELS else "full",
         "model": model, "effort": effort,
@@ -85,8 +94,27 @@ def prefs(core: App) -> dict:
         "instructions": str(doc.get("instructions") or "")[:2000],
         "real_proposals_per_day": int(proposals) if isinstance(proposals, int) and 0 <= proposals <= 50 else DEFAULT_REAL_PROPOSALS,
         "limits": {**DEFAULT_LIMITS, **{k: v for k, v in (doc.get("limits") or {}).items() if k in DEFAULT_LIMITS}},
-        "autopilot": {**DEFAULT_AUTOPILOT, **{k: v for k, v in (doc.get("autopilot") or {}).items() if k in DEFAULT_AUTOPILOT}},
+        "autopilot": autopilot,
     }
+
+
+def autopilot_account(core: App, auto: dict | None = None) -> str:
+    """The account the autopilot's reviews are for: "paper", "real" or "both" (AUTOPILOT_ACCOUNTS).
+
+    The real account exists for its owner alone, so for anyone else "both" is simply the paper portfolio.
+    "real" is left as it was chosen even when the account cannot be reached: such a review is held back
+    (`autopilot_blocked`) rather than turned loose on the paper portfolio its owner told it to leave alone.
+    """
+    chosen = (auto or prefs(core)["autopilot"])["account"]
+    return "paper" if chosen == "both" and not broker.access(core)["allowed"] else chosen
+
+
+def autopilot_blocked(core: App, auto: dict | None = None) -> str | None:
+    """Why no review can run at all for the account that was chosen, in words for the person; None when one can."""
+    if autopilot_account(core, auto) == "real" and not broker.access(core)["allowed"]:
+        return ("The autopilot is set to work on the real account, which is not connected or not enabled for this sign-in, "
+                "so no review runs. Choose the paper portfolio in Settings → Assistant, or connect the account again.")
+    return None
 
 
 def save_prefs(core: App, change: PrefsIn) -> dict:
@@ -103,8 +131,13 @@ def save_prefs(core: App, change: PrefsIn) -> dict:
         for key in DEFAULT_LIMITS:
             if key in given:
                 current["limits"][key] = given[key]
-        for key, field in (("mode", "autopilot_mode"), ("every_minutes", "autopilot_every_minutes"), ("mandate", "autopilot_mandate"),
-                           ("max_per_day", "autopilot_max_per_day"), ("notify", "autopilot_notify")):
+        # The real account is its owner's alone. Only a change towards it is checked, so a page that sends back what was
+        # already saved still saves, and the way back to the paper portfolio is never closed.
+        to_real = given.get("autopilot_account") == "real" and current["autopilot"]["account"] != "real"
+        if to_real and not broker.access(core)["allowed"]:
+            raise PrefsError("Only the brokerage account's owner can set the autopilot to work on the real account.")
+        for key, field in (("mode", "autopilot_mode"), ("account", "autopilot_account"), ("every_minutes", "autopilot_every_minutes"),
+                           ("mandate", "autopilot_mandate"), ("max_per_day", "autopilot_max_per_day"), ("notify", "autopilot_notify")):
             if field in given:
                 current["autopilot"][key] = given[field].strip() if key == "mandate" else given[field]
         core.store.put("settings", "assistant", current)
