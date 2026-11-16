@@ -13,6 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 # closed to writing: a preview can be looked at, not used. Production without DATABASE_URL does not start.
 _production = os.environ.get("VERCEL_ENV", "production") == "production"
 os.environ.setdefault("STORE_BACKEND", "postgres" if _production or os.environ.get("DATABASE_URL") else "firestore")
+# Firestore is not asked anything any more (the owner's instruction, 16 November 2026, once their own data and the
+# market prices had come over). An account the database has no row for is not let in, and one whose data was left
+# in Firestore is refused with a plain message rather than given an empty account. FIREBASE_PROJECT_ID is still
+# needed: it is what a sign-in is verified against.
+os.environ.setdefault("MIGRATE_FROM_FIRESTORE", "false")
 os.environ.setdefault("FIREBASE_PROJECT_ID", "eurotools-a1ea6")
 os.environ.setdefault("FIREBASE_WEB_API_KEY", "AIzaSyA9XdUMM1KXbkthRnUGpgbqVnTjJbWWdlE")  # public by design
 os.environ.setdefault("APP_ENV", "production")
