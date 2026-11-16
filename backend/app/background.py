@@ -52,6 +52,12 @@ from .services import App, now_iso
 from .store.errors import AuthError, ConflictError
 
 log = logging.getLogger(__name__)
+# One line for each ring of the timer, so that the hosting platform's logs show that it rang and what came of it.
+# The line carries no key, token or figure of the account.
+rings = logging.getLogger("egx.timer")
+if not rings.handlers:
+    rings.addHandler(logging.StreamHandler())
+    rings.setLevel(logging.INFO)
 
 SWITCH = ("settings", "background")        # the owner's switch, and which key is the current one
 BEAT = ("settings", "background_beat")     # when the server last looked, and what came of it
@@ -228,6 +234,14 @@ def check_timer(settings: Settings, header: str | None) -> None:
 
 def wake(settings: Settings, build_core, model, *, firestore: bool, may_review=None) -> dict:
     """The timer rang. Sign in as the owner and take a look; say plainly why not, when not."""
+    out = _wake(settings, build_core, model, firestore=firestore, may_review=may_review)
+    auto = out.get("auto") or {}
+    rings.info("timer: ran=%s why=%s sent=%s exits=%s review=%s", out.get("ran"), out.get("why") or auto.get("why"),
+               auto.get("sent", 0), auto.get("exits", 0), bool((out.get("review") or {}).get("ran")))
+    return out
+
+
+def _wake(settings: Settings, build_core, model, *, firestore: bool, may_review=None) -> dict:
     now = cairo_now()
     if not (is_trading_day(now.date()) and EARLIEST <= now.time() <= LATEST):
         return {"ran": False, "why": "outside the session"}
