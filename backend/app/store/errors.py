@@ -52,3 +52,10 @@ def database_error(action: str, status: int, body: str = "") -> DatabaseError:
     if status in (500, 502, 503, 504):
         return DatabaseError(f"The database is not answering right now (HTTP {status}). Try again in a minute.", retry_after=30)
     return DatabaseError(f"database {action} failed ({status})")
+
+
+class StoreUnavailable(DatabaseError):
+    """The database cannot be asked right now (no connection, or it is refusing requests). Nothing was changed."""
+
+    def __init__(self, message: str, retry_after: int | None = 15):
+        super().__init__(message, retry_after)
