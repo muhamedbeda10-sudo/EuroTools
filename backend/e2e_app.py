@@ -99,7 +99,7 @@ _younit.hold((1, "COMI", "Commercial International Bank", 120, 120, 33.4, 35.9),
 # Real orders can be tried end to end here: the stand-in broker takes them, and no real broker is anywhere near.
 # The server can also be woken as the hosting platform's timer would wake it: GET /api/v1/background/look with this secret.
 _settings = Settings(broker_account_uids="local", live_trading_enabled=True, cron_secret="local-timer", background_key="local",
-                     background_secret="local-only")
+                     background_secret="local-only-not-a-real-secret")
 _store = Store(_settings.data_dir / "egx.sqlite3")
 app = create_app(_settings, _store, younit=_younit)
 

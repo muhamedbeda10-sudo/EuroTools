@@ -103,6 +103,7 @@ class App:
         # Who this unit of work is for, when the server has sign-in: set by the API for each request.
         self.uid: str | None = None
         self.signed_in = False
+        self.id_token: str | None = None   # that person's sign-in for this unit of work; never stored, never sent on
         self._app_settings: dict | None = None
         self.market: MarketData = None  # set by bootstrap()
 

@@ -135,6 +135,8 @@ broker.
   became of it, never a balance. "Send a test" checks it.
 - The automation keeps its own list of what it bought. It sells only those shares, never anything else in the
   account. An order the owner approved by hand is the owner's and is not on that list.
+- Before a stop is acted on, the app's own price for the stock and the broker's own price must agree (within
+  1.5%). If they disagree nothing is sold, and the owner is told to look at the position themselves.
 - Stop-loss and take-profit: watched by the app, not left at the broker. When the live price reaches the
   level, the app sends a sale priced a few levels into the bids so that it fills. If it does not fill it is
   cancelled and priced again. Shares the broker does not show as free to sell yet cannot be sold; the app

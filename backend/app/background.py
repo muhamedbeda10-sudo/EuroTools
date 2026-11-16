@@ -48,9 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import assistant, push, real_auto, real_orders
 from .config import Settings
 from .data.calendar import cairo_now, is_trading_day, market_open
-from .data.market import DataError
-from .data.younit import YounitError
-from .services import App, NotFound, now_iso
+from .services import App, now_iso
 from .store.errors import AuthError, ConflictError
 
 log = logging.getLogger(__name__)
@@ -60,6 +58,9 @@ BEAT = ("settings", "background_beat")     # when the server last looked, and wh
 PREFIX = "bk1."
 EARLIEST, LATEST = time(9, 40), time(15, 40)   # Cairo: a little before the opening bell to a while after the close
 STALE_SECONDS = 4 * 60.0                   # no look for this long during the session is worth saying
+# One call of the timer may run for five minutes at most. A review is begun only early in it, and what the review
+# proposed is judged in the same call only while there is comfortably time left to finish sending an order.
+REVIEW_LATEST_START, SECOND_LOOK_LATEST = 45.0, 235.0
 _tokens: dict[str, tuple[str, float]] = {}  # the owner's short-lived sign-in, kept while this instance lives
 _tokens_lock = threading.Lock()
 
@@ -112,8 +113,15 @@ def _exchange(settings: Settings, refresh_token: str) -> dict:
     except httpx.HTTPError as exc:
         raise BackgroundError(f"The sign-in service could not be reached ({type(exc).__name__}).") from None
     if res.status_code != 200:
-        raise BackgroundError("The sign-in behind the background key is no longer accepted: the password was changed, or the "
-                              "sign-in was ended. Create a new key in Settings.")
+        try:
+            said = str((res.json().get("error") or {}).get("message") or "")
+        except ValueError:
+            said = ""
+        if any(word in said for word in ("TOKEN_EXPIRED", "INVALID_REFRESH_TOKEN", "USER_DISABLED", "USER_NOT_FOUND", "INVALID_GRANT")):
+            raise BackgroundError("The sign-in behind the background key is no longer accepted: the password was changed, or the "
+                                  "sign-in was ended. Create a new key in Settings.")
+        raise BackgroundError(f"The sign-in service refused the server's request ({res.status_code}). The project's web key may "
+                              "not allow requests that come from a server.")
     body = res.json()
     return {"id_token": body["id_token"], "user_id": body["user_id"], "expires_in": int(body.get("expires_in") or 3600)}
 
@@ -218,7 +226,7 @@ def check_timer(settings: Settings, header: str | None) -> None:
         raise AuthError("not the timer")
 
 
-def wake(settings: Settings, build_core, model, *, firestore: bool) -> dict:
+def wake(settings: Settings, build_core, model, *, firestore: bool, may_review=None) -> dict:
     """The timer rang. Sign in as the owner and take a look; say plainly why not, when not."""
     now = cairo_now()
     if not (is_trading_day(now.date()) and EARLIEST <= now.time() <= LATEST):
@@ -227,65 +235,95 @@ def wake(settings: Settings, build_core, model, *, firestore: bool) -> dict:
     if not sealed:
         return {"ran": False, "why": "no background key on the server"}
     if not firestore:   # a local run has no sign-in to lend: it looks only when told to in so many words
-        return look(build_core(None, None), model) if sealed == "local" else {"ran": False, "why": "no background key on the server"}
+        return look(build_core(None, None), model, may_review=may_review) if sealed == "local" else \
+            {"ran": False, "why": "no background key on the server"}
     creds = unseal(settings, sealed)
     if creds is None:
+        log.warning("background: the key in the environment cannot be opened by this server")
         return {"ran": False, "why": "the background key on the server cannot be read"}
     try:
         token = _sign_in(settings, creds)
     except BackgroundError as exc:
         log.warning("background: %s", exc)
         return {"ran": False, "why": str(exc)}
-    return look(build_core(creds["uid"], token), model, kid=creds["kid"])
+    return look(build_core(creds["uid"], token), model, kid=creds["kid"], may_review=may_review)
 
 
-def look(core: App, model, *, kid: str | None = None) -> dict:
-    """One look by the server for one owner: prices, the automation, the assistant's review when due."""
-    switch = _switch(core)
-    if not switch["enabled"]:
-        return {"ran": False, "why": "background running is switched off"}
-    if kid is not None and switch["kid"] != kid:
-        return {"ran": False, "why": "the key on the server was replaced by a newer one"}
-    if core.younit is None or not core.real_account_allowed:
-        return {"ran": False, "why": "this sign-in is not the brokerage account's owner"}
-    out: dict = {"ran": True}
-    now = cairo_now()
-
-    # the prices the look will judge by
+def _prices(core: App, out: dict) -> None:
+    """Read the prices the look will judge by. Whatever goes wrong here, the look goes on: a stop-loss is not
+    skipped because a price could not be read, it is judged by what the broker itself says for that stock."""
     try:
-        if market_open(now):
+        if market_open(cairo_now()):
             core.poll_live()
         elif core.provider_status().get("refresh_due"):
             done = core.refresh_feed()   # the session's final bars, a batch at each look until none are left
             out["data"] = {k: done.get(k) for k in ("updated", "remaining")}
         core.bootstrap()                 # see what was just read
-    except (YounitError, NotFound, DataError) as exc:
-        out["data_problem"] = str(exc)[:300]
+    except Exception as exc:  # noqa: BLE001 - anything at all: the look must still reach the automation and leave word
+        log.warning("background: prices could not be read (%s)", type(exc).__name__)
+        out["data_problem"] = (str(exc) or type(exc).__name__)[:300]
 
-    # the automation's look, and word of it to the owner's devices
-    result = real_auto.tick(core)
-    pushed = push.report(core, result)
+
+def _may_go_on(core: App, kid: str | None) -> str | None:
+    """Why the look must stop here, read from the database as it is this instant; None when it may go on."""
+    switch = _switch(core)
+    if not switch["enabled"]:
+        return "background running is switched off"
+    if kid is not None and switch["kid"] != kid:
+        return "the key on the server was replaced by a newer one"
+    if core.younit is None or not core.real_account_allowed:
+        return "this sign-in is not the brokerage account's owner"
+    return None
+
+
+def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
+    """One look by the server for one owner: prices, the automation, the assistant's review when due.
+
+    `may_review(core)` says whether this person may use the assistant at all, as the open app's own route asks.
+    """
+    started = clock.monotonic()
+    why_not = _may_go_on(core, kid)
+    if why_not:
+        return {"ran": False, "why": why_not}
+    out: dict = {"ran": True}
+    result: dict = {"ran": False, "why": "the look failed before it reached the automation"}
+    pushed = {"sent": 0, "failed": 0, "removed": 0}
     review = None
-    if model is not None:   # last, because it can take minutes; the next look does not wait for it
-        try:
-            review = assistant.run_autopilot(core, model)
-        except Exception as exc:  # noqa: BLE001 - a review that failed must not hide what the look did
-            log.exception("background: the assistant's review failed")
-            review = {"ran": True, "error": f"{type(exc).__name__}"}
-        if review.get("ran"):
-            if review.get("error"):
+    try:
+        _prices(core, out)
+        # the automation's look, and word of it to the owner's devices
+        result = real_auto.tick(core)
+        pushed = push.report(core, result)
+        # The assistant's review comes last, because it can take minutes, and only while there is time for it
+        # and for what follows inside this one call.
+        if model is not None and clock.monotonic() - started < REVIEW_LATEST_START and (may_review is None or may_review(core)):
+            try:
+                review = assistant.run_autopilot(core, model)
+            except Exception as exc:  # noqa: BLE001 - a review that failed must not hide what the look did
+                log.exception("background: the assistant's review failed")
+                review = {"ran": True, "error": f"{type(exc).__name__}"}
+            if review.get("ran") and review.get("error"):
                 push.send(core, "Autopilot", f"The assistant's review stopped: {review['error']}", tag="autopilot")
-            elif review.get("changes"):
-                again = real_auto.tick(core)   # what it just proposed is judged now, not a minute from now
-                for k, v in push.report(core, again).items():
-                    pushed[k] += v
-                result = {**again, "notes": [*result.get("notes", []), *again.get("notes", [])],
-                          "sent": [*result.get("sent", []), *again.get("sent", [])],
-                          "exits": [*result.get("exits", []), *again.get("exits", [])]}
-    out.update(auto={"ran": bool(result.get("ran")), "why": result.get("why"), "sent": len(result.get("sent") or []),
-                     "exits": len(result.get("exits") or [])},
-               pushed=pushed, review={k: review.get(k) for k in ("ran", "reason", "changes", "error")} if review else None)
-    _beat(core, result, out)
+            elif review.get("ran") and review.get("changes") and clock.monotonic() - started < SECOND_LOOK_LATEST:
+                # What it just proposed is judged now, not a minute from now. Minutes may have passed: everything is
+                # read again first, the owner's switches included, and the prices are read anew.
+                core.store.fresh()
+                stopped = _may_go_on(core, kid)
+                if stopped:
+                    out["after_review"] = stopped
+                else:
+                    _prices(core, out)
+                    again = real_auto.tick(core)
+                    for k, v in push.report(core, again).items():
+                        pushed[k] += v
+                    result = {**again, "notes": [*result.get("notes", []), *again.get("notes", [])],
+                              "sent": [*result.get("sent", []), *again.get("sent", [])],
+                              "exits": [*result.get("exits", []), *again.get("exits", [])]}
+    finally:   # word of the look is left whatever happened in it, so the app can tell a look that failed from none at all
+        out.update(auto={"ran": bool(result.get("ran")), "why": result.get("why"), "sent": len(result.get("sent") or []),
+                         "exits": len(result.get("exits") or [])},
+                   pushed=pushed, review={k: review.get(k) for k in ("ran", "reason", "changes", "error")} if review else None)
+        _beat(core, result, out)
     return out
 
 

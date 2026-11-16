@@ -74,6 +74,7 @@ MAX_EXIT_TRIES = 6                # attempts to get out of one position in a day
 CLAIM_SECONDS = 120.0             # a look that died while getting out of a position is forgotten after this
 SETTLING_SECONDS = 600.0          # after a fill, the broker's holdings are given this long to show it
 LIVE_SECONDS = 90.0               # a live price older than this is not acted on
+PRICE_GAP_PCT = 1.5               # the app's price and the broker's own must be this close for a stop to be acted on
 BID_LEVELS = 5                    # how deep into the bids a way-out sale is priced
 SHORT_LOOKS, SHORT_SECONDS = 3, 120.0   # the broker must show fewer shares at this many looks, over this long, to be believed
 AUTO_RETRY_SECONDS = 300.0        # a proposal the last look could not send is tried again after this
@@ -476,18 +477,28 @@ def _live(core: App, symbol: str, now: datetime) -> float | None:
         age = (now - datetime.fromisoformat(core.market.cache.get("live_as_of"))).total_seconds()
     except (TypeError, ValueError):
         return None
-    return _last(core, symbol) if age <= LIVE_SECONDS else None
+    return _last(core, symbol) if -60 <= age <= LIVE_SECONDS else None   # a reading stamped in the future is not a reading
 
 
-def _price_now(core: App, symbol: str, pos: dict, now: datetime) -> float | None:
-    """The price a stop is judged by: the live feed's, or the broker's own for that stock when the feed has none that is fresh."""
-    live = _live(core, symbol, now)
-    if live is not None:
-        return live
+def _price_now(core: App, symbol: str, pos: dict, now: datetime) -> tuple[float | None, str | None]:
+    """The price a stop is judged by, and a remark when there is none to judge by.
+
+    Two readings are taken: the app's live feed, which every account of the app can write to, and the broker's
+    own price for that stock, which the server asks for itself. When both are there they must agree, and the
+    lower is used. When they disagree nothing is sold and the owner is told: a wrong figure in the shared feed
+    can then neither sell a position nor hide that its stop was reached. With only one of them, that one is used.
+    """
+    feed = _live(core, symbol, now)
     try:
-        return core.younit.trading_limits(pos["stock_id"]).get("last") if market_open(now) else None
+        direct = core.younit.trading_limits(pos["stock_id"]).get("last") if market_open(now) else None
     except (YounitError, KeyError, TypeError):
-        return None
+        direct = None
+    if feed is None or direct is None:
+        return (direct if direct is not None else feed), None
+    if abs(feed - direct) / direct * 100 > PRICE_GAP_PCT:
+        return None, (f"The app's price for {symbol} ({feed:g}) and the broker's own ({direct:g}) disagree, so its stop-loss is "
+                      "not being acted on. Look at it yourself on the Real account page.")
+    return min(feed, direct), None
 
 
 def _result(core: App, bk: dict, today: str, prices: dict | None = None) -> Decimal:
@@ -656,7 +667,7 @@ def _cancel_resting(core: App, records: list[dict], symbol: str, side: str) -> t
 
 
 def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], today: str, last: float | None,
-             held: dict | None, band_pct: float, still_on) -> tuple[dict | None, str | None]:
+             held: dict | None, band_pct: float, still_on, doubt: str | None = None) -> tuple[dict | None, str | None]:
     """Carry out a stop-loss or a take-profit that was reached. Returns the order sent, and anything the owner should read.
 
     `still_on()` is asked just before anything is written or sent: it reads the switches and the box afresh,
@@ -686,7 +697,7 @@ def _way_out(core: App, symbol: str, pos: dict, bk: dict, records: list[dict], t
     if stop is None and target is None:
         return None, f"The automation's {symbol} has no stop-loss. Set one on the Real account page (Move levels)."
     if last is None:
-        return None, f"There is no fresh price for {symbol} right now, so its stop-loss is not being watched."
+        return None, doubt or f"There is no fresh price for {symbol} right now, so its stop-loss is not being watched."
     if stop is not None and last <= stop:
         kind, level, why = "stop-loss", "stop", f"Stop-loss: the price reached {last:g}, at or under the stop at {stop:g}."
     elif target is not None and last >= target:
@@ -793,7 +804,8 @@ def _tick(core: App, done: dict) -> dict:
                 notes += _reconcile(core, bk, held, records)
         except YounitError as exc:
             notes.append(f"The broker's holdings could not be read just now ({exc}).")
-    prices = {symbol: _price_now(core, symbol, pos, now) for symbol, pos in bk["positions"].items()}
+    read = {symbol: _price_now(core, symbol, pos, now) for symbol, pos in bk["positions"].items()}
+    prices, doubts = {s: p for s, (p, _) in read.items()}, {s: why for s, (_, why) in read.items() if why}
 
     # the brake: down by more than the owner allows, it buys nothing more today
     result = _result(core, bk, today, prices)
@@ -817,7 +829,8 @@ def _tick(core: App, done: dict) -> dict:
     for symbol in sorted(bk["positions"]):
         if len(done["exits"]) >= EXITS_PER_LOOK:
             break
-        order, note = _way_out(core, symbol, bk["positions"][symbol], bk, records, today, prices.get(symbol), held, band, still_on)
+        order, note = _way_out(core, symbol, bk["positions"][symbol], bk, records, today, prices.get(symbol), held, band, still_on,
+                               doubts.get(symbol))
         if note:
             notes.append(note)
         if order:

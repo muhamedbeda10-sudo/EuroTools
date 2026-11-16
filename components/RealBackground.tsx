@@ -110,7 +110,7 @@ export default function RealBackground() {
             <h3 style={{ marginTop: 18 }}>The background key</h3>
             <p className="muted" style={{ maxWidth: "95ch", fontSize: 13 }}>
               The server has no sign-in of its own. A background key lends it yours: it is your sign-in, sealed so that only this server can open it. It is
-              shown once, and you place it in the server&apos;s settings yourself. Changing your password, or creating a new key, retires it.
+              shown once, and you place it in the server&apos;s settings yourself. Creating a new key retires it here; changing your password ends it everywhere.
             </p>
             {made ? (
               <div className="key-box">

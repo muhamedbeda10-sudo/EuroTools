@@ -143,7 +143,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
                    Feed(FirestoreDocs(settings.firebase_project_id, token)) if younit else None, younit)
         core.bootstrap()
         # Only now is the uid proven: the read above was refused unless the token is genuine.
-        core.uid, core.signed_in = uid, True
+        core.uid, core.signed_in, core.id_token = uid, True, token
         core.real_account_allowed = broker.may_view(settings, uid, signed_in=True)
         core.cache = caches.setdefault(uid, {})
         core.market.cache = core.cache.setdefault("market", {})
@@ -564,7 +564,13 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         would have taken.
         """
         background.check_timer(settings, request.headers.get("authorization"))
-        return background.wake(settings, core_for, assistant_model, firestore=firestore)
+
+        def may_review(core: App) -> bool:
+            """The same rule the open app's route applies: on a key shared by several accounts, administrators only."""
+            if not firestore or settings.assistant_users == "all":
+                return True
+            return Accounts(settings.firebase_project_id, settings.firebase_web_api_key, core.id_token, core.uid).can_manage()
+        return background.wake(settings, core_for, assistant_model, firestore=firestore, may_review=may_review)
 
     @api.get("/api/v1/background")
     def get_background(core: App = Depends(get_core)):

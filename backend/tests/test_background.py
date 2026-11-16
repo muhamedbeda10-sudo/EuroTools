@@ -16,7 +16,7 @@ from app.config import Settings
 from app.data.calendar import CAIRO
 from app.data.feed import Feed
 from tests.test_broker import FakeBroker, client
-from tests.test_real_auto import COMI, a_floor, bought, core_of, holds, on, orders, price, suggest
+from tests.test_real_auto import BOX, COMI, a_floor, bought, core_of, holds, on, orders, price, suggest
 
 TIMER = {"Authorization": "Bearer the-platforms-secret"}
 SERVER = {"cron_secret": "the-platforms-secret", "background_key": "local", "background_secret": "only-this-server-knows"}
@@ -90,13 +90,16 @@ def test_a_message_is_encrypted_as_the_standard_says():
 
 
 def test_the_server_signs_as_one_application_with_a_key_it_never_stores():
-    here, there = Settings(background_secret="only-this-server-knows"), Settings(background_secret="another-server")
+    here, there = Settings(background_secret="only-this-server-knows"), Settings(background_secret="another-server-altogether")
     assert push.public_key(Settings()) is None                                   # no secret, no key, no notifications
+    for weak in ("a", " ", "x" * 15, " " * 40):                                  # and a short one is no secret at all
+        assert push.public_key(Settings(background_secret=weak)) is None and background.unseal(Settings(background_secret=weak), "bk1.AAAA") is None
+    assert push.public_key(Settings(younit_trading_id="t", younit_api_key="k")) is None
     key = push.public_key(here)
     assert key == push.public_key(Settings(background_secret="only-this-server-knows")) != push.public_key(there)
     assert len(push.unb64(key)) == 65 and push.unb64(key)[0] == 4                # an uncompressed P-256 point
     # without a secret of its own, the broker credentials the server already holds stand in
-    assert push.public_key(Settings(younit_trading_id="tid", younit_api_key="k")) not in (None, key)
+    assert push.public_key(Settings(younit_trading_id="trading-id-123", younit_api_key="broker-api-key-456")) not in (None, key)
 
     header = push.authorization(here, PHONE, "https://app.example", now=1_800_000_000)
     token, k = header.removeprefix("vapid t=").split(", k=")
@@ -259,7 +262,7 @@ def test_the_assistants_review_runs_last_and_what_it_proposed_is_judged_at_once(
         suggest(c)                                                                  # the review writes a proposal inside the box
         return {"ran": True, "chat": "c1", "changes": 1, "error": None, "reason": "intraday"}
     monkeypatch.setattr(assistant, "run_autopilot", review)
-    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore: background.look(build(None, None), "a-model"))
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
     out = wake(c).json()
     assert calls == ["a-model"] and out["review"] == {"ran": True, "reason": "intraday", "changes": 1, "error": None}
     assert out["auto"]["sent"] == 1 and len(c.fake.sent) == 1                       # sent in the same look, not a minute later
@@ -279,7 +282,7 @@ def test_a_background_key_opens_only_on_the_server_that_sealed_it():
     assert sealed.startswith("bk1.") and "renewal-token" not in sealed and "owner-1" not in sealed
     assert background.unseal(here, sealed) == {"uid": "owner-1", "rt": "renewal-token", "kid": "k1"}
     assert background.seal(here, {"uid": "owner-1", "rt": "renewal-token", "kid": "k1"}) != sealed       # sealed afresh each time
-    assert background.unseal(Settings(background_secret="another-server"), sealed) is None
+    assert background.unseal(Settings(background_secret="another-server-altogether"), sealed) is None
     assert background.unseal(Settings(), sealed) is None
     tampered = sealed[:-6] + ("AAAAAA" if not sealed.endswith("AAAAAA") else "BBBBBB")
     for bad in (tampered, sealed[4:], "bk1.", "bk1.not-base64!!", "local", background.seal(here, {"uid": "x"})):
@@ -350,7 +353,7 @@ def test_the_sign_in_is_renewed_when_needed_and_a_refused_one_stops_the_look(mon
     # the whole wake, on a server with sign-in: the key is opened, the owner signed in, and the look built for them
     monkeypatch.setattr(background, "cairo_now", lambda: datetime(2026, 11, 15, 11, 0, tzinfo=CAIRO))   # a Sunday, mid-session
     built = []
-    monkeypatch.setattr(background, "look", lambda core, model, kid=None: {"ran": True, "core": core, "kid": kid})
+    monkeypatch.setattr(background, "look", lambda core, model, kid=None, may_review=None: {"ran": True, "core": core, "kid": kid})
     sealed = background.seal(here, creds)
     background.reset()
     out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: built.append((uid, token)) or "core", None, firestore=True)
@@ -363,3 +366,100 @@ def test_the_sign_in_is_renewed_when_needed_and_a_refused_one_stops_the_look(mon
     monkeypatch.setattr(background.httpx, "post", lambda url, **kw: httpx.Response(400, json={"error": {"message": "TOKEN_EXPIRED"}}))
     out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, firestore=True)
     assert out["ran"] is False and "Create a new key" in out["why"]
+    # a refusal that is about the server, not about the sign-in, is not blamed on the password
+    monkeypatch.setattr(background.httpx, "post", lambda url, **kw: httpx.Response(403, json={"error": {"message": "Requests from referer <empty> are blocked."}}))
+    out = background.wake(here.model_copy(update={"background_key": sealed}), lambda uid, token: 1 / 0, None, firestore=True)
+    assert out["ran"] is False and "refused the server's request (403)" in out["why"] and "password" not in out["why"]
+
+
+# ---- what a security review found, each kept shut by a test -------------------------------
+def test_after_a_long_review_everything_is_read_again_before_anything_more_is_sent(floor, monkeypatch):
+    c = floor
+    on(c)
+    switch(c)
+    steps = []
+    monkeypatch.setattr(type(core_of(c).store), "fresh", lambda self: steps.append("read afresh"))
+    real_tick = background.real_auto.tick
+    monkeypatch.setattr(background.real_auto, "tick", lambda core: steps.append("look") or real_tick(core))
+    polled = c.fake.live_calls
+
+    def review(core, model):
+        steps.append("review")
+        suggest(c)                                                                # it writes a proposal inside the box ...
+        c.clock["now"] += timedelta(minutes=3)                                    # ... and takes three minutes over it,
+        assert c.post("/api/v1/real-orders/auto/stop").status_code == 200         # during which the owner presses Stop
+        return {"ran": True, "chat": "c1", "changes": 1, "error": None, "reason": "intraday"}
+    monkeypatch.setattr(assistant, "run_autopilot", review)
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model"))
+    out = wake(c).json()
+    after = steps[steps.index("review"):]
+    assert after[:2] == ["review", "read afresh"] and after.index("read afresh") < after.index("look")
+    assert c.fake.live_calls == polled + 1                                        # the prices were read anew as well
+    assert c.fake.sent == [] and out["auto"]["sent"] == 0 and "switched off" in out["auto"]["why"]
+
+    # background running itself switched off during the review: the look ends there
+    assert c.put("/api/v1/real-orders/auto", json={**BOX}).status_code == 200
+    monkeypatch.setattr(assistant, "run_autopilot", lambda core, model: (switch(c, False), suggest(c, limit_price=35.8),
+                                                                         {"ran": True, "changes": 1, "error": None, "reason": "intraday"})[-1])
+    out = wake(c).json()
+    assert out["after_review"] == "background running is switched off" and c.fake.sent == []
+
+
+def test_a_look_is_never_starved_and_always_leaves_word(floor, monkeypatch):
+    c = floor
+    on(c)
+    switch(c)
+    suggest(c)
+    # the prices cannot be read, for a reason nobody foresaw: the automation's look still happens
+    monkeypatch.setattr(services.App, "poll_live", lambda self: (_ for _ in ()).throw(ValueError("Invalid isoformat string: 'soon'")))
+    out = wake(c).json()
+    assert out["ran"] and out["auto"]["sent"] == 1 and "isoformat" in out["data_problem"]
+    assert c.get("/api/v1/background").json()["beat"]["data_problem"] == out["data_problem"]
+    # the look itself breaks: word of that is left too, so the app can tell a look that failed from none at all
+    monkeypatch.setattr(background.real_auto, "tick", lambda core: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        background.look(core_of(c), None)
+    beat = c.get("/api/v1/background").json()["beat"]
+    assert beat["ran"] is False and beat["why"] == "the look failed before it reached the automation"
+
+
+def test_a_review_is_begun_only_with_time_for_it_and_only_for_who_may_use_the_assistant(floor, monkeypatch):
+    c = floor
+    on(c)
+    switch(c)
+    calls = []
+    monkeypatch.setattr(assistant, "run_autopilot", lambda core, model: calls.append(1) or {"ran": True, "changes": 1, "error": None, "reason": "close"})
+    looks = []
+    real_tick = background.real_auto.tick
+    monkeypatch.setattr(background.real_auto, "tick", lambda core: looks.append(1) or real_tick(core))
+    core = core_of(c)
+    assert background.look(core, "a-model", may_review=lambda core: False)["review"] is None and calls == []   # not an administrator
+    monkeypatch.setattr(background, "REVIEW_LATEST_START", -1)
+    assert background.look(core, "a-model")["review"] is None and calls == []                                  # too late in this call to begin one
+    monkeypatch.setattr(background, "REVIEW_LATEST_START", 45)
+    monkeypatch.setattr(background, "SECOND_LOOK_LATEST", -1)
+    looks.clear()
+    assert background.look(core, "a-model")["review"]["ran"] and calls == [1] and looks == [1]                 # reviewed, but no time left for a second look
+    monkeypatch.setattr(background, "SECOND_LOOK_LATEST", 235)
+    looks.clear()
+    background.look(core, "a-model", may_review=lambda core: True)
+    assert looks == [1, 1]
+
+
+def test_a_remark_counts_as_told_only_once_a_device_has_it(floor, monkeypatch):
+    c = floor
+    on(c)
+    sub, key, auth = device()
+    c.post("/api/v1/push/subscribe", json=sub)
+    core = core_of(c)
+    remarks = [f"COMI needs you, for reason number {n}." for n in range(6)]
+    look_result = {"ran": True, "sent": [], "exits": [], "notes": remarks}
+    monkeypatch.setattr(push.httpx, "post", lambda url, **kw: httpx.Response(503))
+    assert push.report(core, look_result) == {"sent": 0, "failed": 4, "removed": 0}             # the push service is busy
+    monkeypatch.setattr(push.httpx, "post", lambda url, **kw: c.posted.append((url, kw)) or httpx.Response(201))
+    assert push.report(core, look_result)["sent"] == 4                                          # so the same remarks are told again,
+    assert push.report(core, look_result)["sent"] == 2                                          # and the ones that did not fit come next,
+    assert push.report(core, look_result)["sent"] == 0                                          # and then they rest
+    assert sorted(read(kw["content"], key, auth)["body"] for _, kw in c.posted) == remarks
+    # Chrome's newer address for its push service is one the app sends to
+    assert push._allowed("https://jmt17.google.com/fcm/send/abc:def") and not push._allowed("https://jmt17.google.com.evil.example/x")

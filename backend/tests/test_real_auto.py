@@ -971,3 +971,35 @@ def test_what_a_look_did_before_a_collision_is_still_told(floor, monkeypatch):
     done = look(c)
     assert done["ran"] and len(done["sent"]) == 1 and len(c.fake.sent) == 1
     assert "stopped early" in done["notes"][-1]
+
+
+def test_a_stop_is_acted_on_only_when_the_apps_price_and_the_brokers_own_agree(floor):
+    """The app's feed can be written by every account of the app. The broker's own price is asked for by the server itself."""
+    c = floor
+    on(c)
+    bought(c, qty=10, stop=34.0)
+    c.fake.limits[1] = {"last": COMI}                                             # the broker says 35.9 ...
+    price(c, comi=30.0)                                                           # ... and the shared feed suddenly says 30
+    done = look(c)
+    assert done["exits"] == [] and [s["side"] for s in c.fake.sent] == ["BUY"]    # nothing is sold on the feed's word alone
+    assert done["notes"] == ["The app's price for COMI (30) and the broker's own (35.9) disagree, so its stop-loss is not being "
+                             "acted on. Look at it yourself on the Real account page."]
+    c.fake.limits[1] = {"last": 33.0}                                             # the other way round: the stop is really reached,
+    price(c, comi=36.5)                                                           # and the feed hides it
+    done = look(c)
+    assert done["exits"] == [] and "disagree" in done["notes"][0]                 # not sold blind, but not passed over in silence either
+    price(c, comi=33.2)                                                           # both under the stop, a tick apart: that is agreement
+    (sale,) = look(c)["exits"]
+    assert sale["reason"].startswith("Stop-loss: the price reached 33,") or sale["reason"].startswith("Stop-loss: the price reached 33 ")
+
+    # a reading stamped in the future is not a reading: it is neither acted on nor left standing
+    store = core_of(c).store
+    docs = StoreDocs(store)
+    planted = {**docs.get("live"), "ts": (c.clock["now"] + timedelta(hours=3)).isoformat(timespec="seconds")}
+    docs.put("live", planted)
+    docs.put("meta", {**docs.get("meta"), "live_ts": planted["ts"]})
+    Feed.reset()
+    core = core_of(c)
+    assert real_auto._live(core, "COMI", c.clock["now"]) is None
+    polled = c.fake.live_calls
+    assert c.post("/api/v1/data/live").json()["updated"] is True and c.fake.live_calls == polled + 1   # the feed is asked again at once

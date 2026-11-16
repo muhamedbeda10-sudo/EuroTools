@@ -168,6 +168,11 @@ once more at the last moment in the owner's place. Whatever does not fit simply 
 - **Its own book.** What the automation holds is kept apart (`settings/real_auto_book`), built from
   the fills of the orders it sent. It sells only those shares; where the broker shows fewer than the
   book, the book gives way. An order the owner approved by hand never enters it.
+- **Two prices must agree.** The app's market data is shared by every account of the app and can
+  be written by any of them. So a stop is judged by two readings: the shared feed, and the broker's
+  own price for that stock, which the server asks for itself. When they differ by more than 1.5%
+  nothing is sold and the owner is told: a wrong figure in the feed can neither sell a position nor
+  hide that its stop was reached. A reading stamped in the future is not a reading.
 - **Stop-loss and take-profit** are watched by the app, not left at the broker (the API takes day
   limit orders only). When a fresh live price reaches the level, a sale is sent a few levels into
   the bids, inside the owner's price band; one that does not fill is cancelled and priced again; a
@@ -229,6 +234,11 @@ the session, so stop-losses and the box keep working with the app closed and the
   then the assistant's review when one is due (its own switch and schedule in Settings →
   Assistant), and what the review proposed is judged in the same look.
 - **It decides nothing.** What may be sent is still the owner's box and limits, checked at every look.
+  After the assistant's review, which can take minutes, everything is read again (the switches
+  included) and the prices are read anew before anything more is sent. A review is begun only with
+  time for it, and only for someone who may use the assistant.
+- **A look is never starved.** Whatever goes wrong reading prices, the automation's look still
+  happens and word of the look is left.
 - **When it stops, it cannot say so.** The app shows when the last background look was, and warns
   when there has been none for a few minutes during the session.
 - **Notifications (Web Push).** Devices the owner switches on are told when the automation sends
@@ -239,7 +249,11 @@ the session, so stop-losses and the box keep working with the app closed and the
   the browsers' own push services.
 
 Environment: `CRON_SECRET` (the platform's timer secret), `BACKGROUND_KEY` (created in the app),
-optional `BACKGROUND_SECRET` (what keys are derived from; the broker credentials are used without it).
+optional `BACKGROUND_SECRET` (what keys are derived from, at least 16 characters; the broker
+credentials are used without it). Changing either the broker credentials or `BACKGROUND_SECRET`
+makes the background key unreadable and every notification subscription stale: create a new key
+and switch notifications on again. A new key retires the old one on this server only; to end a
+key everywhere, change the password.
 Tests: `backend/tests/test_background.py` (the encryption is checked against the standard's own
 worked example).
 

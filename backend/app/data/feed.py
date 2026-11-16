@@ -217,7 +217,7 @@ class Feed:
         current = self.docs.get("live")
         if current and current.get("date") == today:
             age = (now - datetime.fromisoformat(current["ts"])).total_seconds()
-            if age < min_age_seconds:
+            if -5 <= age < min_age_seconds:   # a reading stamped in the future is not a recent one: the feed is asked again
                 return {"updated": False, "ts": current["ts"], "available": bool(current["quotes"])}
         index = self.docs.get("index") or empty_index()
         current_list = listed(index["instruments"])

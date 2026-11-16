@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import httpx
@@ -47,12 +48,14 @@ log = logging.getLogger(__name__)
 SUBS = "push_subs"
 SEEN = ("settings", "push_seen")     # which remarks were already sent, so the same one is not sent every minute
 MAX_DEVICES = 8
+MIN_SECRET = 16                      # a secret shorter than this is no secret: the features that need one stay off
+MAX_REMARKS = 4                      # remarks told in one look; the rest are told at the next
 SAME_REMARK_SECONDS = 30 * 60.0
 RECORD_SIZE = 4096
 # The push services browsers use. A subscription's address is written by the browser; the server posts
 # only to these, so it cannot be pointed at anything else.
-SERVICES = ("fcm.googleapis.com", "updates.push.services.mozilla.com", ".push.apple.com", ".notify.windows.com",
-            "push.services.mozilla.com")
+SERVICES = ("fcm.googleapis.com", "jmt17.google.com", "android.googleapis.com", "updates.push.services.mozilla.com",
+            "push.services.mozilla.com", ".push.apple.com", ".notify.windows.com")
 _P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 
 
@@ -76,7 +79,9 @@ def secret(settings: Settings) -> bytes | None:
     features that need a key say they are not available.
     """
     material = settings.background_secret or (f"{settings.younit_trading_id}|{settings.younit_api_key}" if settings.younit_api_key else "")
-    return material.encode() if material else None
+    # The notification key's public half is sent to the push services with every message, so a short secret
+    # could be guessed from it, and with it the sealed sign-in opened. A short one is treated as none at all.
+    return material.encode() if len(material.strip()) >= MIN_SECRET else None
 
 
 def derive(settings: Settings, purpose: str, length: int = 32) -> bytes | None:
@@ -213,33 +218,48 @@ def unsubscribe(core: App, body: EndpointIn) -> dict:
 
 
 # ---- sending -----------------------------------------------------------------------------
+def _deliver(core: App, device: dict, payload: bytes, post) -> str:
+    """Send one message to one device. Returns "sent", "failed" or "gone" (the browser dropped the subscription)."""
+    try:
+        if not _allowed(device["endpoint"]):
+            raise PushError("not a push service")
+        res = post(device["endpoint"], content=encrypt(payload, device["keys"]["p256dh"], device["keys"]["auth"]),
+                   headers={"Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", "TTL": "3600",
+                            "Urgency": "high", "Authorization": authorization(core.settings, device["endpoint"], contact(core.settings))},
+                   timeout=5.0)
+    except (httpx.HTTPError, PushError, ValueError, KeyError) as exc:
+        log.warning("push: one device could not be reached (%s)", type(exc).__name__)
+        return "failed"
+    if res.status_code in (404, 410):
+        return "gone"
+    if res.status_code >= 400:
+        log.warning("push: the service answered %s", res.status_code)
+        return "failed"
+    return "sent"
+
+
 def send(core: App, title: str, message: str, *, tag: str | None = None, url: str = "/account", post=None) -> dict:
-    """Send one notification to every device of the owner. Never raises: a notification must not break what it reports."""
+    """Send one notification to every device of the owner, all at once. Never raises: a notification must not break what it reports."""
     out = {"sent": 0, "failed": 0, "removed": 0}
     try:
         if _signing_key(core.settings) is None:
             return out
+        devices = core.store.list(SUBS)[:MAX_DEVICES]
+        if not devices:
+            return out
         payload = json.dumps({"title": title[:120], "body": message[:600], "tag": tag, "url": url}, ensure_ascii=False).encode()
         post = post or httpx.post
-        for device in core.store.list(SUBS):
-            try:
-                if not _allowed(device["endpoint"]):
-                    raise PushError("not a push service")
-                res = post(device["endpoint"], content=encrypt(payload, device["keys"]["p256dh"], device["keys"]["auth"]),
-                           headers={"Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", "TTL": "3600",
-                                    "Urgency": "high", "Authorization": authorization(core.settings, device["endpoint"], contact(core.settings))},
-                           timeout=8.0)
-                if res.status_code in (404, 410):   # the browser dropped this subscription: forget it
+        with ThreadPoolExecutor(len(devices)) as pool:   # together, so one slow service does not hold the others up
+            outcomes = list(pool.map(lambda d: _deliver(core, d, payload, post), devices))
+        for device, outcome in zip(devices, outcomes, strict=True):
+            if outcome == "gone":
+                try:
                     core.store.delete(SUBS, device["id"])
-                    out["removed"] += 1
-                elif res.status_code >= 400:
-                    log.warning("push: the service answered %s", res.status_code)
-                    out["failed"] += 1
-                else:
-                    out["sent"] += 1
-            except (httpx.HTTPError, PushError, ValueError, KeyError, ConflictError) as exc:
-                log.warning("push: one device could not be reached (%s)", type(exc).__name__)
-                out["failed"] += 1
+                except ConflictError:
+                    pass
+                out["removed"] += 1
+            else:
+                out[outcome] += 1
     except Exception:  # noqa: BLE001 - reporting must never take down what it reports on
         log.exception("push: notifications could not be sent")
     return out
@@ -264,32 +284,42 @@ def _order_line(order: dict) -> tuple[str, str]:
 
 
 def report(core: App, result: dict, post=None) -> dict:
-    """Tell the owner's devices what a look by the automation did: each order it sent, and each remark, once in a while."""
+    """Tell the owner's devices what a look by the automation did: each order it sent, and each remark, once in a while.
+
+    A remark is marked as told only once a device has taken it. One that could not be delivered, or that did not
+    fit in this look, is told at the next: "sell it yourself" must not be lost because a push service was busy.
+    """
     total = {"sent": 0, "failed": 0, "removed": 0}
     try:
         if not result.get("ran") or not (result.get("sent") or result.get("exits") or result.get("notes")):
             return total
         if _signing_key(core.settings) is None or not core.store.list(SUBS):
             return total
-        lines = [(*_order_line(o), f"order-{o['id']}") for o in [*result.get("exits", []), *result.get("sent", [])]]
+
+        def tell(title: str, message: str, tag: str) -> bool:
+            got = send(core, title, message, tag=tag, post=post)
+            for k, v in got.items():
+                total[k] += v
+            return got["sent"] > 0
+        for order in [*result.get("exits", []), *result.get("sent", [])][:8]:
+            tell(*_order_line(order), f"order-{order['id']}")
         notes = result.get("notes") or []
         if notes:
             seen = core.store.get(*SEEN) or {}
             fresh = {k: v for k, v in seen.items() if real_orders._age(v) < SAME_REMARK_SECONDS}
+            told = 0
             for note in notes:
                 key = hashlib.sha256(note.encode()).hexdigest()[:16]
-                if key in fresh:
+                if key in fresh or told >= MAX_REMARKS:
                     continue
-                fresh[key] = now_iso()
-                lines.append(("Automatic orders", note, f"note-{key}"))
+                told += 1
+                if tell("Automatic orders", note, f"note-{key}"):
+                    fresh[key] = now_iso()
             if fresh != seen:
                 try:
                     core.store.put(*SEEN, fresh)
                 except ConflictError:
                     pass   # another look wrote it at the same moment: at worst a remark arrives twice
-        for title, message, tag in lines[:6]:
-            for k, v in send(core, title, message, tag=tag, post=post).items():
-                total[k] += v
     except Exception:  # noqa: BLE001
         log.exception("push: the look could not be reported")
     return total
