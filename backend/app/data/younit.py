@@ -35,6 +35,9 @@ HEADERS = {
     "User-Agent": "egx-intelligence/0.3 (read-only)",
 }
 REFRESH_BEFORE_EXPIRY = 300
+TOKEN_MARGIN = 5             # seconds before its expiry at which a token is no longer used at all
+SIGN_IN_PAUSE = 5            # after a sign-in that failed (no connection, server error): not tried again before this
+SIGN_IN_REFUSED_PAUSE = 30   # after the credentials were refused: asking again at once would only be refused again
 EGX_MARKET_ID = 1
 STREAM_URL = "https://iengine138.hermesonline.com/"
 STREAM_ADAPTER = "PROXY_MarketBeat"  # market data only; the orders adapter is never used
@@ -43,8 +46,6 @@ INDEX_PROBE = 25
 QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
 DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m_AskPrice", "m_AskVol",
                 "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
-# Asked for with a single look at the book only: what the feed says about the stock and this account's data.
-BOOK_STATUS_FIELDS = ["m_DataFeedSubscribtionStatus", "m_SymbolStatusUI", "m_TOP", "m_TOV"]   # the feed's own spelling
 TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_TradedValue",
                              "m_TradesCount", "m_LastTradeVolume", "m_Change", "m_PercentChange", "m_LastUpdated"]
 MARKET_TICK_FIELDS = ["m_LastTradePrice", "m_PercentChange", "m_TradedVolume"]
@@ -58,21 +59,26 @@ VIA_API = 8
 EXECUTION_DEFAULT = 1
 
 
+_log = logging.getLogger("egx.younit")
+if not _log.handlers:   # a line per sign-in; the host shows what is written here
+    _log.addHandler(logging.StreamHandler())
+    _log.setLevel(logging.INFO)
 book_log = logging.getLogger("egx.depth")
-if not book_log.handlers:   # one line now and then; the host shows what is written here
-    book_log.addHandler(logging.StreamHandler())
-    book_log.setLevel(logging.INFO)
 BOOK_NOTE_SECONDS = 600
 _BOOK_NOTED: dict[str, float] = {}
 
 
 def _note_book(item: str, row: dict, book: dict) -> None:
-    """Leave a line every ten minutes per stock that says what the feed sent for its book.
+    """Say in the server's log what the feed sent for a stock's book, on the day it sends one.
 
-    The layout of the book fields is not documented. The line lets what this code read be checked
-    against what arrived, and tells a layout it does not read from a feed that sent no levels.
+    Seen on 16 November 2026, in the session: the feed sends the best bid and ask and the totals, and
+    leaves both book fields out. Their layout is not documented, and real exits are priced from the bids
+    read out of them. So when one does arrive, a line every ten minutes per stock sets what arrived next
+    to what was read from it.
     """
     from . import depth
+    if all(row.get(key) is None for key in depth.BOOK_KEYS):
+        return
     now = time.monotonic()
     if now - _BOOK_NOTED.get(item, -1e9) < BOOK_NOTE_SECONDS:
         return
@@ -264,8 +270,21 @@ def _outline(body) -> str:
     return " > ".join(path) if path else type(body).__name__
 
 
+def _unreadable(res: httpx.Response) -> str:
+    """What an answer that is not JSON looked like: its kind and its size, never its content."""
+    size = len(res.content)
+    if size == 0:
+        return "an empty answer"
+    kind = (res.headers.get("content-type") or "no content type").split(";")[0].strip()[:40] or "no content type"
+    page = "a web page, " if res.content.lstrip()[:1] == b"<" else ""
+    return f"{page}{kind}, {size} bytes"
+
+
 class YounitClient:
-    _tokens: dict[str, tuple[str, float]] = {}  # trading id -> (authorization header, expiry); shared per server instance
+    # Shared per server instance. trading id -> (authorization header, expiry). And, while sign-in must not be
+    # tried again: ("wait", trading id) -> (until, the error to give meanwhile); kept in the same dictionary so
+    # that whatever forgets the tokens forgets the pause with them.
+    _tokens: dict = {}
     _lock = threading.Lock()
 
     def __init__(self, trading_id: str, api_key: str, *, transport: httpx.BaseTransport | None = None,
@@ -276,33 +295,66 @@ class YounitClient:
         self._http = httpx.Client(timeout=httpx.Timeout(12.0, connect=6.0), headers=HEADERS, transport=transport)
 
     # ---- authentication --------------------------------------------------
+    def _hold_off(self, seconds: float, error: YounitError) -> YounitError:
+        """Note that sign-in must not be tried again for a while, and hand back the error to raise now."""
+        self._tokens[("wait", self._trading_id)] = (time.monotonic() + seconds, error)
+        return error
+
     def _authorization(self, force: bool = False) -> str:
+        """The header that signs a request, signing in when there is no usable token.
+
+        A sign-in that was refused or failed is not repeated at once. Every request needs a token, so
+        without this a refusal turns into a sign-in attempt per request, which is what makes the feed
+        refuse the next one too. Until the pause is over the callers get the same answer, and a token
+        that has not run out yet stays in use.
+        """
         with self._lock:
+            now = time.monotonic()
             cached = self._tokens.get(self._trading_id)
-            if cached and not force and time.monotonic() < cached[1] - REFRESH_BEFORE_EXPIRY:
+            if cached and not force and now < (cached[2] if len(cached) > 2 else cached[1] - REFRESH_BEFORE_EXPIRY):
                 return cached[0]
+            wait = self._tokens.get(("wait", self._trading_id))
+            if wait and now < wait[0]:
+                if cached and not force and now < cached[1] - TOKEN_MARGIN:
+                    return cached[0]  # due for renewal, not expired: good enough until sign-in may be tried again
+                if isinstance(wait[1], YounitRateLimit):
+                    raise YounitRateLimit(max(int(wait[0] - now) + 1, 1))
+                raise wait[1]
             try:
                 res = self._http.post(f"{self._base}/api/public-keys/token",
                                       json={"tradingId": self._trading_id, "secret": self._api_key})
             except httpx.HTTPError as exc:
-                raise YounitError(f"cannot reach Younit ({exc.__class__.__name__})") from None
+                raise self._hold_off(SIGN_IN_PAUSE, YounitError(f"cannot reach Younit ({exc.__class__.__name__})")) from None
             if res.status_code in (400, 401, 403):
-                raise YounitError("Younit rejected the Trading ID / API key (check the values saved on the server)")
+                raise self._hold_off(SIGN_IN_REFUSED_PAUSE, YounitError(
+                    "Younit rejected the Trading ID / API key (check the values saved on the server)"))
             if res.status_code == 429:
-                raise YounitRateLimit(_retry_after(res))
+                pause = _retry_after(res)
+                _log.warning("Younit refused the sign-in (asked too often): not asked again for %s seconds", pause)
+                if cached and not force and now < cached[1] - TOKEN_MARGIN:
+                    self._hold_off(pause, YounitRateLimit(pause))
+                    return cached[0]
+                raise self._hold_off(pause, YounitRateLimit(pause))
             if res.status_code >= 400:
-                raise YounitError(f"Younit sign-in failed (HTTP {res.status_code})")
+                raise self._hold_off(SIGN_IN_PAUSE, YounitError(f"Younit sign-in failed (HTTP {res.status_code})"))
             try:
                 body = res.json()
             except ValueError:
-                raise YounitError("Younit sign-in returned an unreadable response") from None
+                raise self._hold_off(SIGN_IN_PAUSE, YounitError(
+                    f"Younit sign-in returned an unreadable response ({_unreadable(res)})")) from None
             payload = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
             token = payload.get("accessToken") if isinstance(payload, dict) else None
             if not isinstance(token, str) or not token:
-                raise YounitError("Younit sign-in returned no access token")
-            lifetime = payload.get("expiresIn")
+                raise self._hold_off(SIGN_IN_PAUSE, YounitError("Younit sign-in returned no access token"))
+            stated = payload.get("expiresIn")
+            lifetime = stated if isinstance(stated, int) and not isinstance(stated, bool) and stated > 0 else 600
             header = f"{payload.get('tokenType') or 'Bearer'} {token}"
-            self._tokens[self._trading_id] = (header, time.monotonic() + (lifetime if isinstance(lifetime, int) and lifetime > 0 else 600))
+            signed = time.monotonic()
+            # Renewed five minutes before it runs out, or halfway through a short life: a token good for five
+            # minutes or less must still be used, not replaced by a new sign-in on every request.
+            self._tokens[self._trading_id] = (header, signed + lifetime, signed + lifetime - min(REFRESH_BEFORE_EXPIRY, lifetime / 2))
+            self._tokens.pop(("wait", self._trading_id), None)
+            _log.info("Younit sign-in: a token good for %s seconds (the feed stated %r)", lifetime, stated)
             return header
 
     def _get(self, path: str, params: dict | None = None):
@@ -323,7 +375,7 @@ class YounitClient:
             try:
                 return res.json()
             except ValueError:
-                raise YounitError("Younit returned an unreadable response") from None
+                raise YounitError(f"Younit returned an unreadable response ({_unreadable(res)})") from None
         raise YounitError("Younit rejected the request")
 
     def _post(self, path: str, body: dict):
@@ -345,7 +397,7 @@ class YounitClient:
             try:
                 return res.json()
             except ValueError:
-                raise YounitError("Younit returned an unreadable response") from None
+                raise YounitError(f"Younit returned an unreadable response ({_unreadable(res)})") from None
         raise YounitError("Younit rejected the request")
 
     def _change(self, path: str, body: dict):
@@ -480,8 +532,7 @@ class YounitClient:
         item = f"sy{int(stock_id)}"
         try:
             got = stream.snapshot(STREAM_URL, STREAM_ADAPTER,
-                                  [{"items": [item], "fields": DEPTH_FIELDS + BOOK_STATUS_FIELDS,
-                                    "data_adapter": STREAM_ADAPTER}],
+                                  [{"items": [item], "fields": DEPTH_FIELDS, "data_adapter": STREAM_ADAPTER}],
                                   user=self._trading_id, password=token, timeout=timeout, grace=0.2)
         except stream.StreamError as exc:
             raise YounitError(f"Younit price depth: {exc}") from None

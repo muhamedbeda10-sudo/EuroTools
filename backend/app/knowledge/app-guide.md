@@ -17,7 +17,9 @@ broker.
 - **Stock page**: price with day range, candlestick chart (daily, weekly, monthly) with 20/50/200-day
   averages, RSI and MACD, a rule-based technical and momentum read, support and resistance (low and high of the
   last 60 sessions), candle patterns (arrows on the chart and a "Candle patterns" card with each pattern's
-  direction, status and the level it defends, for the chosen candle period), the live order book ("price depth") when the feed is connected, saved research, and the
+  direction, status and the level it defends, for the chosen candle period), "price depth" when the feed is connected (the best bid and ask with their sizes, the spread, and the shares
+  waiting to buy against those waiting to sell; the feed sends no price levels behind the best price, so the app
+  cannot list them the way a broker's own app does), saved research, and the
   order ticket for a paper trade.
 - **Watchlist**: watched stocks and custom lists.
 - **Portfolio**: holdings, cost, market value, gross profit, estimated net profit after fees, allocation by
@@ -151,7 +153,8 @@ broker.
 - Before a stop is acted on, the app's own price for the stock and the broker's own price must agree (within
   1.5%). If they disagree nothing is sold, and the owner is told to look at the position themselves.
 - Stop-loss and take-profit: watched by the app, not left at the broker. When the live price reaches the
-  level, the app sends a sale priced a few levels into the bids so that it fills. If it does not fill it is
+  level, the app sends a sale priced at the best bid, inside the owner's price band (the feed sends no bid
+  levels behind the best one; if it ever does, the sale goes a few levels into them). If it does not fill it is
   cancelled and priced again. Shares the broker does not show as free to sell yet cannot be sold; the app
   waits. On EGX shares usually settle two sessions after the purchase (T+2), so the stop on a fresh purchase
   may not be able to act for up to two sessions. After six attempts in a day it stops and tells the owner to
@@ -182,6 +185,10 @@ broker.
 - Daily history is read from the feed once after each session closes (about 15:00 Cairo time). Until then the
   running session is shown from live prices and is not treated as a completed session.
 - Live prices and the order book stream while the market is open, Sunday to Thursday, about 10:00 to 14:30.
+  Figures the server works out from them (portfolio value, breadth) are re-read once a minute while they stream.
+- A stock the feed gives no history for is set aside and asked for again half an hour later; the rest is updated.
+- "The database has reached its usage limit for today": Firebase's daily allowance of reads is used up. Nothing
+  is lost; it resets about 10:00 Cairo time. Only the project's owner can lift it (pay-as-you-go plan).
 - A manual paper trade fills at the stock's latest price and is dated with the market's current session.
 
 ## Backtests and automatic runs
@@ -201,17 +208,11 @@ broker.
 - Trades placed by the assistant must stay inside limits the user sets in Settings -> Assistant: largest single
   trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
   places by hand are not limited.
-- Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
-  (optionally also during the session: when something the app watches for it happens, or every so many minutes)
-  and act inside those limits following the user's written mandate. The
-  user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
-  session and always leaves a place for the one after the close, which is never skipped for it.
-- The owner chooses which account the autopilot works on, in the same card (everyone else: the paper
-  portfolio). "Paper portfolio only": a review writes no real-order proposal, whatever the mandate says.
-  "Real account only": a review is about the real account; it only writes proposals, inside the owner's
-  limits, and leaves the paper portfolio alone. "Both" (the default, as before): the paper portfolio, and
-  proposals only when the mandate asks. In a review the app refuses the other account's tools; conversations
-  are not affected. A real order still goes out only on approval or inside the automatic box.
+- Autopilot, when switched on, has the assistant review after each completed session (optionally during the
+  session: when a watch fires, or every so many minutes) and act inside those limits, following the user's
+  mandate. The user sets the most reviews in a day (12 by default); the one after the close always runs.
+- The owner chooses the account it works on: "Paper portfolio only" (no real-order proposal in a review),
+  "Real account only" (proposals only; paper left alone) or "Both" (default). The app enforces it.
 
 ## The app watches for the assistant (watches)
 - A review by the assistant costs money every time; a rule the app checks costs nothing. So an alert can be

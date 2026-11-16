@@ -165,3 +165,71 @@ def test_settings_update(client):
     assert client.get("/api/v1/portfolio").json()["summary"]["cash"] == 75000
     assert client.put("/api/v1/settings", json={"benchmark": "NOPE"}).status_code == 404
     assert client.put("/api/v1/settings", json={"starting_capital": -5}).status_code == 422
+
+
+def test_a_database_that_refuses_is_said_plainly_not_as_a_crash(tmp_path):
+    """Firestore answers 429 when the project's daily allowance is used up. The person is told that, with 503,
+    instead of "Request failed (500)" on every card."""
+    from app.store.errors import DatabaseError, QuotaError, database_error
+
+    quota = database_error("read", 429, '{"error": {"code": 429, "message": "Quota exceeded.", "status": "RESOURCE_EXHAUSTED"}}')
+    assert isinstance(quota, QuotaError) and "usage limit for today" in str(quota) and quota.retry_after is None
+    assert isinstance(database_error("read", 429, ""), QuotaError)
+    busy = database_error("write", 429, '{"error": {"message": "Quota exceeded for quota metric \'Requests\' and limit '
+                                        '\'Requests per minute\'", "status": "RESOURCE_EXHAUSTED"}}')
+    assert isinstance(busy, QuotaError) and busy.retry_after == 60 and "Try again in a minute" in str(busy)
+    down = database_error("read", 503, "")
+    assert type(down) is DatabaseError and down.retry_after == 30
+    assert str(database_error("write", 400, "x")) == "database write failed (400)"
+
+    class Refusing(Store):
+        refuse: DatabaseError | None = None
+
+        def get(self, coll, id):
+            if self.refuse is not None:
+                raise self.refuse
+            return super().get(coll, id)
+
+    store = Refusing(tmp_path / "t.sqlite3")
+    with TestClient(create_app(Settings(data_dir=tmp_path), store), raise_server_exceptions=False) as c:
+        assert c.get("/api/v1/portfolio").status_code == 200
+        store.refuse = quota
+        for path in ("/api/v1/portfolio", "/api/v1/status", "/api/v1/market/overview"):
+            r = c.get(path)
+            assert r.status_code == 503 and "usage limit for today" in r.json()["detail"] and r.json()["database"] == "QuotaError"
+            assert "retry-after" not in r.headers
+        store.refuse = down
+        r = c.get("/api/v1/portfolio")
+        assert r.status_code == 503 and r.headers["retry-after"] == "30" and "not answering" in r.json()["detail"]
+        store.refuse = None
+        assert c.get("/api/v1/portfolio").status_code == 200
+
+
+def test_an_accounts_own_imports_are_read_once_not_on_every_request(tmp_path):
+    """Each read is counted against the database's daily allowance: the two collections that hold an account's
+    imported stocks change only with an import, so they are not listed again by every request."""
+    class Counting(Store):
+        lists: list[str] = []
+
+        def list(self, coll):
+            self.lists.append(coll)
+            return super().list(coll)
+
+    store = Counting(tmp_path / "t.sqlite3")
+    with TestClient(create_app(Settings(data_dir=tmp_path), store)) as c:
+        c.get("/api/v1/status")
+        assert store.lists.count("instruments") == 1 and store.lists.count("bars") == 1
+        store.lists.clear()
+        for path in ("/api/v1/status", "/api/v1/portfolio", "/api/v1/stocks", "/api/v1/market/overview", "/api/v1/signals"):
+            assert c.get(path).status_code == 200
+        assert "instruments" not in store.lists and "bars" not in store.lists
+        good = "Date,Open,High,Low,Close,Volume\n2024-01-01,10,11,9,10.5,1000\n2024-01-02,10.5,12,10,11,2000\n"
+        done = c.post("/api/v1/data/bars/import", data={"symbol": "NEWONE", "name": "New One", "sector": "Banks"},
+                      files={"file": ("c.csv", good, "text/csv")})
+        assert done.status_code == 200
+        store.lists.clear()
+        assert c.get("/api/v1/stocks/NEWONE").json()["quote"]["source"] == "csv"     # the import is seen at once ...
+        assert store.lists.count("instruments") <= 1 and store.lists.count("bars") <= 1
+        store.lists.clear()
+        assert "NEWONE" in {r["symbol"] for r in c.get("/api/v1/stocks").json()}
+        assert "instruments" not in store.lists and "bars" not in store.lists          # ... and then held again

@@ -125,7 +125,8 @@ def test_refresh_then_everything_runs_on_feed_prices(env):
     c, fake = env
     r = c.post("/api/v1/data/refresh").json()
     assert r.pop("seconds") >= 0
-    assert r == {"updated": 3, "remaining": 0, "total": 3, "errors": [], "stalled": False, "rate_limited": False, "retry_after": None}
+    assert r == {"updated": 3, "remaining": 0, "total": 3, "failed": 0, "errors": [], "stalled": False, "rate_limited": False,
+                 "retry_after": None}
     s = c.get("/api/v1/status").json()
     assert s["data"]["mode"] == "younit" and s["data"]["sources"][0]["symbols"] == 3
     assert s["provider"]["refresh_due"] is False and s["provider"]["latest_bar_date"] == days(1)[0]
@@ -175,10 +176,59 @@ def test_batches_respect_the_time_budget_and_report_failures(tmp_path):
     assert partial["updated"] == 0 and partial["remaining"] == 3 and partial["stalled"]
     fake.fail = {2}
     out = feed.refresh(fake, today=date.today())
-    assert out["updated"] == 2 and out["remaining"] == 1 and "TMGH" in out["errors"][0]
-    assert feed.summary(date.today())["refresh_due"] is True
-    fake.fail = set()
-    assert feed.refresh(fake, today=date.today())["remaining"] == 0
+    # The stock the feed did not give is set aside, not left "remaining": the update is over for now.
+    assert out["updated"] == 2 and out["remaining"] == 0 and out["failed"] == 1 and "TMGH" in out["errors"][0]
+    assert not out["stalled"]
+    assert feed.summary(date.today())["refresh_due"] is False and feed.summary(date.today())["failing"] == 1
+    # Asked again straight away, the feed is not called for it: the same request is not repeated on every visit.
+    fake.fail, fake.calls = set(), []
+    again = feed.refresh(fake, today=date.today())
+    assert again["updated"] == 0 and again["failed"] == 1 and fake.calls == [] and "TMGH" in again["errors"][0]
+    # Half an hour later it is due again, and this time it is read.
+    from app.data.feed import RETRY_FAILED_MINUTES, _now
+    later = _now() + timedelta(minutes=RETRY_FAILED_MINUTES + 1)
+    assert feed.summary(date.today(), now=later)["refresh_due"] is True
+    out = feed.refresh(fake, today=date.today(), now=later)
+    assert out["updated"] == 1 and out["remaining"] == 0 and out["failed"] == 0 and [c[0] for c in fake.calls] == [2]
+    assert feed.summary(date.today(), now=later)["failing"] == 0
+    assert len(feed.load()["frames"]) == 3
+
+
+def test_stocks_the_feed_cannot_serve_do_not_hold_up_the_rest(tmp_path):
+    """The first stocks of the list fail every time (the feed has no history for them): the others are still read,
+    the failing ones are tried again after a pause, and a call that changed nothing makes nobody reload the tables."""
+    from app.data import feed as feed_module
+    store, fake = Store(tmp_path / "f.sqlite3"), FakeYounit(n=30)
+    fake.listing = [{"symbol": f"S{i:03d}", "name": f"Stock {i}", "stock_id": i + 1} for i in range(60)]
+    fake.fail = set(range(1, 13))          # the first twelve, alphabetically
+    feed = Feed(StoreDocs(store))
+    first = feed.refresh(fake, today=date.today())
+    # eight failures in a row look like a feed that is down: the batch stops, and nothing was read
+    assert first["updated"] == 0 and first["stalled"] and 8 <= first["failed"] <= 10 and len(fake.calls) <= 10
+    version = store.get("egxMarket", "index")["version"]
+    second = feed.refresh(fake, today=date.today())      # the next visit starts after the ones already tried
+    assert second["updated"] > 0 and not second["stalled"]
+    assert store.get("egxMarket", "index")["version"] == version + 1
+    for _ in range(5):
+        out = feed.refresh(fake, today=date.today())
+        if out["remaining"] == 0:
+            break
+    assert out["remaining"] == 0 and out["failed"] == 12 and len(feed.load()["frames"]) == 48
+    summary = feed.summary(date.today())
+    assert summary["refresh_due"] is False and summary["failing"] == 12 and summary["latest_bar_date"] == days(1)[0]
+    # Nothing is due: no request to the feed, nothing written, and the version every instance watches stays put.
+    fake.calls, version = [], store.get("egxMarket", "index")["version"]
+    writes = []
+    original = feed.docs.put
+    feed.docs.put = lambda id, doc, **kw: (writes.append(id), original(id, doc, **kw))[1]
+    idle = feed.refresh(fake, today=date.today())
+    assert idle["updated"] == 0 and idle["failed"] == 12 and fake.calls == [] and writes == []
+    # When their pause is over they are asked for again; failing again changes no price table, so no reload.
+    later = feed_module._now() + timedelta(minutes=feed_module.RETRY_FAILED_MINUTES + 1)
+    assert feed.summary(date.today(), now=later)["refresh_due"] is True
+    retry = feed.refresh(fake, today=date.today(), now=later)
+    assert retry["updated"] == 0 and len(fake.calls) >= 8 and store.get("egxMarket", "index")["version"] == version
+    assert "index" in writes and not any(w.startswith("chunk_") for w in writes)
 
 
 def test_feed_outage_is_reported_and_writes_nothing(env, monkeypatch):
@@ -269,6 +319,105 @@ def test_client_reauthenticates_once_on_401_and_explains_failures():
     assert "key-1" not in str(info.value) and "tid-1" not in str(info.value)
 
 
+def test_a_refused_sign_in_is_not_repeated_with_every_request():
+    """Every request needs a token. When sign-in is refused for asking too often, asking again with each request
+    is what keeps it refused: the client waits out the pause and tells its callers how long is left."""
+    from app.data.younit import YounitRateLimit
+    state = {"token": 0, "calls": 0, "limit": True}
+
+    def handler(req):
+        if req.url.path == "/api/public-keys/token":
+            state["token"] += 1
+            if state["limit"]:
+                return httpx.Response(429, headers={"retry-after": "40"})
+            return httpx.Response(200, json={"accessToken": f"t{state['token']}", "expiresIn": 3600, "tokenType": "Bearer"})
+        state["calls"] += 1
+        return httpx.Response(200, json={"data": [{"stockId": 7, "symbol": "COMI", "stockName": "CIB"}]})
+    c = make_client(handler)
+    with pytest.raises(YounitRateLimit) as first:
+        c.stocks()
+    assert first.value.retry_after == 40 and state == {"token": 1, "calls": 0, "limit": True}
+    for _ in range(5):                                   # five more requests: none of them asks the feed to sign in
+        with pytest.raises(YounitRateLimit) as again:
+            c.stocks()
+    assert state["token"] == 1 and 1 <= again.value.retry_after <= 41
+    other = YounitClient("tid-1", "key-1", transport=httpx.MockTransport(handler))   # the pause is the account's, not the object's
+    with pytest.raises(YounitRateLimit):
+        other.depth(7)
+    assert state["token"] == 1
+    # the pause over, and the feed willing again: one sign-in, and work goes on
+    until, error = YounitClient._tokens[("wait", "tid-1")]
+    YounitClient._tokens[("wait", "tid-1")] = (0.0, error)
+    state["limit"] = False
+    assert [s["symbol"] for s in c.stocks()] == ["COMI"] and state["token"] == 2 and ("wait", "tid-1") not in YounitClient._tokens
+
+    # A token that is only due for renewal keeps working while sign-in is refused, and renewal is not asked for again.
+    header = YounitClient._tokens["tid-1"][0]
+    import time as clock
+    YounitClient._tokens["tid-1"] = (header, clock.monotonic() + 120)     # inside the renewal window, not yet expired
+    state["limit"] = True
+    assert [s["symbol"] for s in c.stocks()] == ["COMI"] and state["token"] == 3
+    assert [s["symbol"] for s in c.stocks()] == ["COMI"] and state["token"] == 3
+    # Wrong credentials are not hammered either, and a server error is given a few seconds.
+    refused = make_client(lambda r: httpx.Response(401))
+    for _ in range(3):
+        with pytest.raises(YounitError, match="rejected the Trading ID"):
+            refused.stocks()
+    seen = []
+    broken = make_client(lambda r: (seen.append(r.url.path), httpx.Response(503))[1])
+    for _ in range(3):
+        with pytest.raises(YounitError, match="sign-in failed"):
+            broken.stocks()
+    assert seen == ["/api/public-keys/token"]
+
+
+def test_a_short_lived_token_is_used_not_replaced_on_every_request():
+    """A token good for five minutes or less used to count as "due for renewal" from the moment it was issued,
+    so every request signed in again. It is renewed halfway through its life instead."""
+    state = {"token": 0}
+
+    def handler(req):
+        if req.url.path == "/api/public-keys/token":
+            state["token"] += 1
+            return httpx.Response(200, json={"accessToken": f"t{state['token']}", "expiresIn": 240, "tokenType": "Bearer"})
+        return httpx.Response(200, json={"data": [{"stockId": 7, "symbol": "COMI", "stockName": "CIB"}]})
+    c = make_client(handler)
+    for _ in range(4):
+        c.stocks()
+    assert state["token"] == 1
+    header, expiry, renew = YounitClient._tokens["tid-1"]
+    assert 115 <= expiry - renew <= 125                      # halfway through its four minutes
+    YounitClient._tokens["tid-1"] = (header, expiry, 0.0)    # that moment has come
+    c.stocks()
+    assert state["token"] == 2
+    # a long-lived one is still renewed five minutes before it runs out
+    make_client(lambda r: httpx.Response(200, json={"accessToken": "t", "expiresIn": 3600, "tokenType": "Bearer"})
+                if "token" in r.url.path else httpx.Response(200, json={"data": [{"stockId": 7, "symbol": "COMI"}]})).stocks()
+    _, expiry, renew = YounitClient._tokens["tid-1"]
+    assert 299 <= expiry - renew <= 301
+
+
+def test_an_answer_that_is_not_json_is_described_without_its_content():
+    tok = httpx.Response(200, json={"accessToken": "t", "expiresIn": 3600, "tokenType": "Bearer"})
+
+    def empty(req):
+        return tok if "token" in req.url.path else httpx.Response(200, content=b"")
+    with pytest.raises(YounitError, match=r"unreadable response \(an empty answer\)"):
+        make_client(empty).daily_history(1, date(2026, 1, 1), date(2026, 1, 2))
+
+    def page(req):
+        return tok if "token" in req.url.path else httpx.Response(
+            200, content=b"<html><body>Request blocked 4F2A</body></html>", headers={"content-type": "text/html; charset=utf-8"})
+    with pytest.raises(YounitError) as info:
+        make_client(page).daily_history(1, date(2026, 1, 1), date(2026, 1, 2))
+    assert "unreadable response (a web page, text/html, 46 bytes)" in str(info.value) and "4F2A" not in str(info.value)
+
+    def text(req):
+        return tok if "token" in req.url.path else httpx.Response(200, content=b"no data", headers={"content-type": "text/plain"})
+    with pytest.raises(YounitError, match=r"\(text/plain, 7 bytes\)"):
+        make_client(text).orders(5)
+
+
 def test_stock_list_uses_reuters_code_when_there_is_no_symbol_and_explains_unknown_shapes():
     tok = httpx.Response(200, json={"accessToken": "t", "expiresIn": 3600, "tokenType": "Bearer"})
 
@@ -329,8 +478,11 @@ def test_a_request_reads_one_small_document_when_nothing_changed(tmp_path):
     assert reads[0] == "meta" and "index" in reads and any(r.startswith("chunk_") for r in reads)
     reads.clear()
     frames = feed.load()["frames"]
-    assert reads == ["meta"]         # every later request: one small read
-    assert feed.load()["frames"] is frames   # and the same tables, not rebuilt
+    assert reads == []               # requests arriving together share the read the first of them made
+    Feed._meta_seen = None           # a few seconds on, that read is no longer trusted
+    assert feed.load()["frames"] is frames and reads == ["meta"]   # every later request: one small read, same tables
+    reads.clear()
+    assert feed.summary(date.today())["symbols"] == 3 and reads == []   # the status asks twice in one request: one read
     # a database written by the release before `meta` existed still loads
     store.delete("egxMarket", "meta")
     Feed.reset()

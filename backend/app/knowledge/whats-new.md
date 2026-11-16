@@ -16,6 +16,34 @@ Open: /settings?tab=assistant
   عربي: طريقة خروج الأمر الحقيقي ماتغيّرتش: الاقتراح بيستنى موافقتك، ومابيتبعتش لوحده إلا لو الأوامر الآلية شغّالة وهو جوه الصندوق اللي إنت محدده.
 - Until you choose, it stays on "Both", which is how it worked before: the paper portfolio, plus proposals for real orders only when your instructions ask for them.
   عربي: لحد ما تختار، بيفضل على «Both» زي ما كان شغّال قبل كده: المحفظة التجريبية، ومعاها اقتراحات أوامر حقيقية بس لما تعليماتك تطلب كده.
+## 0.5.2 · 2026-11-16 · Plain words when a service refuses, and far fewer database reads
+For: everyone
+عربي: كلام واضح لما خدمة ترفض، وقراءات أقل بكتير من قاعدة البيانات
+
+- When the database has used up its allowance for the day, every screen now says so in plain words, with when it comes back (about 10:00 Cairo time), instead of "Request failed (500)". Your data is safe while it lasts.
+  عربي: لما قاعدة البيانات تخلّص حصتها اليومية، كل شاشة بقت تقول ده بكلام واضح ومعاه ميعاد رجوعها (حوالي 10:00 بتوقيت القاهرة)، بدل «Request failed (500)». وبياناتك في أمان طول الفترة دي.
+- The app asks the database far less, so the allowance lasts: parts of a page that show the same thing share one request, and while prices are streaming the figures the server works out (portfolio value, breadth, movers) are re-read once a minute instead of every 15 seconds. The prices themselves still move with every trade.
+  عربي: التطبيق بقى يسأل قاعدة البيانات أقل بكتير علشان الحصة تكفّي: أجزاء الصفحة اللي بتعرض نفس الحاجة بتشترك في طلب واحد، ووقت البث الحي الأرقام اللي السيرفر بيحسبها (قيمة المحفظة، اتساع السوق، الأكثر حركة) بتتقري مرة كل دقيقة بدل كل 15 ثانية. الأسعار نفسها لسه بتتحرك مع كل صفقة.
+- A stock the data feed cannot give no longer stops the market-data update. The others are updated, a note says how many were set aside and why, and the feed is asked for them again in half an hour (Settings, Connections shows the same).
+  عربي: السهم اللي مصدر البيانات مش بيرجّعه ما بقاش يوقّف تحديث بيانات السوق. باقي الأسهم بتتحدّث، وبتظهر ملاحظة بعدد الأسهم اللي اتأجلت والسبب، والمصدر بيتسأل عنها تاني بعد نص ساعة (ونفس الكلام ظاهر في Settings ثم Connections).
+- When the data feed refuses the sign-in for being asked too often, the app waits as long as the feed asks instead of trying again with every request, so live prices come back sooner.
+  عربي: لما مصدر البيانات يرفض تسجيل الدخول علشان الطلبات كتير، التطبيق بيستنى المدة اللي المصدر طالبها بدل ما يحاول مع كل طلب، فالأسعار الحية بترجع أسرع.
+## 0.5.1 · 2026-11-16 · Price depth shows what the feed really sends
+For: everyone
+عربي: «Price depth» بيعرض اللي التغذية بتبعته فعلًا
+
+- The market-data feed sends the best bid and the best ask with their sizes, and the shares waiting on each side in total. It sends no price levels behind them. The panel on the stock page used to draw an empty chart and a one-row table as if the rest were missing by mistake; it now shows the best prices, the spread and buyers against sellers, and says that the other levels do not reach the app.
+  عربي: تغذية البيانات بتبعت أفضل طلب وأفضل عرض بكمياتهم، وإجمالي الأسهم المنتظرة في كل ناحية، ومش بتبعت مستويات الأسعار اللي وراهم. اللوحة في صفحة السهم كانت بترسم شارت فاضي وجدول بسطر واحد كأن الباقي ناقص بالغلط؛ دلوقتي بتعرض أفضل الأسعار والفرق بينهم ونسبة المشترين للبائعين، وبتقول إن باقي المستويات مش بتوصل للتطبيق.
+- The assistant is told the same, so it does not speak of sizes at prices it cannot see.
+  عربي: المساعد اتبلّغ بنفس الكلام، فمش هيتكلم عن كميات عند أسعار مش شايفها.
+
+## 0.5.1 · 2026-11-16 · Automatic exits: what the app said about their price is corrected
+For: owner
+Open: /settings?tab=real
+عربي: الخروج الآلي: تصحيح الكلام المكتوب عن سعر البيع
+
+- Nothing changes in what the app does; what it said was wrong. A stop-loss or take-profit sale was described as priced "a few levels into the bids". The feed sends the best bid alone, so the sale is priced at the best bid, inside your price band. One that does not fill is still cancelled and priced again, up to six times a day.
+  عربي: مفيش تغيير في اللي التطبيق بيعمله؛ الكلام المكتوب هو اللي كان غلط. بيع وقف الخسارة أو جني الربح كان مكتوب إنه بيتسعّر «كام مستوى جوه الطلبات». التغذية بتبعت أفضل طلب بس، فالبيع بيتسعّر على أفضل طلب، جوه نطاق السعر بتاعك. واللي ما يتنفذش لسه بيتلغي ويتسعّر تاني، لحد 6 مرات في اليوم.
 
 ## 0.5.0 · 2026-11-16 · The app watches, and wakes the assistant only when needed
 For: everyone

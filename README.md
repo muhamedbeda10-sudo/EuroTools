@@ -17,7 +17,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | --- | --- |
 | Dashboard | Indices, breadth, movers (re-ranked live), paper portfolio (gross vs net), watchlist, signals, latest research, data status |
 | Market & Categories | Sector performance, all stocks, search/filters, custom categories |
-| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and order book (price depth), related research, simulated order ticket |
+| Stock analysis | Candles (D/W/M), SMA 20/50/200, RSI, MACD, support/resistance, candle patterns (marked on the chart and listed with status and level), live price and price depth (best bid and ask, spread, buyers against sellers), related research, simulated order ticket |
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; real orders, each sent on the owner's approval; and automatic orders (what fits the owner's box, with stop-losses watched by the app, and a one-tap stop). Owner only |
@@ -62,6 +62,24 @@ Prices are the same for every account, so they are cached once in Firestore
 Settings → Connections has a manual update button. The feed provides no sector and no index
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
+
+A stock whose history the feed does not give (an empty or unreadable answer) is noted in the index
+(`tried`) and asked for again after 30 minutes. It is counted as `failed`, not as `remaining`, so it
+neither stops the update for the stocks after it nor is requested again on every page load. A sign-in
+the feed refuses (429) is not repeated until the pause it asked for is over.
+
+### Database reads
+
+Firestore counts every document read, and each request's security-rule lookups, against the
+project's daily allowance (50,000 reads on the free plan, shared with everything else in the
+project). When it is used up Firestore answers 429 and the API answers **503** with a sentence that
+says so (`store/errors.py`), not a 500. What keeps the count down:
+
+- the shared `egxMarket/meta` document is read at most once every few seconds per server instance;
+- an account's own imports (`instruments`, `bars`) are read once per import (`data_version`), not per request;
+- a batch that changed no bars does not move the shared version, so no instance reloads the price tables;
+- the browser shares requests for the same path made at the same moment, and while prices stream it
+  re-reads the server's figures once a minute instead of every 15 seconds.
 
 ## Install on a phone
 
@@ -174,8 +192,9 @@ once more at the last moment in the owner's place. Whatever does not fit simply 
   nothing is sold and the owner is told: a wrong figure in the feed can neither sell a position nor
   hide that its stop was reached. A reading stamped in the future is not a reading.
 - **Stop-loss and take-profit** are watched by the app, not left at the broker (the API takes day
-  limit orders only). When a fresh live price reaches the level, a sale is sent a few levels into
-  the bids, inside the owner's price band; one that does not fill is cancelled and priced again; a
+  limit orders only). When a fresh live price reaches the level, a sale is sent at the best bid,
+  inside the owner's price band (the feed sends no bid levels behind the best one; if it ever does,
+  the sale goes a few levels into them); one that does not fill is cancelled and priced again; a
   sale in doubt is never followed by another; other orders of the automation's in that stock are
   taken back first (a sale resting above the market, a buy still open); a stop-loss and a
   take-profit keep separate counts, only a sale that reached the broker counts, and after six in a
@@ -445,7 +464,7 @@ ledger (`origin: order:<id>`) with the usual fees. One stop and one target per s
   refused (409) instead of silently overwriting. User actions retry once.
 - Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
 - The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and
-  resumes it, keeping what was already saved.
+  resumes it, keeping what was already saved. A stock that failed is retried after 30 minutes.
 
 ## Known limits
 

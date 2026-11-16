@@ -28,6 +28,7 @@ const TOPICS: { id: string; title: string; body: React.ReactNode }[] = [
     <>
       <p>The order book lists buy orders (bids) and sell orders (asks) waiting at each price. The <strong>spread</strong> is the gap between the highest bid and the lowest ask; a wide spread means trading the stock costs more than the fee schedule alone suggests.</p>
       <p>A large order sitting at one price can act as a floor or a ceiling for a while, but orders can be cancelled in an instant. Treat depth as a picture of the moment, not a forecast. In thinly traded stocks a modest order of your own can move the price: check the size available near the top of the book against the size you intend to trade.</p>
+      <p>The market-data feed behind this app sends the best bid and the best ask with their sizes, and the shares waiting on each side in total. It does not send the price levels behind them, so the panel shows the spread and buyers against sellers, and cannot list every level the way a broker&rsquo;s own app does.</p>
     </>
   ) },
   { id: "statements", title: "Reading financial statements", body: (

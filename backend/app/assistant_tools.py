@@ -1024,7 +1024,10 @@ TOOLS: list[Tool] = [
          "sessions (hammer, engulfing, stars, harami, doji, windows and more), with the level each defends and whether "
          "the next session confirmed it. Read the `candlesticks` reference before judging them.", CandleScan, _candle_scan,
          label=lambda a: f"Scanning for {a.direction + ' ' if a.direction else ''}candle patterns"),
-    Tool("price_depth", "The live order book of one stock (best bids and asks with sizes). Needs the live market feed.",
+    Tool("price_depth", "The live order book of one stock: the best bid and ask with their sizes, the spread, and the "
+         "shares waiting on each side in total. The feed usually sends no price levels behind the best price: "
+         "`top_only` names the sides for which that is so, and nothing can then be said about sizes at other prices. "
+         "Needs the live market feed.",
          SymbolArg, _price_depth, label=lambda a: f"Reading the order book of {a.symbol.upper()}"),
     Tool("portfolio", "The paper portfolio: cash, holdings with cost and market value, gross and net profit, fees, "
          "sector allocation, concentration warnings and recent value history.", NoArgs, _portfolio,

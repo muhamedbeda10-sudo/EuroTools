@@ -76,8 +76,28 @@ class MarketData:
             if self.cache.get("key") != key:
                 self._build(key)
 
+    def imports_held(self) -> bool:
+        """Whether this account's own stocks and imported bars are already in memory for its current `data_version`.
+
+        Callers that fetch several things at once ask this first: the two collections are read from the database
+        once per import, not once per request.
+        """
+        held = self.cache.get("imports")
+        return held is not None and held[0] == self.data_version
+
+    def _imports(self) -> tuple[list[dict], dict[str, list]]:
+        """This account's own instruments and imported bars: (instruments, {symbol: rows}).
+
+        They change only through an import, and every import moves `data_version` (read with the account's
+        settings on each request, so an import made through another server instance is seen here too).
+        """
+        if not self.imports_held():
+            self.cache["imports"] = (self.data_version, self.store.list("instruments"),
+                                     {d["symbol"]: d["rows"] for d in self.store.list("bars")})
+        return self.cache["imports"][1], self.cache["imports"][2]
+
     def _build(self, key: tuple) -> None:
-        custom = self.store.list("instruments")
+        custom, imported = self._imports()
         if self.feed is not None:
             # The feed defines which stocks exist. It carries no sector, so the seed
             # list's classification is used where the symbol is known.
@@ -102,7 +122,6 @@ class MarketData:
             df["date"] = pd.to_datetime(df["date"])
             return df.set_index("date").sort_index()
 
-        imported = {d["symbol"]: d["rows"] for d in self.store.list("bars")}
         if self.sample:
             for symbol, rows in sample.generate([i for i in instruments if i["symbol"] not in imported], self.today).items():
                 frames[symbol], sources[symbol] = frame(rows), "sample"
@@ -139,9 +158,10 @@ class MarketData:
         for symbol, df in frames.items():  # imported and sample history is final as far as it reaches
             if symbol not in watermark and len(df):
                 watermark[symbol] = df.index[-1]
+        imports = self.cache["imports"]
         self.cache.clear()
         live_doc = (self.feed or {}).get("live") or {}
-        self.cache.update(key=key, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
+        self.cache.update(key=key, imports=imports, instruments=instruments, by_symbol={i["symbol"]: i for i in instruments},
                           frames=frames, sources=sources, settled={}, watermark=watermark, live_symbols=live_symbols,
                           snapshot_symbols=snapshot_symbols,
                           live_as_of=live_doc.get("ts") if snapshot_symbols else None,
