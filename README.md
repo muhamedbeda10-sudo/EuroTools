@@ -49,9 +49,11 @@ Until 16 November 2026 the data was in Firestore too, one private tree per accou
 `egx/{uid}/`, read and written with the caller's own token so that `firestore.rules` decided
 everything and the server held no credentials. Firestore's daily allowance, shared with the
 quality system, stopped the app that morning, and the owner had the data moved. That tree is
-still there, closed to writing by the rules, as the copy each account is brought over from. Once
-every account has been used since the move, `MIGRATE_FROM_FIRESTORE=false` stops the server asking
-Firestore anything at all.
+still there, closed to writing by the rules, as the copy each account is brought over from. Deployed,
+the server asks Firestore nothing (`MIGRATE_FROM_FIRESTORE=false` in `api/index.py`, set the same
+day once the owner's data and the market prices had come over): an account the database has no row
+for is not let in, and one whose data was left in Firestore is refused with a plain message rather
+than given an empty account. Setting it to `true` brings such an account over on its next visit.
 Pushing a change to `firestore.rules` publishes the rules through `.github/workflows/rules.yml`;
 that workflow never touches Firebase Hosting. `STORE_BACKEND=firestore` runs the API on Firestore
 as before (`backend/app/store/firestore_store.py`).
