@@ -61,7 +61,7 @@ export default function Trades() {
                   <dt>Now</dt><dd>the stock&apos;s latest price, and its move since the trade</dd>
                 </dl>
                 <p className="foot-note" style={{ marginTop: 14 }}>
-                  Fees come from the schedule in <Link href="/settings">Settings</Link> at the moment of each trade and are stored with it, so later changes to the schedule never rewrite history.
+                  Fees come from the schedule in <Link href="/settings?tab=paper">Settings</Link> at the moment of each trade and are stored with it, so later changes to the schedule never rewrite history.
                 </p>
               </div>
             </div>

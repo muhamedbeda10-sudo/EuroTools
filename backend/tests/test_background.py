@@ -553,3 +553,37 @@ def test_the_server_checks_the_alerts_too_and_what_it_saw_wakes_the_review_in_th
     c.clock["now"] += timedelta(seconds=40)
     out = wake(c).json()
     assert out["ran"] and out["alerts"] == {"problem": "RuntimeError"} and out["auto"]["ran"]
+
+
+# ---- the paper portfolio is looked after with the app closed as well ---------------------
+def test_with_the_app_closed_the_paper_portfolios_stops_are_carried_out_too(floor, monkeypatch):
+    c = floor
+    on(c)
+    assert switch(c).json()["enabled"] is True
+    sub, key, auth = device()
+    c.post("/api/v1/push/subscribe", json=sub)
+    assert c.post("/api/v1/trades", json={"side": "BUY", "symbol": "COMI", "qty": 100}).status_code == 201
+    stop = c.post("/api/v1/orders", json={"symbol": "COMI", "kind": "stop", "price": 34.0})
+    assert stop.status_code == 201, stop.text
+    c.clock["now"] += timedelta(seconds=30)
+    assert wake(c).json()["paper"] == {"fills": 0, "orders": 0}                      # the price is above the stop: nothing to do
+    c.clock["now"] += timedelta(seconds=40)
+    c.fake.live_prices["COMI"] = 33.5                                              # nobody has the app open when it falls through
+    out = wake(c).json()
+    assert out["ran"] and out["paper"] == {"fills": 0, "orders": 1} and out["pushed"]["sent"] == 1
+    sell = next(t for t in c.get("/api/v1/trades").json()["transactions"] if t["type"] == "SELL")
+    assert (sell["symbol"], sell["qty"], sell["price"], sell["origin"]) == ("COMI", 100, 33.5, f"order:{stop.json()['id']}")
+    said = read(c.posted[-1][1]["content"], key, auth)
+    assert said == {"title": "Paper order filled", "body": "Stop-loss on COMI: sold 100 at 33.5 (paper portfolio)",
+                    "tag": f"paper-order-{stop.json()['id']}", "url": "/portfolio"}
+    assert c.fake.sent == []                                                       # paper only: nothing went to the broker
+    assert wake(c).json()["paper"] == {"fills": 0, "orders": 0}                      # and it is done once
+
+    # work on the paper portfolio that fails is noted, and the look still does the rest and leaves word
+    def broken(core):
+        raise RuntimeError("the ledger could not be read")
+    monkeypatch.setattr(background.orders, "process", broken)
+    c.clock["now"] += timedelta(seconds=60)
+    out = wake(c).json()
+    assert out["ran"] and out["paper"] == {"problem": "RuntimeError"} and out["auto"]["ran"] is True
+    assert c.get("/api/v1/background").json()["beat"]["ran"]

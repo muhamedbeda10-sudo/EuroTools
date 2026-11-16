@@ -10,8 +10,8 @@ import Assistant from "./Assistant";
 import { ASSISTANT_SETTINGS } from "./AssistantSettings";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import {
-  Bell, BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, FlaskConical, Info, Landmark, LayoutDashboard, LogOut, Menu, Moon, Newspaper, NotebookPen,
-  Receipt, Settings, SlidersHorizontal, Sparkles, Star, Sun, TriangleAlert, X, type LucideIcon,
+  BookOpen, Briefcase, CandlestickChart, Check, CircleAlert, Info, Landmark, LayoutDashboard, LogOut, Menu, Moon,
+  Settings, SlidersHorizontal, Sparkles, Sun, TriangleAlert, X, type LucideIcon,
 } from "lucide-react";
 import { SHOW_TOAST } from "@/lib/realAuto";
 import InstallApp from "./InstallApp";
@@ -23,14 +23,36 @@ import SymbolSearch from "./SymbolSearch";
 /** The owner's real brokerage account (read-only). Listed only for the sign-in the server names as its owner. */
 const REAL_ACCOUNT = "/account";
 
-const NAV: { label: string; items: [string, string, LucideIcon][] }[] = [
-  { label: "Markets", items: [["/", "Dashboard", LayoutDashboard], ["/market", "Market", CandlestickChart], ["/watchlist", "Watchlist", Star]] },
-  { label: "Trading", items: [["/portfolio", "Portfolio", Briefcase], [REAL_ACCOUNT, "Real account", Landmark], ["/trades", "Trades", Receipt],
-                             ["/simulator", "Simulator", FlaskConical], ["/strategies", "Strategies", SlidersHorizontal]] },
-  { label: "Research", items: [["/research", "Research & News", Newspaper], ["/journal", "Journal", NotebookPen], ["/alerts", "Alerts", Bell],
-                              ["/guide", "Guide", BookOpen]] },
-  { label: "System", items: [["/settings", "Settings", Settings]] },
+/** The menu: a few entries, each a group of screens that belong together. A group's screens are one tap apart,
+ *  as tabs across the top of the page (SectionTabs), so the menu itself stays short. The screens and their
+ *  addresses are the ones the app always had. `also` are screens that belong to a group without being a tab in it. */
+type Section = { href: string; label: string; icon: LucideIcon; tabs?: [string, string][]; also?: string[] };
+const NAV: Section[] = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/market", label: "Market", icon: CandlestickChart, also: ["/stock"],
+    tabs: [["/market", "Market"], ["/watchlist", "Watchlist"], ["/alerts", "Alerts"], ["/research", "Research & News"]] },
+  { href: "/portfolio", label: "Portfolio", icon: Briefcase, tabs: [["/portfolio", "Portfolio"], ["/trades", "Trades"], ["/journal", "Journal"]] },
+  { href: REAL_ACCOUNT, label: "Real account", icon: Landmark },
+  { href: "/strategies", label: "Strategies", icon: SlidersHorizontal, tabs: [["/strategies", "Strategies"], ["/simulator", "Simulator"]] },
+  { href: "/guide", label: "Guide", icon: BookOpen },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
+/** The three screens a phone keeps one thumb away, beside the assistant and the menu. */
+const QUICK: [string, string, LucideIcon][] = [["/", "Home", LayoutDashboard], ["/market", "Market", CandlestickChart], ["/portfolio", "Portfolio", Briefcase]];
+
+const clean = (path: string) => (path !== "/" ? path.replace(/\/$/, "") : path);
+const sectionOf = (path: string) => NAV.find((s) => s.href === path || s.tabs?.some(([href]) => href === path) || s.also?.includes(path));
+
+/** The screens of the group this page belongs to, as tabs across its top. Nothing for a screen that stands alone. */
+function SectionTabs({ path }: { path: string }) {
+  const section = NAV.find((s) => s.tabs?.some(([href]) => href === path));
+  if (!section?.tabs) return null;
+  return (
+    <nav className="subnav" aria-label={`${section.label} screens`}>
+      {section.tabs.map(([href, label]) => <Link key={href} href={href} aria-current={href === path ? "page" : undefined}>{label}</Link>)}
+    </nav>
+  );
+}
 
 function Logo({ size = 30 }: { size?: number }) {
   return (
@@ -387,7 +409,8 @@ function Background() {
 }
 
 function Frame({ children, email }: { children: React.ReactNode; email: string | null }) {
-  const path = usePathname();
+  const path = clean(usePathname());
+  const here = sectionOf(path);
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [assistant, setAssistant] = useState(false);
@@ -398,11 +421,13 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
     window.addEventListener(OPEN_ASSISTANT, onOpen);
     return () => window.removeEventListener(OPEN_ASSISTANT, onOpen);
   }, []);
-  const assistantButton = useRef<HTMLButtonElement>(null);
+  const assistantButton = useRef<HTMLButtonElement>(null);   // in the top bar
+  const assistantTab = useRef<HTMLButtonElement>(null);      // in the phone's bar at the bottom
   const showAssistant = (on: boolean) => {
     setAssistant(on);
     try { localStorage.setItem("egx-assistant-open", on ? "1" : "0"); } catch {}
-    if (!on) assistantButton.current?.focus(); // closing hands the keyboard back to where the panel was opened from
+    // closing hands the keyboard back to where the panel was opened from: whichever of the two buttons is on screen
+    if (!on) (assistantButton.current?.offsetParent ? assistantButton.current : assistantTab.current)?.focus();
   };
   const { data: status, error, status: httpStatus } = useApi("/api/v1/status");
 
@@ -462,19 +487,17 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             <button className="close-nav icon-btn ghost" onClick={() => setOpen(false)} aria-label="Close menu"><X size={18} /></button>
           </div>
           <nav className="nav" aria-label="Main">
-            {NAV.map((group) => (
-              <div key={group.label} role="group" aria-label={group.label}>
-                <div className="nav-label">{group.label}</div>
-                {group.items.filter(([href]) => href !== REAL_ACCOUNT || status?.real_account?.allowed).map(([href, label, Icon]) => (
-                  <Link key={href} href={href} aria-current={path === href || path === `${href}/` ? "page" : undefined}>
-                    <Icon size={16} aria-hidden="true" />{label}
-                    {href === REAL_ACCOUNT && status?.real_orders?.waiting > 0 && (
-                      <span className="nav-count" title="Real orders waiting for your approval">{status.real_orders.waiting}<span className="sr-only"> waiting for your approval</span></span>
-                    )}
-                  </Link>
-                ))}
-              </div>
+            {NAV.filter((s) => s.href !== REAL_ACCOUNT || status?.real_account?.allowed).map(({ href, label, icon: Icon, tabs }) => (
+              <Link key={href} href={href} className={here?.href === href ? "active" : undefined}
+                aria-current={path === href ? "page" : undefined}
+                title={tabs ? tabs.map(([, name]) => name).join(" · ") : undefined}>
+                <Icon size={17} aria-hidden="true" />{label}
+                {href === REAL_ACCOUNT && status?.real_orders?.waiting > 0 && (
+                  <span className="nav-count" title="Real orders waiting for your approval">{status.real_orders.waiting}<span className="sr-only"> waiting for your approval</span></span>
+                )}
+              </Link>
             ))}
+            <div className="nav-rule" role="presentation" />
             <WhatsNew />
             <InstallApp />
           </nav>
@@ -489,9 +512,6 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
         {open && <div className="scrim" aria-hidden="true" onClick={() => setOpen(false)} />}
         <div className="main">
           <div className="topbar">
-            <button className="menu-btn icon-btn ghost" onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Close menu" : "Open menu"}>
-              {open ? <X size={18} /> : <Menu size={18} />}
-            </button>
             <SymbolSearch />
             <span className="spacer" />
             {status?.provider?.configured && (
@@ -530,7 +550,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
           {d?.has_sample_data && (
             <Banner title="Sample data.">
               {d.mode === "mixed" ? "Some stocks still show" : "Prices shown are"} synthetic, generated for testing. They
-              are not EGX market quotes. Import real history in <Link href="/settings">Settings</Link>.
+              are not EGX market quotes. Import real history in <Link href="/settings?tab=data">Settings</Link>.
             </Banner>
           )}
           {status?.provider?.configured && <FeedUpdater provider={status.provider} />}
@@ -541,12 +561,27 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
               Latest bar is {d.latest_bar_date} ({d.trading_days_behind} sessions behind). These are not live prices.
             </Banner>
           )}
-          <main className="content">{children}</main>
+          <main className="content"><SectionTabs path={path} />{children}</main>
           <footer className="foot">
             <span>Figures are for study, not investment advice. Trading is on paper; a real order needs the account owner&apos;s approval, of that order or given in advance.</span>
             <span>Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> Lightweight Charts</span>
           </footer>
         </div>
+        {/* On a phone the menu is a thumb away: the three screens used most, the assistant, and the rest behind "Menu". */}
+        <nav className="tabbar" aria-label="Quick">
+          {QUICK.map(([href, label, Icon]) => (
+            <Link key={href} href={href} className={here?.href === href ? "active" : undefined} aria-current={path === href ? "page" : undefined}>
+              <Icon size={20} aria-hidden="true" /><span>{label}</span>
+            </Link>
+          ))}
+          <button ref={assistantTab} className={assistant ? "active" : undefined} onClick={() => showAssistant(!assistant)} aria-expanded={assistant}>
+            <Sparkles size={20} aria-hidden="true" /><span>Assistant</span>
+          </button>
+          <button className={open ? "active" : undefined} onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Close menu" : "Open menu"}>
+            <Menu size={20} aria-hidden="true" /><span>Menu</span>
+            {status?.real_orders?.waiting > 0 && <span className="tab-dot" aria-hidden="true" />}
+          </button>
+        </nav>
         <Assistant key={assistantKey} open={assistant} onClose={() => showAssistant(false)} />
       </div>
       </LiveProvider>

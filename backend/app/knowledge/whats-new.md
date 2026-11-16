@@ -1,6 +1,26 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.7.0 · 2026-11-16 · A shorter menu, the assistant trading by itself in one place, and a moving price tape
+For: everyone
+Open: /settings?tab=assistant
+عربي: قائمة أقصر، وتداول المساعد لوحده في مكان واحد، وشريط أسعار متحرك
+
+- The menu is shorter: Dashboard, Market, Portfolio, Real account (its owner only), Strategies, Guide and Settings. The other screens did not go anywhere: they are tabs across the top of the page. Market has Watchlist, Alerts and Research & News; Portfolio has Trades and Journal; Strategies has the Simulator.
+  عربي: القائمة بقت أقصر: Dashboard و Market و Portfolio و Real account (لصاحب الحساب بس) و Strategies و Guide و Settings. باقي الشاشات ماراحتش في حتة: بقت تبويبات فوق في الصفحة. Market جواها Watchlist و Alerts و Research & News، و Portfolio جواها Trades و Journal، و Strategies جواها Simulator.
+- On a phone there is a bar at the bottom: Home, Market, Portfolio, the assistant, and Menu for everything else.
+  عربي: على الموبايل فيه شريط تحت: Home و Market و Portfolio والمساعد، و Menu لباقي الشاشات.
+- The strip of figures under the search box now moves like a tape: the indices, breadth, your paper portfolio, then the day's most active stocks, gainers and losers. Tap a stock to open it. It stops while the pointer is on it, and the small button at its start stops it for good.
+  عربي: شريط الأرقام اللي تحت البحث بقى بيتحرك زي شريط الأسعار: المؤشرات، واتساع السوق، ومحفظتك الورقية، وبعدها أنشط الأسهم وأكتر الرابحين والخاسرين في اليوم. دوس على أي سهم يفتحه. بيقف طول ما الماوس عليه، والزرار الصغير في أوله بيوقفه خالص.
+- Settings opens on the assistant, and has five tabs instead of seven: Assistant, Real trading, Paper & fees, Market data, and Accounts & log.
+  عربي: صفحة Settings بتفتح على المساعد، وبقت خمس تبويبات بدل سبعة: Assistant و Real trading و Paper & fees و Market data و Accounts & log.
+- "Trading by itself" is now one card at the top of Settings → Assistant. Choose what the assistant works on by itself (nothing, the paper portfolio, and for the brokerage account's owner the real account or both) and when it reviews. Under it, "What is in place" lists every step with a mark: what is ready, what is still missing, and a button that takes you to where it is set.
+  عربي: «Trading by itself» بقت كارت واحد في أول Settings → Assistant. اختار المساعد يشتغل لوحده على إيه (ولا حاجة، المحفظة الورقية، ولصاحب حساب الوساطة الحساب الحقيقي أو الاتنين) وبيراجع إمتى. وتحتها «What is in place» قائمة بكل خطوة وعلامتها: إيه اللي جاهز، وإيه اللي لسه ناقص، وزرار يوديك للمكان اللي بتتظبط منه.
+- Nothing about what the assistant may do has changed. It still trades by itself only with Full access, inside your limits and your spending ceilings, and a real order still goes out only on your approval or inside the automatic box you set. The assistant cannot take any of these steps for you; ask it "why are you not trading by yourself?" and it tells you which one is missing.
+  عربي: مفيش حاجة اتغيرت في اللي المساعد مسموح له بيه. لسه بيتداول لوحده بس مع Full access وجوه حدودك وسقف المصاريف، والأمر الحقيقي لسه مابيطلعش غير بموافقتك أو جوه الصندوق الآلي اللي انت محدده. والمساعد مايقدرش ياخد أي خطوة من دول بدالك؛ اسأله «ليه مش بتتداول لوحدك؟» وهو يقولك إيه الناقص.
+- For the brokerage account's owner with "Running without the app open" switched on: the server now also carries out the stop-loss and take-profit orders of the paper portfolio and brings the automatic paper runs up to date, every minute during the session, with the app closed. Your devices are told when one is filled. Until now these waited for the app to be opened.
+  عربي: لصاحب حساب الوساطة اللي مشغّل «Running without the app open»: السيرفر بقى كمان ينفّذ أوامر وقف الخسارة وجني الأرباح بتاعة المحفظة الورقية ويحدّث التشغيل الآلي الورقي، كل دقيقة وقت الجلسة والتطبيق مقفول. وأجهزتك بيوصلها إشعار لما أمر يتنفذ. قبل كده الحاجات دي كانت بتستنى لما التطبيق يتفتح.
+
 ## 0.6.2 · 2026-11-16 · The price now, beside the price of each trade
 For: everyone
 Open: /trades

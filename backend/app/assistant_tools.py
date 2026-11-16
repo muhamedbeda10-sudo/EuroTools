@@ -754,9 +754,20 @@ def _delete(core: App, a: Delete) -> dict:
 
 # ---- settings, records, knowledge, navigation ---------------------------------------------
 def _settings(core: App, a: NoArgs) -> dict:
+    from . import self_trading  # imported here because that module imports the assistant, which imports this one
+
+    own = prefs(core)
+    auto = own["autopilot"]
     return {"settings": core.app_settings(), "fee_schedule": core.fee_schedule().model_dump(mode="json"),
             "market_data": core.provider_status(), "data_quality": core.market.status(),
-            "trading": "paper only: this application cannot send an order to a broker"}
+            "trading": "paper only: this application cannot send an order to a broker",
+            # What the person saved in Settings → Assistant (they change it there, you cannot), and what is and is not
+            # in place for you to trade by yourself: the same checklist that page shows them.
+            "assistant": {"access": own["access"], "language": own["language"], "limits": own["limits"],
+                          "daily_usd": own["daily_usd"], "monthly_usd": own["monthly_usd"],
+                          "real_proposals_per_day": own["real_proposals_per_day"],
+                          "autopilot": {k: auto[k] for k in ("mode", "account", "every_minutes", "max_per_day", "notify", "last_run")},
+                          "trading_by_itself": self_trading.report(core)}}
 
 
 class UpdateSettings(Args):
@@ -1129,7 +1140,11 @@ TOOLS: list[Tool] = [
     Tool("delete_item", "Delete a strategy, alert, research item, journal entry or custom stock list for good.", Delete,
          _delete, kind="confirm", label=lambda a: f"Delete a {a.kind}"),
     Tool("settings", "The app's settings: starting capital, the fee schedule and whether it was verified, the state of "
-         "the market-data feed and data quality.", NoArgs, _settings, label=lambda a: "Reading the settings"),
+         "the market-data feed and data quality. Also your own settings as the user saved them in Settings → Assistant "
+         "(access, limits, ceilings, the autopilot's schedule and account) and `trading_by_itself`: what is in place for "
+         "you to trade by yourself and what is still missing, each with where the user sets it. Read it when asked why "
+         "you did or did not act by yourself, or how to set that up.", NoArgs, _settings,
+         label=lambda a: "Reading the settings"),
     Tool("update_settings", "Change the starting capital or the benchmark.", UpdateSettings, _update_settings,
          account="paper", kind="confirm", label=lambda a: "Change the settings"),
     Tool("update_fee_schedule", "Replace the fee schedule used for every later trade and backtest. Read the current one "

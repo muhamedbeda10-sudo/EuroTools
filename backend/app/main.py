@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, wakes, whats_new
+from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, self_trading, wakes, whats_new
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -839,9 +839,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
                 yield f"data: {json.dumps(failed)}\n\n"
         return StreamingResponse(body(), media_type="text/event-stream", headers=NO_BUFFERING)
 
+    def assistant_state(core: App, allowed: bool) -> dict:
+        """The assistant's status for its panel and its settings page, with the checklist of what is in place for
+        it to trade by itself (self_trading.py)."""
+        out = assistant.status(core, assistant_model, allowed=allowed)
+        out["self_trading"] = self_trading.report(core, out["spending"]) if out["spending"] else None
+        return out
+
     @api.get("/api/v1/assistant")
     def assistant_status(request: Request, core: App = Depends(get_core)):
-        return assistant.status(core, assistant_model, allowed=assistant_model is not None and assistant_allowed(request, core))
+        return assistant_state(core, assistant_model is not None and assistant_allowed(request, core))
 
     @api.put("/api/v1/assistant/access")
     def assistant_access(request: Request, body: AssistantAccessIn, core: App = Depends(get_core)):
@@ -853,7 +860,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         """Model, thinking effort, access, daily budget, trading limits and the autopilot, for this account."""
         assistant_ready(request, core)
         save_prefs(core, body)
-        return assistant.status(core, assistant_model, allowed=True)
+        return assistant_state(core, True)
 
     @api.post("/api/v1/assistant/autopilot")
     def assistant_autopilot(request: Request, core: App = Depends(get_core)):
