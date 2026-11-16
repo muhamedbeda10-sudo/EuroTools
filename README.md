@@ -21,7 +21,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Watchlist | Tracked stocks |
 | Portfolio | Cash, holdings, stock/sector allocation, concentration warnings, value vs benchmark |
 | Real account | The owner's brokerage account: cash, holdings, shares free to sell, broker price next to the app's price, checks on the reading; real orders, each sent on the owner's approval; and automatic orders (what fits the owner's box, with stop-losses watched by the app, and a one-tap stop). Owner only |
-| Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, CSV export |
+| Trades & Transactions | Append-only ledger, per-trade fee breakdown, gross vs net profit, the price now beside each trade's price with the move since, CSV export |
 | Strategy Management | Strategy library (MA crossover, RSI reversion, MACD, breakout, candlestick reversal), risk limits |
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
 | Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
