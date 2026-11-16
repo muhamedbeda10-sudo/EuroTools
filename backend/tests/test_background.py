@@ -470,3 +470,24 @@ def test_a_remark_counts_as_told_only_once_a_device_has_it(floor, monkeypatch):
     assert sorted(read(kw["content"], key, auth)["body"] for _, kw in c.posted) == remarks
     # Chrome's newer address for its push service is one the app sends to
     assert push._allowed("https://jmt17.google.com/fcm/send/abc:def") and not push._allowed("https://jmt17.google.com.evil.example/x")
+
+
+def test_the_owner_hears_of_a_review_as_they_asked_to(floor, monkeypatch):
+    c = floor
+    sub, key, auth = device()
+    c.post("/api/v1/push/subscribe", json=sub)
+    core = core_of(c)
+    said = lambda: [read(kw["content"], key, auth)["body"] for _, kw in c.posted]   # noqa: E731
+    push.review(core, {"ran": True, "changes": 2, "error": None, "summary": "Sold TMGH, bought COMI.", "notify": True})
+    assert said() == ["The assistant reviewed and made 2 change(s). Sold TMGH, bought COMI."]
+    push.review(core, {"ran": True, "changes": 2, "error": None, "summary": "x", "notify": False})     # they asked not to be told
+    push.review(core, {"ran": True, "changes": 0, "error": None, "summary": "Nothing to do.", "notify": True})
+    push.review(core, {"ran": False, "skipped": "another window is already running it"})
+    assert len(c.posted) == 1
+    push.review(core, {"ran": True, "changes": 0, "error": "RuntimeError", "notify": False})           # a failure is always told
+    assert said()[-1] == "The assistant's review stopped: RuntimeError"
+    # a ceiling that held a review back is told once, not at every look
+    held = {"ran": False, "skipped": "the budget is used up", "why": "Today's assistant budget (about USD 2.00) is used up."}
+    for _ in range(3):
+        push.review(core, held)
+    assert len(c.posted) == 3 and said()[-1].startswith("No review was made: Today's assistant budget")

@@ -265,6 +265,41 @@ def send(core: App, title: str, message: str, *, tag: str | None = None, url: st
     return out
 
 
+def remark(core: App, title: str, message: str, *, every: float = SAME_REMARK_SECONDS, tag: str | None = None, post=None) -> dict:
+    """Tell the owner's devices one thing, and not again until `every` seconds have passed. Marked as told only once a device has it."""
+    out = {"sent": 0, "failed": 0, "removed": 0}
+    try:
+        if _signing_key(core.settings) is None or not core.store.list(SUBS):
+            return out
+        key = hashlib.sha256(f"{title}|{message}".encode()).hexdigest()[:16]
+        seen = core.store.get(*SEEN) or {}
+        if key in seen and real_orders._age(seen[key]) < every:
+            return out
+        out = send(core, title, message, tag=tag or f"note-{key}", post=post)
+        if out["sent"]:
+            try:
+                core.store.put(*SEEN, {**{k: v for k, v in seen.items() if real_orders._age(v) < 86400}, key: now_iso()})
+            except ConflictError:
+                pass
+    except Exception:  # noqa: BLE001
+        log.exception("push: the remark could not be sent")
+    return out
+
+
+def review(core: App, done: dict, post=None) -> dict:
+    """Word of a review the assistant made by itself: what it changed, that it stopped, or that a ceiling held it back."""
+    if done.get("ran"):
+        if done.get("error"):
+            return send(core, "Autopilot", f"The assistant's review stopped: {done['error']}", tag="autopilot", url="/", post=post)
+        if done.get("changes") and done.get("notify", True):
+            words = (done.get("summary") or "").strip().replace("\n", " ")[:220]
+            return send(core, "Autopilot", f"The assistant reviewed and made {done['changes']} change(s). {words}".strip(),
+                        tag="autopilot", url="/", post=post)
+    elif done.get("skipped") in ("the budget is used up", "today's reviews are used up") and done.get("why"):
+        return remark(core, "Autopilot", f"No review was made: {done['why']}", every=20 * 3600.0, post=post)   # once a day is enough
+    return {"sent": 0, "failed": 0, "removed": 0}
+
+
 def test(core: App, post=None) -> dict:
     real_orders._owner(core)
     return send(core, "EGX Intelligence", "Notifications work on this device. This is what a real-order notice looks like.",
@@ -306,11 +341,11 @@ def report(core: App, result: dict, post=None) -> dict:
         notes = result.get("notes") or []
         if notes:
             seen = core.store.get(*SEEN) or {}
-            fresh = {k: v for k, v in seen.items() if real_orders._age(v) < SAME_REMARK_SECONDS}
+            fresh = {k: v for k, v in seen.items() if real_orders._age(v) < 86400}   # kept a day: some remarks are told once a day
             told = 0
             for note in notes:
                 key = hashlib.sha256(note.encode()).hexdigest()[:16]
-                if key in fresh or told >= MAX_REMARKS:
+                if (key in fresh and real_orders._age(fresh[key]) < SAME_REMARK_SECONDS) or told >= MAX_REMARKS:
                     continue
                 told += 1
                 if tell("Automatic orders", note, f"note-{key}"):

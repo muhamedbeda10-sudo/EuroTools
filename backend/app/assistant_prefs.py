@@ -20,13 +20,22 @@ from .services import App
 ACCESS_LEVELS = ("full", "confirm", "read")
 AUTOPILOT_MODES = ("off", "after_close", "intraday")
 DEFAULT_LIMITS = {"max_position_pct": 25.0, "max_trade_pct": 20.0, "max_trades_per_day": 10, "min_cash_pct": 5.0}
-DEFAULT_AUTOPILOT = {"mode": "off", "every_minutes": 30, "mandate": "", "last_run": None, "last_session": None, "last_chat": None}
+DEFAULT_AUTOPILOT = {"mode": "off", "every_minutes": 30, "mandate": "", "last_run": None, "last_session": None, "last_chat": None,
+                     # the most reviews in one day, whether to tell the owner's devices after one that changed something,
+                     # and how many ran on which day
+                     "max_per_day": 12, "notify": True, "day": None, "count": 0}
+LANGUAGES = ("auto", "ar", "en")
+DEFAULT_REAL_PROPOSALS = 20   # proposals for real orders the assistant may write in a day
 MODEL_NOTES = {
     "claude-opus-5-5": ("Claude Opus 5.5", "The default: strong analysis at a moderate price."),
     "claude-sonnet-5-5": ("Claude Sonnet 5.5", "Faster and half the price; good for everyday questions and routine actions."),
     "claude-haiku-5-5": ("Claude Haiku 5.5", "Fastest and far cheaper; fine for simple lookups, weaker on judgement."),
     "claude-fable-5-2": ("Claude Fable 5.2", "The most capable model, at twice the price of Opus; for the hardest analysis."),
 }
+
+
+class PrefsError(ValueError):
+    """The settings as asked do not fit together. Shown to the person."""
 
 
 class PrefsIn(BaseModel):
@@ -37,6 +46,12 @@ class PrefsIn(BaseModel):
     model: str | None = Field(default=None, max_length=60)
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     daily_usd: float | None = Field(default=None, ge=0, le=200)
+    monthly_usd: float | None = Field(default=None, ge=0, le=3000)
+    language: Literal["auto", "ar", "en"] | None = None
+    instructions: str | None = Field(default=None, max_length=2000)
+    real_proposals_per_day: int | None = Field(default=None, ge=0, le=50)
+    autopilot_max_per_day: int | None = Field(default=None, ge=1, le=48)
+    autopilot_notify: bool | None = None
     max_position_pct: float | None = Field(default=None, ge=1, le=100)
     max_trade_pct: float | None = Field(default=None, ge=1, le=100)
     max_trades_per_day: int | None = Field(default=None, ge=0, le=200)
@@ -60,11 +75,15 @@ def prefs(core: App) -> dict:
     model = doc.get("model") if doc.get("model") in SUPPORTED_MODELS else (
         cfg.assistant_model if cfg.assistant_model in SUPPORTED_MODELS else DEFAULT_MODEL)
     effort = doc.get("effort") if doc.get("effort") in EFFORTS else (cfg.assistant_effort if cfg.assistant_effort in EFFORTS else "medium")
-    daily = doc.get("daily_usd")
+    daily, monthly, proposals = doc.get("daily_usd"), doc.get("monthly_usd"), doc.get("real_proposals_per_day")
     return {
         "access": doc.get("access") if doc.get("access") in ACCESS_LEVELS else "full",
         "model": model, "effort": effort,
         "daily_usd": float(daily) if daily is not None else float(cfg.assistant_daily_usd),
+        "monthly_usd": float(monthly) if monthly is not None else float(cfg.assistant_monthly_usd),
+        "language": doc.get("language") if doc.get("language") in LANGUAGES else "auto",
+        "instructions": str(doc.get("instructions") or "")[:2000],
+        "real_proposals_per_day": int(proposals) if isinstance(proposals, int) and 0 <= proposals <= 50 else DEFAULT_REAL_PROPOSALS,
         "limits": {**DEFAULT_LIMITS, **{k: v for k, v in (doc.get("limits") or {}).items() if k in DEFAULT_LIMITS}},
         "autopilot": {**DEFAULT_AUTOPILOT, **{k: v for k, v in (doc.get("autopilot") or {}).items() if k in DEFAULT_AUTOPILOT}},
     }
@@ -74,17 +93,22 @@ def save_prefs(core: App, change: PrefsIn) -> dict:
     with core.store.transaction():
         current = prefs(core)
         given = change.model_dump(exclude_none=True)
-        for key in ("access", "model", "effort", "daily_usd"):
+        for key in ("access", "model", "effort", "daily_usd", "monthly_usd", "language", "real_proposals_per_day"):
             if key in given:
                 current[key] = given[key]
+        if "instructions" in given:
+            current["instructions"] = given["instructions"].strip()
+        if current["monthly_usd"] and current["daily_usd"] > current["monthly_usd"]:
+            raise PrefsError("The daily ceiling cannot be larger than the monthly one.")
         for key in DEFAULT_LIMITS:
             if key in given:
                 current["limits"][key] = given[key]
-        for key, field in (("mode", "autopilot_mode"), ("every_minutes", "autopilot_every_minutes"), ("mandate", "autopilot_mandate")):
+        for key, field in (("mode", "autopilot_mode"), ("every_minutes", "autopilot_every_minutes"), ("mandate", "autopilot_mandate"),
+                           ("max_per_day", "autopilot_max_per_day"), ("notify", "autopilot_notify")):
             if field in given:
                 current["autopilot"][key] = given[field].strip() if key == "mandate" else given[field]
         core.store.put("settings", "assistant", current)
-        core.audit("update", "assistant_settings", {k: v for k, v in given.items() if k != "autopilot_mandate"})
+        core.audit("update", "assistant_settings", {k: v for k, v in given.items() if k not in ("autopilot_mandate", "instructions")})
     return current
 
 

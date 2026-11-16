@@ -1003,3 +1003,19 @@ def test_a_stop_is_acted_on_only_when_the_apps_price_and_the_brokers_own_agree(f
     assert real_auto._live(core, "COMI", c.clock["now"]) is None
     polled = c.fake.live_calls
     assert c.post("/api/v1/data/live").json()["updated"] is True and c.fake.live_calls == polled + 1   # the feed is asked again at once
+
+
+def test_the_owner_can_cap_what_it_buys_in_one_day_in_money(floor):
+    c = floor
+    res = box(c, max_day_value=300)
+    assert res.status_code == 422 and "cannot be smaller than the most allowed for one automatic order" in res.json()["detail"]
+    on(c, max_day_value=1100, max_day_buys=5)
+    bought(c, qty=10)                                                           # 359 bought today
+    bought(c, symbol="TMGH", qty=10, stop=44.0, limit_price=TMGH)               # 459 more: 818
+    told, _ = suggest(c, qty=10, limit_price=35.8)                              # 358 more would be 1,176
+    assert "Automatic buys worth 818.00 were already sent today; with this it would be 1,176.00, over the 1,100.00 you allow in one day" \
+        in " ".join(told["why_it_is_not_sent_automatically"])
+    assert look(c)["sent"] == [] and auto(c)["today"]["bought"] == pytest.approx(818)
+    told, _ = suggest(c, qty=5, limit_price=35.7)                               # 178.50 fits under it
+    assert told["what_happens_next"].startswith("AUTOMATIC") and len(look(c)["sent"]) == 1
+    assert "it may buy in one day" in " ".join(assistant._real_note(core_of(c)))

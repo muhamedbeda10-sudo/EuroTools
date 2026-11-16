@@ -95,6 +95,8 @@ class AutoIn(BaseModel):
     budget: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
     max_order_value: Decimal | None = Field(default=None, gt=0, le=Decimal("100000000"))
     max_day_buys: int | None = Field(default=None, ge=1, le=50)
+    # Optional: the most it may buy in one day, in money. Without it, the limit per order times the buys per day bounds it.
+    max_day_value: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
     max_loss: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000000"))
     max_stop_pct: Decimal = Field(default=Decimal("8"), ge=Decimal("0.5"), le=Decimal("20"))
     symbols: list[str] = Field(default_factory=list, max_length=MAX_SYMBOLS)
@@ -224,6 +226,8 @@ def save(core: App, body: AutoIn) -> dict:
         raise OrderError("The budget cannot be smaller than the most allowed for one automatic order.")
     if body.budget is not None and body.max_loss is not None and body.max_loss > body.budget:
         raise OrderError("The loss at which it pauses cannot be larger than the budget.")
+    if body.max_day_value is not None and body.max_order_value is not None and body.max_day_value < body.max_order_value:
+        raise OrderError("The most it may buy in one day cannot be smaller than the most allowed for one automatic order.")
     before = chosen(core)
     after = {**body.model_dump(mode="json"), "symbols": symbols,
              "enabled_at": (before["enabled_at"] or _stamp()) if body.enabled else None}
@@ -563,9 +567,13 @@ def judge(rec: dict, records: list[dict], bk: dict, box: dict, today: str, *, bi
     if any(r["origin"] == "automation" and r["symbol"] == rec["symbol"] and r.get("created_day") == today for r in records):
         out.append(f"The app sold {rec['symbol']} at a stop-loss or take-profit today, or is trying to; "
                    "the automation does not buy it again the same day.")
-    buys = sum(1 for r in records if _automatic(r) and r["side"] == "BUY" and r.get("sent_day") == today and r["status"] in COUNTED)
-    if buys + 1 > box["max_day_buys"]:
-        out.append(f"{buys} automatic buys were already sent today; the limit is {box['max_day_buys']}.")
+    bought = [r for r in records if _automatic(r) and r["side"] == "BUY" and r.get("sent_day") == today and r["status"] in COUNTED]
+    if len(bought) + 1 > box["max_day_buys"]:
+        out.append(f"{len(bought)} automatic buys were already sent today; the limit is {box['max_day_buys']}.")
+    spent = sum((D(r["value"]) for r in bought), ZERO)
+    if box.get("max_day_value") and spent + value > D(box["max_day_value"]):
+        out.append(f"Automatic buys worth {spent:,.2f} were already sent today; with this it would be {spent + value:,.2f}, over "
+                   f"the {D(box['max_day_value']):,.2f} you allow in one day.")
     used, room = _exposure(bk, records), _room(box, bk)
     if used + value > room:
         out.append(f"The automation has {used:,.2f} in the market; with this it would be {used + value:,.2f}, over the "
@@ -910,6 +918,8 @@ def view(core: App) -> dict:
                    "used": used, "free": max(room - used, ZERO) if room is not None else None},
         "today": {"buys": sum(1 for r in records if _automatic(r) and r["side"] == "BUY" and r.get("sent_day") == today
                               and r["status"] in COUNTED),
+                  "bought": sum((D(r["value"]) for r in records if _automatic(r) and r["side"] == "BUY" and r.get("sent_day") == today
+                                 and r["status"] in COUNTED), ZERO),
                   "realized": D((bk["days"].get(today) or {}).get("realized", "0")), "result": _result(core, bk, today)},
         "realized": D(bk["realized"]), "positions": positions, "waiting": waiting,
     })

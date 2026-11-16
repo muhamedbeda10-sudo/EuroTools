@@ -577,3 +577,101 @@ def test_the_key_is_checked_for_free_and_a_bad_one_is_named(tmp_path):
         assert c.get("/api/v1/assistant").json()["problem"] is None
     with TestClient(create_app(Settings(data_dir=tmp_path / "c"), Store(tmp_path / "c" / "t.sqlite3"))) as c:
         assert c.get("/health").json()["assistant"] is False
+
+
+# ---- the owner's settings for the assistant ---------------------------------------------
+def test_the_owner_sets_what_it_may_cost_how_it_answers_and_how_often_it_reviews(tmp_path, monkeypatch):
+    script = Script({"say": "تمام"}, {"say": "Again"}, {"say": "Third"})
+    with app_with(tmp_path, script, assistant_daily_usd=0) as c:
+        s = c.get("/api/v1/assistant").json()
+        assert s["settings"]["monthly_usd"] == 0 and s["settings"]["language"] == "auto" and s["settings"]["instructions"] == ""
+        assert s["settings"]["real_proposals_per_day"] == 20 and s["settings"]["autopilot"]["max_per_day"] == 12
+        assert s["settings"]["autopilot"]["notify"] is True and s["languages"] == ["auto", "ar", "en"]
+        assert s["spending"]["today_usd"] == 0 and len(s["spending"]["days"]) == 7
+
+        # what was chosen is at the very end of the instructions; the text everyone shares comes first, unchanged
+        chat = new_chat(c)
+        say(c, chat, "hello")
+        shared = script.seen[0]["system"]
+        assert shared == assistant.system_prompt() and "What this person chose" not in shared
+        saved = c.put("/api/v1/assistant/settings", json={
+            "language": "ar", "instructions": "  Keep answers short.\nAlways give the stop-loss.  ", "monthly_usd": 30, "daily_usd": 2,
+            "real_proposals_per_day": 3, "autopilot_max_per_day": 2, "autopilot_notify": False}).json()["settings"]
+        assert saved["language"] == "ar" and saved["instructions"] == "Keep answers short.\nAlways give the stop-loss."
+        assert (saved["monthly_usd"], saved["real_proposals_per_day"], saved["autopilot"]["max_per_day"], saved["autopilot"]["notify"]) == (30, 3, 2, False)
+        say(c, chat, "again")
+        mine = script.seen[1]["system"]
+        assert mine.startswith(shared) and mine != shared
+        tail = mine[len(shared):]
+        assert "always answer in natural Egyptian Arabic" in tail and "<standing_instructions>\nKeep answers short.\nAlways give the stop-loss.\n</standing_instructions>" in tail
+        assert "do not widen what your tools may do" in tail
+        c.put("/api/v1/assistant/settings", json={"language": "en", "instructions": ""})
+        say(c, chat, "third")
+        assert script.seen[2]["system"].endswith("- Language: always answer in English, whatever language the message is written in.\n")
+        # the standing instructions are the owner's words: they are not copied into the activity log
+        logged = [a for a in c.get("/api/v1/audit").json() if a["entity"] == "assistant_settings"]
+        assert logged and all("instructions" not in a["detail"] and "autopilot_mandate" not in a["detail"] for a in logged)
+        # a ceiling for a day cannot be above the one for the month
+        res = c.put("/api/v1/assistant/settings", json={"daily_usd": 50, "monthly_usd": 20})
+        assert res.status_code == 422 and "cannot be larger than the monthly" in res.json()["detail"]
+        assert c.put("/api/v1/assistant/settings", json={"language": "fr"}).status_code == 422
+        assert c.put("/api/v1/assistant/settings", json={"instructions": "x" * 2001}).status_code == 422
+
+
+def test_the_month_has_a_ceiling_too_and_what_was_spent_is_shown_by_day_and_by_kind(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from app.data.calendar import CAIRO
+    clock = {"now": datetime(2026, 11, 10, 12, 0, tzinfo=CAIRO)}
+    monkeypatch.setattr(assistant, "cairo_now", lambda: clock["now"])
+    turn_cost = cost_usd("claude-opus-5-5", USAGE)
+    script = Script(*({"say": f"answer {n}"} for n in range(6)))
+    with app_with(tmp_path, script, assistant_daily_usd=0) as c:
+        c.put("/api/v1/assistant/settings", json={"monthly_usd": round(turn_cost * 2.5, 4)})
+        chat = new_chat(c)
+        say(c, chat, "one")
+        clock["now"] = clock["now"].replace(day=11)
+        say(c, chat, "two")
+        spend = c.get("/api/v1/assistant").json()["spending"]
+        assert spend["today_usd"] == pytest.approx(turn_cost, abs=1e-4) and spend["month_usd"] == pytest.approx(turn_cost * 2, abs=1e-4)
+        assert spend["today_by"] == {"chat": pytest.approx(turn_cost, abs=1e-4), "autopilot": 0}
+        assert [d["date"] for d in spend["days"][:2]] == ["2026-11-11", "2026-11-10"] and spend["days"][1]["calls"] == 1
+        say(c, chat, "three")                                                   # this one takes the month over its ceiling
+        res = c.post(f"/api/v1/assistant/chats/{chat}/messages", json={"text": "four", "page": "/"})
+        assert res.status_code == 429 or "This month's assistant budget" in res.text
+        assert len(script.seen) == 3                                            # nothing more was sent to the model
+        clock["now"] = clock["now"].replace(month=12, day=1)                    # a new month starts from nothing
+        say(c, chat, "five")
+        assert c.get("/api/v1/assistant").json()["spending"]["month_usd"] == pytest.approx(turn_cost, abs=1e-4)
+
+
+def test_the_autopilot_keeps_to_the_reviews_and_the_money_it_was_given(tmp_path):
+    script = Script(*({"say": f"review {n}"} for n in range(5)))
+    with app_with(tmp_path, script, assistant_daily_usd=0) as c:
+        c.put("/api/v1/assistant/settings", json={"autopilot_mode": "intraday", "autopilot_max_per_day": 2, "autopilot_every_minutes": 15})
+        store = Store(tmp_path / "t.sqlite3")
+
+        def due_again():
+            doc = store.get("settings", "assistant")
+            doc["autopilot"].update(last_run=None, last_session=None)
+            store.put("settings", "assistant", doc)
+        ran = []
+        for _ in range(3):
+            due_again()
+            ran.append(c.post("/api/v1/assistant/autopilot").json())
+        assert [r["ran"] for r in ran] == [True, True, False] and len(script.seen) == 2
+        assert ran[2]["skipped"] == "today's reviews are used up" and "its 2 reviews for today" in ran[2]["why"]
+        assert ran[0]["notify"] is True
+        # the report is written in the language chosen in Settings, and in the mandate's when none was chosen
+        briefs = [" ".join(b["text"] for b in seen["messages"][0]["content"]) for seen in script.seen]
+        assert "Write the report in the language of the mandate" in briefs[0]
+        c.put("/api/v1/assistant/settings", json={"language": "en", "autopilot_max_per_day": 3})
+        due_again()
+        assert c.post("/api/v1/assistant/autopilot").json()["ran"] and len(script.seen) == 3
+        assert "Write the report in English." in " ".join(b["text"] for b in script.seen[2]["messages"][0]["content"])
+        # a ceiling in money holds a review back the same way, and says which ceiling
+        c.put("/api/v1/assistant/settings", json={"autopilot_max_per_day": 10, "monthly_usd": 0.0001})
+        due_again()
+        held = c.post("/api/v1/assistant/autopilot").json()
+        assert held["ran"] is False and held["skipped"] == "the budget is used up" and "This month's assistant budget" in held["why"]
+        assert len(script.seen) == 3

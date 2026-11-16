@@ -159,7 +159,8 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
           <div><dt>In the market</dt><dd>{egp(b.used)}</dd></div>
           <div><dt>Free of the budget</dt><dd>{egp(b.free)}</dd></div>
           <div><dt>Budget</dt><dd>{egp(b.limit)}{b.lost > 0 ? <small className="muted">{num(b.lost)} of it lost so far</small> : null}</dd></div>
-          <div><dt>Automatic buys today</dt><dd>{int(auto.today.buys)} of {int(auto.box.max_day_buys)}</dd></div>
+          <div><dt>Automatic buys today</dt><dd>{int(auto.today.buys)} of {int(auto.box.max_day_buys)}
+            {auto.box.max_day_value ? <small className="muted">{num(auto.today.bought)} of {num(Number(auto.box.max_day_value))} EGP</small> : null}</dd></div>
           <div><dt>Today, sales and open positions</dt><dd className={tone(auto.today.result)}>{egp(auto.today.result)}</dd></div>
         </dl>
       )}

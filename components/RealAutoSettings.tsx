@@ -7,7 +7,7 @@ import { DATA_UPDATED, useApi } from "@/lib/useApi";
 import { useStatus } from "@/components/Shell";
 import { CardHead, State } from "@/components/ui";
 
-type Draft = { budget: string; max_order_value: string; max_day_buys: string; max_loss: string; max_stop_pct: string; symbols: string };
+type Draft = { budget: string; max_order_value: string; max_day_buys: string; max_day_value: string; max_loss: string; max_stop_pct: string; symbols: string };
 
 const text = (v: unknown) => (v == null ? "" : String(Number(v)));
 
@@ -21,7 +21,7 @@ export default function RealAutoSettings() {
   useEffect(() => {
     if (!data) return;
     const b = data.box;
-    setD({ budget: text(b.budget), max_order_value: text(b.max_order_value), max_day_buys: text(b.max_day_buys), max_loss: text(b.max_loss),
+    setD({ budget: text(b.budget), max_order_value: text(b.max_order_value), max_day_buys: text(b.max_day_buys), max_day_value: text(b.max_day_value), max_loss: text(b.max_loss),
            max_stop_pct: text(b.max_stop_pct), symbols: b.symbols.join(", ") });
   }, [data]);
 
@@ -38,7 +38,7 @@ export default function RealAutoSettings() {
     try {
       if (!enabled && data.box.enabled) await api("/api/v1/real-orders/auto/stop", { method: "POST" });   // also cancels its open buys
       await api("/api/v1/real-orders/auto", { method: "PUT", json: {
-        enabled, budget: amount(d.budget), max_order_value: amount(d.max_order_value), max_day_buys: amount(d.max_day_buys),
+        enabled, budget: amount(d.budget), max_order_value: amount(d.max_order_value), max_day_buys: amount(d.max_day_buys), max_day_value: amount(d.max_day_value),
         max_loss: amount(d.max_loss), max_stop_pct: amount(d.max_stop_pct) ?? 8, symbols: d.symbols.split(/[\s,]+/).filter(Boolean),
       } });
       setMsg({ ok: true, text: enabled ? `Saved. Automatic orders are on: they run during the session${background ? ", with the app open or closed." : " while this app is open."}`
@@ -77,6 +77,8 @@ export default function RealAutoSettings() {
                 <input id="ra-order" inputMode="decimal" value={d.max_order_value} onChange={(e) => set({ max_order_value: digits(e.target.value) })} /></div>
               <div><label htmlFor="ra-buys">Most automatic buys in one day</label>
                 <input id="ra-buys" inputMode="numeric" value={d.max_day_buys} onChange={(e) => set({ max_day_buys: e.target.value.replace(/[^\d]/g, "") })} /></div>
+              <div><label htmlFor="ra-dayvalue">Most it may buy in one day (EGP, optional)</label>
+                <input id="ra-dayvalue" inputMode="decimal" value={d.max_day_value} placeholder="no extra ceiling" onChange={(e) => set({ max_day_value: digits(e.target.value) })} /></div>
               <div><label htmlFor="ra-loss">Stop buying for the day when down by (EGP)</label>
                 <input id="ra-loss" inputMode="decimal" value={d.max_loss} onChange={(e) => set({ max_loss: digits(e.target.value) })} /></div>
               <div><label htmlFor="ra-stop">Stop-loss at most this % under the buying price</label>
