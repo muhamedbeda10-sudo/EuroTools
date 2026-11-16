@@ -560,7 +560,7 @@ def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out
         tmgh = round(c.get("/api/v1/stocks/TMGH", headers=ho).json()["quote"]["last"], 3)
 
         # another administrator is not the owner: nothing of real orders is theirs to see or to do
-        assert c.get("/api/v1/status", headers=ha).json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0, "auto": False}
+        assert c.get("/api/v1/status", headers=ha).json()["real_orders"] == {"allowed": False, "ready": False, "waiting": 0, "auto": False, "background": False}
         for method, path, body in (("get", "/api/v1/real-orders", None), ("put", "/api/v1/real-orders/settings", limits),
                                    ("post", "/api/v1/real-orders", {"symbol": "COMI", "side": "BUY", "qty": 1, "price": comi})):
             assert c.request(method, path, json=body, headers=ha).status_code == 403
@@ -569,7 +569,7 @@ def test_real_orders_are_the_owners_and_two_approvals_at_once_cannot_both_go_out
         assert c.put("/api/v1/real-orders/settings", json=limits, headers=ho).json()["ready"] is True
         a = c.post("/api/v1/real-orders", json={"symbol": "COMI", "side": "BUY", "qty": 10, "price": comi}, headers=ho).json()
         b = c.post("/api/v1/real-orders", json={"symbol": "TMGH", "side": "BUY", "qty": 5, "price": tmgh}, headers=ho).json()
-        assert c.get("/api/v1/status", headers=ho).json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 2, "auto": False}
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"] == {"allowed": True, "ready": True, "waiting": 2, "auto": False, "background": False}
         assert c.post(f"/api/v1/real-orders/{a['id']}/approve", headers=ha,     # not theirs to approve either
                       json={k: a[k] for k in ("symbol", "side", "qty", "price")}).status_code == 403
 
@@ -752,3 +752,74 @@ def test_automatic_orders_are_the_owners_and_two_looks_at_once_send_one_order(mo
     Feed.reset()
     broker.reset()
     real_orders.reset()
+
+
+def test_the_timer_signs_in_as_the_owner_with_their_sealed_key_and_looks_for_them(monkeypatch):
+    """Background running against the real rules: a real sign-in from the auth emulator, sealed, placed on the server, used by the timer."""
+    from datetime import datetime
+
+    from app import background, broker, real_auto, real_orders
+    from app.config import Settings
+    from app.data.calendar import CAIRO
+    from app.data.feed import Feed
+    from app.main import create_app
+    from tests.test_broker import FakeBroker
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", HOST)
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", AUTH_HOST)
+    for module in (real_orders, real_auto, background):
+        monkeypatch.setattr(module, "cairo_now", lambda: datetime(2026, 11, 15, 11, 0, tzinfo=CAIRO))   # a Sunday, mid-session
+    for module in (Feed, broker, real_orders, background):
+        module.reset()
+
+    def new_person():
+        res = httpx.post(f"{IDP}/accounts:signUp", params={"key": "fake-api-key"},
+                         json={"email": f"p-{uuid.uuid4().hex[:10]}@example.com", "password": "long-enough-1", "returnSecureToken": True})
+        assert res.status_code == 200, res.text
+        provision(res.json()["localId"])
+        return res.json()["localId"], {"Authorization": f"Bearer {res.json()['idToken']}"}, res.json()["refreshToken"]
+    owner, ho, owners_renewal = new_person()
+    _, ha, others_renewal = new_person()
+    timer = {"Authorization": "Bearer the-platforms-secret"}
+    fake = FakeBroker()
+    fake.listing = [s for s in fake.listing if s["symbol"] != "EAST"]   # market data is shared: leave it as the other tests expect it
+    cfg = Settings(store_backend="firestore", firebase_project_id=PROJECT, firebase_web_api_key="fake-api-key", broker_account_uids=owner,
+                   live_trading_enabled=True, cron_secret="the-platforms-secret", background_secret="only-this-server-knows")
+
+    with TestClient(create_app(cfg, younit=fake)) as c:
+        while c.post("/api/v1/data/refresh", headers=ho).json()["remaining"]:
+            pass
+        assert c.get("/api/v1/background/look").status_code == 401                               # not the timer
+        assert c.get("/api/v1/background/look", headers=timer).json() == {"ran": False, "why": "no background key on the server"}
+        for method, path, body in (("get", "/api/v1/background", None), ("put", "/api/v1/background", {"enabled": True}),
+                                   ("post", "/api/v1/background/key", {"refresh_token": others_renewal})):
+            assert c.request(method, path, json=body, headers=ha).status_code == 403, path       # another administrator is not the owner
+            assert c.request(method, path, json=body).status_code == 401, path
+        # a key is made from the owner's own sign-in, and from nobody else's
+        res = c.post("/api/v1/background/key", json={"refresh_token": others_renewal}, headers=ho)
+        assert res.status_code == 422 and "not this account's" in res.json()["detail"]
+        made = c.post("/api/v1/background/key", json={"refresh_token": owners_renewal}, headers=ho).json()
+        assert made["key"].startswith("bk1.") and owners_renewal not in made["key"] and made["server_key"] == "none"
+        res = c.put("/api/v1/background", json={"enabled": True}, headers=ho)
+        assert res.status_code == 422 and "no background key on the server" in res.json()["detail"]
+
+    # the owner placed the key in the server's environment and redeployed
+    with TestClient(create_app(cfg.model_copy(update={"background_key": made["key"]}), younit=fake)) as c:
+        assert c.get("/api/v1/background/look", headers=timer).json() == {"ran": False, "why": "background running is switched off"}
+        on = c.put("/api/v1/background", json={"enabled": True}, headers=ho).json()
+        assert on["enabled"] is True and on["server_key"] == "ok"
+        assert c.get("/api/v1/status", headers=ho).json()["real_orders"]["background"] is False   # real orders themselves are still off
+        out = c.get("/api/v1/background/look", headers=timer).json()
+        assert out["ran"] is True and out["auto"]["ran"] is False and "switched off" in out["auto"]["why"]
+        seen = c.get("/api/v1/background", headers=ho).json()                                     # the look left word in the owner's own data
+        assert seen["beat"]["at"] and seen["beat"]["why"] == out["auto"]["why"] and seen["silent"] is False
+        assert [e["action"] for e in c.get("/api/v1/audit", headers=ho).json() if e["entity"] == "background"] == ["switch", "key"]
+        assert not [e for e in c.get("/api/v1/audit", headers=ha).json() if e["entity"] == "background"]
+
+        # a new key retires the one on the server, at once
+        c.post("/api/v1/background/key", json={"refresh_token": owners_renewal}, headers=ho)
+        assert c.get("/api/v1/background", headers=ho).json()["server_key"] == "replaced"
+        assert c.get("/api/v1/background/look", headers=timer).json() == {"ran": False, "why": "background running is switched off"}
+        res = c.put("/api/v1/background", json={"enabled": True}, headers=ho)
+        assert res.status_code == 422 and "older one" in res.json()["detail"]
+    for module in (Feed, broker, real_orders, background):
+        module.reset()

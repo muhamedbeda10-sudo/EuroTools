@@ -3,6 +3,7 @@ import json
 import re
 import threading
 import time as clock_module
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -41,19 +42,26 @@ def _fresh():
     services._DEPTH_CACHE.clear()
 
 
-@pytest.fixture()
-def floor(tmp_path, monkeypatch):
+@contextmanager
+def a_floor(tmp_path, monkeypatch, **settings):
     """The API with a broker behind it, in the middle of a session, with live prices and a clock the test moves."""
+    from app import background
     clock = {"now": datetime.combine(date.fromisoformat(days(1)[0]), time(11, 0), CAIRO)}
-    for module in (calendar_module, feed_module, market_module, services, broker, real_orders, real_auto):
+    for module in (calendar_module, feed_module, market_module, services, broker, real_orders, real_auto, background):
         monkeypatch.setattr(module, "cairo_now", lambda: clock["now"])
     fake = FakeBroker()
     fake.live_prices = {"COMI": COMI, "TMGH": TMGH, "NEWCO": NEWCO}
-    with client(tmp_path, fake, live_trading_enabled=True) as c:
+    with client(tmp_path, fake, live_trading_enabled=True, **settings) as c:
         c.post("/api/v1/data/refresh")
-        c.fake, c.clock, c.dir = fake, clock, tmp_path
+        c.fake, c.clock, c.dir, c.extra = fake, clock, tmp_path, settings
         price(c)
         fake.reads.clear()
+        yield c
+
+
+@pytest.fixture()
+def floor(tmp_path, monkeypatch):
+    with a_floor(tmp_path, monkeypatch) as c:
         yield c
 
 
@@ -112,7 +120,7 @@ def on(c, **change):
 
 def core_of(c):
     store = Store(c.dir / "t.sqlite3")
-    core = App(store, Settings(data_dir=c.dir, live_trading_enabled=True), {}, Feed(StoreDocs(store)), c.fake).bootstrap()
+    core = App(store, Settings(data_dir=c.dir, live_trading_enabled=True, **c.extra), {}, Feed(StoreDocs(store)), c.fake).bootstrap()
     core.real_account_allowed = True
     return core
 
@@ -690,7 +698,7 @@ def test_the_assistant_is_told_what_the_box_is_and_what_became_of_its_proposal(f
     assert "holds 10 COMI, 4 of them already being sold; this would sell 7" in told["why_it_is_not_sent_automatically"][0]
 
 
-def test_nothing_but_the_owners_open_app_starts_a_look():
+def test_nothing_but_the_owners_open_app_and_their_timer_starts_a_look():
     """The fence, kept by a test: the assistant can read the box and nothing more, and sending has two callers."""
     app_dir = Path(__file__).resolve().parent.parent / "app"
     source = {str(p.relative_to(app_dir)): p.read_text() for p in app_dir.rglob("*.py")}
@@ -700,7 +708,11 @@ def test_nothing_but_the_owners_open_app_starts_a_look():
         for call in ("send_waiting(", "real_auto.save(", "real_auto.stop(", "real_auto.set_levels(", "note_auto(", "discard("):
             assert call not in source[name], f"{name} must not reach {call}"
     assert {name for name, text in source.items() if "send_waiting(" in text} == {"real_orders.py", "real_auto.py"}
-    assert {name for name, text in source.items() if "real_auto.tick(" in text} == {"main.py"}
+    # a look is asked for by the owner's open app (main.py) or by the timer working with the owner's key (background.py)
+    assert {name for name, text in source.items() if "real_auto.tick(" in text} == {"main.py", "background.py"}
+    assert {name for name, text in source.items() if re.search(r"background\.(wake|look)\(", text)} == {"main.py"}
+    for name in ("assistant_tools.py", "assistant.py", "assistant_prefs.py"):
+        assert "background" not in source[name] and "push." not in source[name], name
     assert {name for name, text in source.items() if "place_limit_order(" in text} == {"data/younit.py", "real_orders.py"}
     assert "place_limit_order" not in source["real_auto.py"] and "core.younit.cancel_order" not in source["real_auto.py"]
     # paper trading, strategies and the automatic paper runs have no way in

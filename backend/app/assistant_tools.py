@@ -10,7 +10,8 @@ can write a proposal for a real order. It has no tool that approves, sends or
 cancels one, and none that changes the owner's limits. Sending takes the owner's
 approval: of that order on the Real account page (`real_orders.approve`), or given
 in advance for what fits the automatic box they set (`real_auto.tick`, asked for by
-their open app). Neither is reachable from here, and a test keeps it so.
+their open app or by the server's timer working with their key). Neither is
+reachable from here, and a test keeps it so.
 
 `kind` decides how a call is treated under each access level:
   read    - looks only
@@ -325,9 +326,10 @@ def _real_account(core: App, a: NoArgs) -> dict:
 NOT_SENT = ("This is a proposal, not an order. Nothing was sent to the broker. It waits on the Real account page, where only "
             "the owner can approve it; you cannot approve, send or cancel it.")
 WILL_BE_SENT = ("AUTOMATIC: this proposal fits the box the owner set for automatic orders. Nothing has been sent yet, but it "
-                "WILL be sent to the broker with REAL money, without the owner looking at it first, at the app's next look: "
-                "within about a minute while their app is open and the market is open. It is checked once more at that "
-                "moment. Say exactly this to the user. If you no longer stand behind it, withdraw it now.")
+                "WILL be sent to the broker with REAL money, without the owner looking at it first, at the next look during "
+                "the session: within a minute or two, from their open app or, if they switched that on, from the server's own "
+                "looks with the app closed. It is checked once more at that moment. Say exactly this to the user. If you no "
+                "longer stand behind it, withdraw it now.")
 REAL_ORDER = ("id", "created_at", "session", "origin", "symbol", "side", "qty", "price", "value", "stop", "target", "reason",
               "status", "status_note", "approved_by", "hold", "auto", "broker")
 

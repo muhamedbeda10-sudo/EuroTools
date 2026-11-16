@@ -111,9 +111,21 @@ broker.
 - The budget is the most the automation may have in the market at once, at cost, counting its open buy
   orders. What it has lost so far comes off the budget, so the budget is also the most it can lose. A profit
   does not widen it. Raising the budget in Settings adds more.
-- It runs only while the app is open during the session: the open app asks for a look twice a minute. With the
-  app closed, the phone locked or no connection, nothing is sent and no stop-loss is watched. The Real account
-  page shows when the last look was. A phone can be told to keep its screen on while it runs.
+- By default it runs only while the app is open during the session: the open app asks for a look twice a
+  minute. With the app closed, the phone locked or no connection, nothing is sent and no stop-loss is watched.
+  The Real account page shows when the last look was. A phone can be told to keep its screen on while it runs.
+- Running without the app open (Settings, Real trading): the owner can let the server take the same looks by
+  itself, once a minute during the session, so it keeps working with the app closed. It needs three things,
+  shown as a checklist in that card: the server's timer; the owner's "background key" placed in the server's
+  settings (created in the card with "Create a background key", shown once, added on Vercel as BACKGROUND_KEY
+  and followed by a redeploy); and the owner's switch. The key is the owner's own sign-in, sealed so that only
+  this server can open it; changing the password or creating a new key retires it. The assistant's review also
+  runs there, at the schedule set in Settings, Assistant. If the server stops looking, the card and the Real
+  account page say so ("The server has not looked for several minutes").
+- Notifications: in the same card, "Turn on notifications on this device" makes that phone or computer receive a
+  notice when the automation sends an order, sells at a stop-loss, or needs the owner, also with the app
+  closed. On an iPhone the app must first be installed to the Home Screen. A notice names the order and what
+  became of it, never a balance. "Send a test" checks it.
 - The automation keeps its own list of what it bought. It sells only those shares, never anything else in the
   account. An order the owner approved by hand is the owner's and is not on that list.
 - Stop-loss and take-profit: watched by the app, not left at the broker. When the live price reaches the

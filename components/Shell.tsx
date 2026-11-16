@@ -466,7 +466,7 @@ function Frame({ children, email }: { children: React.ReactNode; email: string |
             <span className="pill paper hide-sm" title="Orders placed from these screens are simulated. Real orders are separate, on the Real account page.">Paper trading</span>
             {status?.real_orders?.auto ? (
               <Link className="pill auto" href={REAL_ACCOUNT}
-                title="Automatic orders are on: while this app is open during the session, what fits your box is sent to the broker without asking you. Open the Real account page to stop it.">
+                title={`Automatic orders are on: during the session, ${status.real_orders.background ? "with the app open or closed" : "while this app is open"}, what fits your box is sent to the broker without asking you. Open the Real account page to stop it.`}>
                 <span className="dot" /><span className="hide-sm">Automatic real orders on{status.real_orders.waiting > 0 ? ` · ${status.real_orders.waiting} waiting` : ""}</span>
                 <span className="only-sm">Auto on</span>
               </Link>

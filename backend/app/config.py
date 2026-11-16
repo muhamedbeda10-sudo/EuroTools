@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     # can reach the broker whatever anybody chose in the app. On, an order still needs the owner's own
     # switch and limits (Settings → Real trading) and their approval of that order. See app/real_orders.py.
     live_trading_enabled: bool = False
+    # Running without a browser (app/background.py). CRON_SECRET is the hosting platform's own secret for its
+    # timer: only a call that carries it may wake the server. BACKGROUND_KEY is the owner's sign-in, sealed by
+    # this server for this server (created in Settings → Real trading); the word "local" stands in for it on a
+    # server without sign-in. Both empty = the server never acts by itself.
+    cron_secret: str = ""
+    background_key: str = ""
+    # What the sealing key and the notification key are derived from. Optional: without it the broker
+    # credentials above are used, which are just as private to the server.
+    background_secret: str = ""
+    # The app's own address, named to the notification services as the sender. Optional.
+    public_host: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

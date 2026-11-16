@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { egp, int, num, price, tone } from "@/lib/format";
 import { AWAKE_KEY, REAL_AUTO_AWAKE, REAL_AUTO_LOOK } from "@/lib/realAuto";
-import { DATA_UPDATED } from "@/lib/useApi";
+import { DATA_UPDATED, useApi } from "@/lib/useApi";
+import { useStatus } from "@/components/Shell";
 
 const hhmmss = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Africa/Cairo" });
 
@@ -76,13 +77,16 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
   const [busy, setBusy] = useState(false);
   const [awake, setAwake] = useState(false);
   const [canWake, setCanWake] = useState(false);
+  // Whether the server also takes looks by itself, and when it last did.
+  const background = !!useStatus()?.real_orders?.background;
+  const { data: bg, reload: reloadBg } = useApi(background ? "/api/v1/background" : null);
   useEffect(() => {
     setCanWake("wakeLock" in navigator);
     try { setAwake(localStorage.getItem(AWAKE_KEY) === "1"); } catch {}
-    const onLook = (e: Event) => { setLook((e as CustomEvent).detail); reload(); };
+    const onLook = (e: Event) => { setLook((e as CustomEvent).detail); reload(); reloadBg(); };
     window.addEventListener(REAL_AUTO_LOOK, onLook);
     return () => window.removeEventListener(REAL_AUTO_LOOK, onLook);
-  }, [reload]);
+  }, [reload, reloadBg]);
 
   if (!auto || !(auto.box.enabled || auto.positions.length > 0)) return null;
   const b = auto.budget;
@@ -117,9 +121,10 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
       {auto.on ? (
         <p className="muted" style={{ marginTop: 0, fontSize: 12.5 }} role="status">
           {auto.market_open
-            ? <>Running while this app is open: the assistant&apos;s proposals that fit your box are sent without asking you, and the positions below are watched.{" "}
+            ? <>{background ? "Running with the app open or closed" : "Running while this app is open"}: the assistant&apos;s proposals that fit your box are sent without asking you, and the positions below are watched.{" "}
                 {look ? <span className="num">Last look {hhmmss(look.at)}{look.result?.ran || look.result?.busy ? "" : ` · ${String(look.result?.why ?? "it did not run").replace(/\.$/, "")}`}.</span> : "Waiting for the first look…"}</>
-            : "The market is closed. It runs during the session, while this app is open."}
+            : `The market is closed. It runs during the session, ${background ? "with the app open or closed" : "while this app is open"}.`}
+          {background && bg?.beat?.at && <span className="num"> Last background look {hhmmss(Date.parse(bg.beat.at))}.</span>}
           {" "}<Link href="/settings?tab=real">Change the box</Link>
         </p>
       ) : auto.box.enabled ? (
@@ -129,6 +134,10 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
           <strong>Automatic orders are off.</strong> The shares below were bought by the automation and are <strong>no longer watched</strong>: their
           stop-losses do nothing until it is switched on again in <Link href="/settings?tab=real">Settings</Link>. They are yours to manage.
         </div>
+      )}
+      {background && bg?.silent && auto.on && (
+        <div className="note danger" role="alert"><strong>The server has not looked for several minutes.</strong> Background running is switched on, but nothing is being
+          sent or watched with the app closed right now. Keep this app open, and check <Link href="/settings?tab=real">Running without the app open</Link>.</div>
       )}
       {auto.paused && <div className="note" role="status"><strong>Not buying for the rest of today:</strong> {auto.paused.why} It still sells at stop-losses and take-profits.</div>}
       {failed && <div className="note danger" role="alert">{failed}</div>}
@@ -159,15 +168,16 @@ export default function RealAuto({ auto, reload, onChanged }: { auto: any; reloa
       ) : (
         <p className="muted" style={{ fontSize: 13, margin: "10px 0 0" }}>The automation holds no shares right now.</p>
       )}
-      {auto.on && canWake && (
+      {auto.on && canWake && !background && (
         <label className="check" style={{ marginTop: 12 }}>
           <input type="checkbox" checked={awake} onChange={(e) => keepAwake(e.target.checked)} />
           <span>Keep this screen on while automatic orders are running <span className="muted">(for a phone left open on its charger)</span></span>
         </label>
       )}
       <p className="foot-note">
-        Stop-losses and take-profits are watched by this app, not left at the broker: they work only while the app is open during the session, and
-        only for shares the broker shows as free to sell. Figures are before the broker&apos;s fees. The rest of your account is never touched by it.
+        Stop-losses and take-profits are watched by this app, not left at the broker: they work during the session, {background
+          ? "from the open app or from the server's own looks once a minute,"
+          : "only while the app is open,"} and only for shares the broker shows as free to sell. Figures are before the broker&apos;s fees. The rest of your account is never touched by it.
       </p>
     </div>
   );

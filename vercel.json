@@ -18,5 +18,11 @@
   },
   "regions": [
     "fra1"
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/background/look",
+      "schedule": "* 6-13 * * 0-4"
+    }
   ]
 }

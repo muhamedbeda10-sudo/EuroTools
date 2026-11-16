@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DATA_UPDATED, useApi } from "@/lib/useApi";
+import { useStatus } from "@/components/Shell";
 import { CardHead, State } from "@/components/ui";
 
 type Draft = { budget: string; max_order_value: string; max_day_buys: string; max_loss: string; max_stop_pct: string; symbols: string };
@@ -16,6 +17,7 @@ export default function RealAutoSettings() {
   const [d, setD] = useState<Draft | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const background = !!useStatus()?.real_orders?.background;   // the server also takes looks by itself
   useEffect(() => {
     if (!data) return;
     const b = data.box;
@@ -28,7 +30,7 @@ export default function RealAutoSettings() {
   const save = async (enabled: boolean) => {
     if (!d || !data) return;
     if (enabled && !data.box.enabled && !confirm(
-      "Switch automatic orders on?\n\nFrom then on, while this app is open during the session, an order the assistant proposes inside this box is sent to the broker " +
+      "Switch automatic orders on?\n\nFrom then on, during the session, an order the assistant proposes inside this box is sent to the broker " +
       "with real money WITHOUT asking you first. You can stop it at any moment from the Real account page.")) return;
     setBusy(true);
     setMsg(null);
@@ -39,7 +41,7 @@ export default function RealAutoSettings() {
         enabled, budget: amount(d.budget), max_order_value: amount(d.max_order_value), max_day_buys: amount(d.max_day_buys),
         max_loss: amount(d.max_loss), max_stop_pct: amount(d.max_stop_pct) ?? 8, symbols: d.symbols.split(/[\s,]+/).filter(Boolean),
       } });
-      setMsg({ ok: true, text: enabled ? "Saved. Automatic orders are on: they run while this app is open during the session."
+      setMsg({ ok: true, text: enabled ? `Saved. Automatic orders are on: they run during the session${background ? ", with the app open or closed." : " while this app is open."}`
         : "Saved. Automatic orders are off: every order needs your approval." });
       reload();
       window.dispatchEvent(new Event(DATA_UPDATED));   // the top bar and the Real account page show the switch
@@ -85,7 +87,9 @@ export default function RealAutoSettings() {
               <input id="ra-symbols" value={d.symbols} placeholder="COMI, TMGH" onChange={(e) => set({ symbols: e.target.value.toUpperCase() })} />
             </div>
             <ul className="muted" style={{ fontSize: 12.5, maxWidth: "100ch", paddingLeft: 18, margin: "12px 0" }}>
-              <li><strong>It runs only while this app is open during the session.</strong> Close it, lock the phone or lose the connection, and nothing is sent and no stop-loss is watched until it is open again.</li>
+              {background
+                ? <li><strong>It runs during the session, with the app open or closed:</strong> you switched on running without the app open (below), so the server keeps looking once a minute. If that stops, nothing is sent or watched until the app is open again.</li>
+                : <li><strong>It runs only while this app is open during the session.</strong> Close it, lock the phone or lose the connection, and nothing is sent and no stop-loss is watched until it is open again. To keep it going with the app closed, see “Running without the app open” below.</li>}
               <li>The budget is the most it may have in the market at once, at cost, counting its open buy orders. What it has lost so far comes off it, so the budget is also the most it can lose. Raise it to add more.</li>
               <li>Every automatic buy needs a stop-loss. The stop is watched by the app, not left at the broker: when the price reaches it, a sale is sent at a price a few levels into the bids.</li>
               <li><strong>A stop cannot sell shares that have not settled.</strong> On EGX, shares bought today can usually be sold only two sessions later. Until the broker shows them as free to sell, the stop-loss on a fresh purchase cannot act; the app says so and sells as soon as it can.</li>

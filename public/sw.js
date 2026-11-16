@@ -1,9 +1,12 @@
 // EGX Intelligence service worker.
 //
-// It exists for one thing: when the phone has no connection, the installed app shows a page that
-// says so instead of the browser's error. It keeps nothing on the device: no copy of the app, of its
-// data, or even of that page, which is written out below. Prices, balances and every screen always
-// come from the network, so nothing stale can be shown.
+// It does two things. When the phone has no connection, the installed app shows a page that says so
+// instead of the browser's error. And when the server sends word of a real order while the app is not
+// on screen, it shows that as a notification (see backend/app/push.py).
+//
+// It keeps nothing on the device: no copy of the app, of its data, or even of that page, which is
+// written out below. Prices, balances and every screen always come from the network, so nothing stale
+// can be shown.
 
 self.addEventListener("install", () => self.skipWaiting());
 
@@ -22,6 +25,28 @@ self.addEventListener("fetch", (event) => {
       status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     })),
   );
+});
+
+// Word from the server: what the automation did with a real order, or that it needs its owner.
+self.addEventListener("push", (event) => {
+  let said = {};
+  try { said = event.data ? event.data.json() : {}; } catch { said = { body: event.data ? event.data.text() : "" }; }
+  event.waitUntil(self.registration.showNotification(said.title || "EGX Intelligence", {
+    body: said.body || "", tag: said.tag || undefined, renotify: Boolean(said.tag),
+    icon: "/icons/icon-192.png", badge: "/icons/icon-192.png", data: { url: said.url || "/account" },
+  }));
+});
+
+// Tapping it opens the app where the order is, in the window that is already open if there is one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || "/account", self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+    for (const open of windows) {
+      if ("focus" in open) return open.focus().then((w) => (w && "navigate" in w ? w.navigate(url) : undefined)).catch(() => undefined);
+    }
+    return self.clients.openWindow(url);
+  }));
 });
 
 const NO_CONNECTION = `<!doctype html>

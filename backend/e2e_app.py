@@ -83,9 +83,11 @@ def _now():
     return _session + (datetime.now(UTC) - _started)
 
 
-for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto):
+import app.background as _background  # noqa: E402
+
+for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto, _background):
     _module.cairo_now = _now
-for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker):
+for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker, _background):
     _module.market_open = lambda *a, **k: True
 
 _younit = MovingYounit()
@@ -95,7 +97,9 @@ _younit.hold((1, "COMI", "Commercial International Bank", 120, 120, 33.4, 35.9),
              (3, "NEWCO", "A New Listing", 50, 50, 52.1, 55.9), (9001, None, "Money Market Fund", 250, 250, 1.52, 1.61))
 
 # Real orders can be tried end to end here: the stand-in broker takes them, and no real broker is anywhere near.
-_settings = Settings(broker_account_uids="local", live_trading_enabled=True)
+# The server can also be woken as the hosting platform's timer would wake it: GET /api/v1/background/look with this secret.
+_settings = Settings(broker_account_uids="local", live_trading_enabled=True, cron_secret="local-timer", background_key="local",
+                     background_secret="local-only")
 _store = Store(_settings.data_dir / "egx.sqlite3")
 app = create_app(_settings, _store, younit=_younit)
 

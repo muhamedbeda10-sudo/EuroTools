@@ -5,7 +5,8 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 > Trading here is on paper. One thing is real and fenced off: the owner of the brokerage account can
 > look at it, and can send a **real order they approved themselves**, one at a time. It is off unless
 > switched on twice (server and owner). The owner may go one step further and approve in advance
-> what fits a box they set (**automatic orders**, locked until hand-approved orders have worked).
+> what fits a box they set (**automatic orders**, locked until hand-approved orders have worked),
+> and may let the server keep taking those looks with the app closed (**background running**).
 > Nothing else in this codebase reaches a broker.
 > The app ships with **synthetic sample prices** (clearly labelled in the UI) until real
 > history is imported by CSV or a data feed is connected.
@@ -29,7 +30,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
-Not built yet: automatic real orders while the app is closed (they run only in the owner's open app), fundamentals (no verified source), corporate actions.
+Not built yet: fundamentals (no verified source), corporate actions.
 
 ## How it is hosted
 
@@ -189,6 +190,42 @@ the box (`real_orders`) and is told for each proposal whether it will go out by 
 Like order sending itself, **none of this has been exercised against the real broker from here.**
 In particular the broker's words for order states, and how soon bought shares show as free to
 sell, are only known from its SDK.
+
+## Running without the app open, and notifications
+
+`backend/app/background.py`, `backend/app/push.py`. Automatic orders run from the owner's open app.
+With background running switched on, the server takes the same looks itself, once a minute during
+the session, so stop-losses and the box keep working with the app closed and the phone locked.
+
+- **The timer.** `vercel.json` → `crons`: `GET /api/v1/background/look` every minute, Sunday to
+  Thursday, over the hours the session can fall in (needs a plan that allows per-minute cron). The
+  call is answered only with the platform's secret (`CRON_SECRET`), and does nothing outside the
+  session.
+- **Whose hands.** The API holds no database credentials, and a timer has no sign-in. The owner
+  lends theirs: Settings → Real trading → *Running without the app open* → *Create a background key*
+  seals their sign-in's renewal token with a key only this server can derive, and shows it once.
+  The owner adds it to the server's environment as `BACKGROUND_KEY` (Sensitive) and redeploys.
+  With it the server signs in as the owner and nobody else; Firestore applies the owner's own rules,
+  as when the app is open. The key is never accepted from a request, only read from the
+  environment; it cannot be opened anywhere else; a new key, or a changed password, retires it.
+- **The owner's switch** is in their own data. Off, a look ends before it does anything.
+- **A look**: read live prices (or the session's final bars after the close), `real_auto.tick`,
+  then the assistant's review when one is due (its own switch and schedule in Settings →
+  Assistant), and what the review proposed is judged in the same look.
+- **It decides nothing.** What may be sent is still the owner's box and limits, checked at every look.
+- **When it stops, it cannot say so.** The app shows when the last background look was, and warns
+  when there has been none for a few minutes during the session.
+- **Notifications (Web Push).** Devices the owner switches on are told when the automation sends
+  an order, sells at a stop, or needs them. Messages are encrypted for the device (RFC 8291) and
+  signed as this application (VAPID, RFC 8292) with a key derived from a secret the server already
+  holds, so there is no key to store and no outside account. A notice names the order and its
+  outcome, never a balance. Subscriptions live in the owner's data, and the server posts only to
+  the browsers' own push services.
+
+Environment: `CRON_SECRET` (the platform's timer secret), `BACKGROUND_KEY` (created in the app),
+optional `BACKGROUND_SECRET` (what keys are derived from; the broker credentials are used without it).
+Tests: `backend/tests/test_background.py` (the encryption is checked against the standard's own
+worked example).
 
 ## Run locally
 
