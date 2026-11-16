@@ -34,14 +34,14 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import broker, orders, paper, real_auto, real_orders
+from . import broker, orders, paper, real_auto, real_orders, wakes
 from .assistant_prefs import check_trade, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
 from .domain.fees import FeeItem, FeeSchedule
 from .domain.ledger import replay
 from .domain.strategies import STRATEGY_TYPES, RiskConfig, StrategyConfig
-from .extras import ALERT_KINDS, AlertIn, Extras, JournalIn, ResearchIn
+from .extras import ALERT_KINDS, AlertError, AlertIn, Extras, JournalIn, ResearchIn
 from .services import App, NotFound, clean
 
 MAX_RESULT_CHARS = 30_000
@@ -620,16 +620,47 @@ def _alerts(core: App, a: NoArgs) -> dict:
 class SaveAlert(Args):
     id: str | None = Field(default=None, max_length=40, description="Give it to change an existing alert")
     kind: Literal["price_above", "price_below", "change_pct_above", "change_pct_below", "volume_ratio_above",
-                  "rsi_above", "rsi_below", "strategy_signal"]
-    symbol: str | None = Field(default=None, max_length=12)
-    value: float | None = None
+                  "rsi_above", "rsi_below", "strategy_signal", "time_at"]
+    symbol: str | None = Field(default=None, max_length=12, description="The stock; optional for time_at and strategy_signal")
+    value: float | None = Field(default=None, description="The level: a price in EGP, a percent, a volume ratio or an RSI value")
     strategy_id: str | None = Field(default=None, max_length=40)
-    note: str = Field(default="", max_length=300)
-    active: bool = True
+    at: str | None = Field(default=None, max_length=32, description="For time_at: HH:MM Cairo time (today if still ahead, else the "
+                           "next trading day), or YYYY-MM-DD HH:MM")
+    note: str = Field(default="", max_length=300, description="With wake_me: what to check when it fires. You will read it then.")
+    active: bool = Field(default=True, description="False switches it off")
+    wake_me: bool = Field(default=False, description="True: when it fires the app also wakes you (a watch), not only tells the user")
+
+
+WHEN_IT_FIRES = {
+    "events": "The app tells the user and, during the session, wakes you with a short review of this event alone, usually within "
+              "a minute or two (from their open app, or from the server itself with the app closed, if they set that up).",
+    "intraday": "The app tells the user and, during the session, wakes you with a short review of this event alone, usually within "
+                "a minute or two (from their open app, or from the server itself with the app closed, if they set that up).",
+    "after_close": "The app tells the user. Their autopilot reviews after the close only, so you are told of it at that review, not "
+                   "at the moment. They can choose 'when a watch fires' in Settings → Assistant to have you woken at once.",
+    "off": "The app tells the user. Their autopilot is off, so nothing wakes you: say so, and that Settings → Assistant → Autopilot "
+           "→ 'when a watch fires' makes the app wake you.",
+}
 
 
 def _save_alert(core: App, a: SaveAlert) -> dict:
-    return Extras(core).save_alert(AlertIn(**a.model_dump(exclude={"id"})), a.id)
+    extras = Extras(core)
+    body = AlertIn(**a.model_dump(exclude={"id", "wake_me"}), wake=a.wake_me)
+    if a.wake_me and a.active:
+        if len(a.note.strip()) < 10:
+            raise AlertError("Say in the note what to check when it fires: you will read it when the app wakes you.")
+        mine = [x for x in extras.alerts()["alerts"] if x.get("wake") and x["active"] and x.get("by") == "assistant" and x["id"] != a.id]
+        if len(mine) >= wakes.MAX_WATCHES:
+            raise AlertError(f"{wakes.MAX_WATCHES} watches of yours are already on. Switch off the ones that no longer matter first.")
+        true_now = extras.holds_now(body)
+        if true_now:
+            raise AlertError(f"That is already the case ({true_now}), so a watch on it would fire at once. Act on it now, or "
+                             "watch for something that has not happened yet.")
+    saved = extras.save_alert(body, a.id, by="assistant" if a.wake_me else None)
+    if a.wake_me and a.active:
+        saved = {**saved, "what_happens_when_it_fires": WHEN_IT_FIRES[prefs(core)["autopilot"]["mode"]] + " It fires once and is "
+                 f"then off, and lapses by itself after {wakes.WATCH_DAYS} days."}
+    return saved
 
 
 class Research(Args):
@@ -1063,11 +1094,17 @@ TOOLS: list[Tool] = [
          label=lambda a: f"Start an automatic run with EGP {a.capital:,.0f}"),
     Tool("set_paper_run_status", "Pause, resume or stop an automatic run. Stopping is final.", RunStatus, _run_status,
          kind="confirm", label=lambda a: {"active": "Resume", "paused": "Pause", "stopped": "Stop"}[a.status] + " an automatic run"),
-    Tool("alerts", "The alerts, what kinds exist, and the alerts that fired recently.", NoArgs, _alerts,
+    Tool("alerts", "The alerts, what kinds exist, and the alerts that fired recently. `wake` marks a watch (it wakes you when "
+         "it fires) and `by` says who set it.", NoArgs, _alerts,
          label=lambda a: "Reading the alerts"),
-    Tool("save_alert", "Create or change an alert on a price, day change, volume, RSI level or strategy signal.",
+    Tool("save_alert", "Create or change an alert on a price, day change, volume, RSI level, strategy signal or a time "
+         "(kind time_at with `at`). The app checks it by itself, in code and at no cost, and tells the user when it fires. With "
+         "wake_me it is a watch: when it fires the app also wakes YOU with a short review of that event, your note in front of "
+         "you. Use a watch instead of looking again later: an entry level, the level that proves a trade wrong, a time to "
+         "re-check. A watch fires once and is then off.",
          SaveAlert, _save_alert, kind="write",
-         label=lambda a: f"Save an alert{f' on {a.symbol.upper()}' if a.symbol else ''}"),
+         label=lambda a: (f"{'Set a watch' if a.wake_me else 'Save an alert'}"
+                          f"{f' on {a.symbol.upper()}' if a.symbol else ''}")),
     Tool("research", "The research and news items the user saved, filtered by stock, text or category.", Research, _research,
          label=lambda a: "Reading saved research"),
     Tool("save_research", "Save or change a research or news item, linked to stocks and sectors.", SaveResearch,

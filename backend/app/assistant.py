@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 from pydantic import ValidationError
 
-from . import broker, orders, real_auto, real_orders
+from . import broker, orders, real_auto, real_orders, wakes
 from .assistant_prefs import ACCESS_LEVELS, AUTOPILOT_MODES, LANGUAGES, models, note_autopilot, prefs, trades_today
 from .assistant_tools import BY_NAME, Tool, library_note, page_path, parse, render, tool_specs, trading_references
 from .data.calendar import cairo_now, market_open
@@ -31,6 +31,7 @@ from .data.market import DataError
 from .data.younit import YounitError
 from .domain.backtest import BacktestError
 from .domain.ledger import LedgerError
+from .extras import Extras, alert_words
 from .llm import EFFORTS, AssistantError, AssistantModel, cost_usd
 from .services import App, NotFound, now_iso
 from .store.errors import ConflictError
@@ -118,6 +119,14 @@ that cannot be undone (deleting, resetting the portfolio, stopping a run), make 
 stop-loss order (set_protective_order) unless the user said otherwise. Your trades are checked against limits the user \
 set (size per trade and per stock, trades per day, cash kept); if one is refused, say which limit and do not try to get \
 around it.
+- Hand to the app what the app can do by itself. It works in code, all the time, at no cost, while every review of \
+yours costs the user money. It carries out stop-loss and take-profit orders on the paper portfolio \
+(set_protective_order), trades a strategy automatically on paper (start_paper_run), tells the user when an alert \
+fires (save_alert), and watches for you: save_alert with wake_me, on a price level, a day's move, volume, RSI, a \
+strategy signal or a time (kind time_at), with a note saying what to check when it fires. With the autopilot on, \
+the app then wakes you with a short review of that event alone, your note in front of you; without it, the user is \
+told. So when you are waiting for something, set a watch and stop: do not look again and again, and do not ask the \
+user to come back. A watch fires once; set a new one if you still need it.
 - What you cost and how far you go is the user's to set in Settings → Assistant, and you cannot change it: a daily and a \
 monthly spending ceiling (the screen shows what was spent today, this month and over the last week), the language you \
 answer in, standing instructions, how many reviews the autopilot may run in a day and, for the brokerage account's \
@@ -309,24 +318,27 @@ def spent_month(core: App) -> float:
 SESSION_MINUTES = 270   # 10:00 to 14:30 Cairo
 
 
-def reviews_a_day(auto: dict) -> tuple[int, int]:
-    """What the saved schedule asks for in one day, and what the day's limit lets through.
+def reviews_a_day(auto: dict) -> tuple[int, int, int]:
+    """What the saved schedule asks for by the clock in one day, what the day's limit lets through of that,
+    and the most that can run in a day once the app's watches wake it as well.
 
-    Asked: one review after the close, and during the session one at the open and one every so many minutes.
-    The review after the close always runs; the day's limit holds back the ones during the session, so that
-    one place is always left for it.
+    By the clock: one review after the close and, in "intraday" mode, one at the open and one every so many
+    minutes. The review after the close always runs; the day's limit holds back the others (the timed ones
+    and the ones a watch starts), so that one place is always left for it.
     """
     if auto["mode"] == "off":
-        return 0, 0
-    during = 0 if auto["mode"] == "after_close" else 1 + SESSION_MINUTES // int(auto["every_minutes"])
-    return 1 + during, 1 + min(during, max(int(auto["max_per_day"]) - 1, 0))
+        return 0, 0, 0
+    during = 1 + SESSION_MINUTES // int(auto["every_minutes"]) if auto["mode"] == "intraday" else 0
+    timed = 1 + min(during, max(int(auto["max_per_day"]) - 1, 0))
+    return 1 + during, timed, max(timed, int(auto["max_per_day"])) if auto["mode"] in wakes.WOKEN else timed
 
 
 def spending(core: App) -> dict:
     """What the assistant has cost: today, split by what it was doing, this month, and the last seven days.
 
-    `autopilot` is what a day of reviews can come to: how many the schedule can ask for, and what a review did
-    cost on average over those seven days (None until one has run). An estimate; the ceilings are the limit.
+    `autopilot` is what a day of reviews can come to: how many the schedule asks for by the clock, the most a day
+    can hold once watches wake it too, what a review did cost on average over those seven days and what a day
+    of them did cost (None until one has run). An estimate; the ceilings are the limit.
     """
     chosen = prefs(core)
     today = cairo_now().date()
@@ -335,8 +347,10 @@ def spending(core: App) -> dict:
     docs = {d: core.store.get("assistant_usage", d) or {} for d in days}
     now = docs[days[0]]
     reviews = sum(int(d.get("reviews") or 0) for d in docs.values())
-    each = sum(float((d.get("by") or {}).get("autopilot") or 0.0) for d in docs.values()) / reviews if reviews else None
-    asked, at_most = reviews_a_day(chosen["autopilot"])
+    on_reviews = sum(float((d.get("by") or {}).get("autopilot") or 0.0) for d in docs.values())
+    each = on_reviews / reviews if reviews else None
+    days_run = sum(1 for d in docs.values() if int(d.get("reviews") or 0))
+    asked, at_most, with_watches = reviews_a_day(chosen["autopilot"])
     a_day = at_most * each if each is not None else None
     if a_day is not None and chosen["daily_usd"] > 0:
         a_day = min(a_day, chosen["daily_usd"])
@@ -345,9 +359,12 @@ def spending(core: App) -> dict:
             "month_usd": round(spent_month(core), 4), "monthly_limit_usd": chosen["monthly_usd"],
             "days": [{"date": d, "usd": round(float(docs[d].get("cost_usd") or 0.0), 4), "calls": int(docs[d].get("calls") or 0)}
                      for d in days],
-            "autopilot": {"reviews_a_day": at_most, "reviews_asked": asked, "reviews_counted": reviews,
+            "autopilot": {"mode": chosen["autopilot"]["mode"], "reviews_a_day": at_most, "reviews_asked": asked,
+                          "reviews_at_most": with_watches, "reviews_counted": reviews,
                           "review_usd": round(each, 4) if each is not None else None,
-                          "day_usd": round(a_day, 4) if a_day is not None else None}}
+                          "day_usd": round(a_day, 4) if a_day is not None else None,
+                          # what the days it ran did cost, which is the figure that matters when watches wake it
+                          "usual_day_usd": round(on_reviews / days_run, 4) if days_run else None}}
 
 
 def reached(core: App) -> tuple[str, str] | None:
@@ -596,20 +613,25 @@ def _repair(chat: dict) -> None:
 
 # ---- autopilot: the assistant reviewing and trading without being asked -------------------------
 def autopilot_state(core: App) -> dict:
-    """Whether a review is due. One per completed session, and in "intraday" mode also every so many
-    minutes while the market is open."""
+    """Whether a review is due. One per completed session; in "intraday" mode also every so many minutes
+    while the market is open; and in "events" and "intraday" modes when something the app was watching for
+    the assistant has happened (wakes.py), which is a short review of that event alone."""
     auto = prefs(core)["autopilot"]
     latest = core.market.latest_settled()
     session = latest.strftime("%Y-%m-%d") if latest is not None else None
     due = None
+    waiting = len(wakes.pending(core)) if auto["mode"] != "off" else 0
     if auto["mode"] != "off" and session:
+        last = datetime.fromisoformat(auto["last_run"]) if auto["last_run"] else None
+        since = (datetime.fromisoformat(now_iso()) - last).total_seconds() if last else None
         if auto["last_session"] != session:
             due = "close"
-        elif auto["mode"] == "intraday" and market_open():
-            last = datetime.fromisoformat(auto["last_run"]) if auto["last_run"] else None
-            if last is None or (datetime.fromisoformat(now_iso()) - last).total_seconds() >= auto["every_minutes"] * 60:
-                due = "intraday"
-    return {"mode": auto["mode"], "due": due, "session": session, "last_run": auto["last_run"], "last_chat": auto["last_chat"]}
+        elif auto["mode"] == "intraday" and market_open() and (since is None or since >= auto["every_minutes"] * 60):
+            due = "intraday"   # the timed check, which is told of anything that waits as well
+        elif auto["mode"] in wakes.WOKEN and waiting and market_open() and (since is None or since >= wakes.EVENT_GAP_SECONDS):
+            due = "event"   # something the app was watching for it has happened: a short review of that alone
+    return {"mode": auto["mode"], "due": due, "session": session, "last_run": auto["last_run"], "last_chat": auto["last_chat"],
+            "waiting": waiting}
 
 
 REPORT_IN = {   # the language of a review's report: the one chosen in Settings → Assistant, else the mandate's
@@ -660,17 +682,50 @@ def _real_note(core: App) -> list[str]:
     return lines
 
 
-def _brief(core: App, chosen: dict, state: dict) -> str:
-    """What the autopilot is told: the owner's mandate, then the facts, worked out here rather than left to the model."""
+def _watches(core: App, chosen: dict) -> list[str]:
+    """What the app is watching for the assistant now, and how to hand it more: the cheap alternative to another review."""
+    mine = [a for a in Extras(core).alerts()["alerts"] if a.get("wake") and a["active"]]
+    woken = chosen["autopilot"]["mode"] in wakes.WOKEN
+    lines = ["", "The app watches for you between reviews, in code and at no cost. "
+             + (f"{len(mine)} watch(es) are on:" if mine else "No watch is on now.")]
+    lines += [f"- {alert_words(a)}" + (f" — “{a['note']}”" if a.get("note") else "") for a in mine[:wakes.MAX_WATCHES]]
+    lines.append("Wherever you are waiting for something (a breakout, a pullback to a level, the level that proves you wrong, a time "
+                 "to look again), set a watch: save_alert with wake_me and a note saying what to check then. "
+                 + ("When it fires during the session the app wakes you with a short review of that event alone. " if woken else
+                    "You are told of it at your next review. ")
+                 + f"A watch fires once and is then off; switch off those that no longer matter. At most {wakes.MAX_WATCHES} at once.")
+    return lines
+
+
+def _brief(core: App, chosen: dict, state: dict, events: list[dict] | None = None) -> str:
+    """What the autopilot is told: the owner's mandate, then the facts, worked out here rather than left to the model.
+
+    `events` is what the app saw while watching for it (wakes.py). When they are the reason for this review
+    it is a short one, about them alone.
+    """
     pf = core.portfolio()
     s, limits = pf["summary"], chosen["limits"]
     open_orders = orders.list_orders(core)
     level = {(o["symbol"], o["kind"]): float(o["price"]) for o in open_orders}
     used = trades_today(core.store.list(core._ledger_coll()))
-    lines = [
-        "AUTOPILOT REVIEW. Nobody is reading this as you work: act on your own judgement inside the limits, and do not ask questions.",
-        (f"Reason: a new completed session ({state['session']})." if state["due"] == "close"
-         else "Reason: a scheduled check while the market is open."),
+    woken, events = state["due"] == "event", events or []
+    if woken:
+        lines = [
+            "AUTOPILOT WAKE-UP. The app woke you because something it was watching for you has happened. Nobody is reading this "
+            "as you work: act on your own judgement inside the limits, and do not ask questions.",
+            "What happened:", *wakes.lines(events),
+            "This is not a full review. Deal with what happened and nothing else: look up only what you need for it (usually "
+            "that stock's report), act if the case you wrote down still holds and leave it alone if it does not.",
+        ]
+    else:
+        lines = [
+            "AUTOPILOT REVIEW. Nobody is reading this as you work: act on your own judgement inside the limits, and do not ask questions.",
+            (f"Reason: a new completed session ({state['session']})." if state["due"] == "close"
+             else "Reason: a scheduled check while the market is open."),
+        ]
+        if events:
+            lines += ["Since your last review the app saw what it was watching for you:", *wakes.lines(events)]
+    lines += [
         "",
         "Mandate from the owner:",
         chosen["autopilot"]["mandate"] or "(none written) Manage the paper portfolio prudently: prefer liquid stocks, keep losses small, do not overtrade.",
@@ -691,12 +746,17 @@ def _brief(core: App, chosen: dict, state: dict) -> str:
         f"{limits['max_position_pct']:g}% per stock, {limits['max_trades_per_day']} trades a day ({used} used today), "
         f"at least {limits['min_cash_pct']:g}% kept in cash.",
         *_real_note(core),
+        *_watches(core, chosen),
         "",
-        "Work through it in this order: (1) check every holding against the market and sell what no longer deserves its place; "
-        "(2) look for new candidates only if the mandate and the cash allow it (screen_stocks first, then stock_report on the few "
-        "that matter); (3) size each purchase with size_position, and make sure every holding has a stop-loss "
-        "(set_protective_order); (4) record the reason for each trade in the journal; (5) end with a short report of what you "
-        "did and why. Doing nothing is a valid outcome: say so and why. " + REPORT_IN[chosen.get("language") or "auto"],
+        ("If you trade, size the purchase with size_position, give the holding a stop-loss (set_protective_order) and record the "
+         "reason in the journal. End with two or three sentences on what you did and why. Doing nothing is a valid outcome: say "
+         "so and why. " if woken else
+         "Work through it in this order: (1) check every holding against the market and sell what no longer deserves its place; "
+         "(2) look for new candidates only if the mandate and the cash allow it (screen_stocks first, then stock_report on the few "
+         "that matter); (3) size each purchase with size_position, and make sure every holding has a stop-loss "
+         "(set_protective_order); (4) record the reason for each trade in the journal; (5) leave watches for what you are "
+         "waiting for; (6) end with a short report of what you did and why. Doing nothing is a valid outcome: say so and why. ")
+        + REPORT_IN[chosen.get("language") or "auto"],
     ]
     if trading_references():
         lines.append("Where a decision turns on method (trend and structure, zones, an entry, a stop, a target), follow the owner's "
@@ -721,18 +781,21 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
     if state["due"] != "close" and done >= auto["max_per_day"] - 1:
         return {"ran": False, **state, "skipped": "today's reviews are used up",
                 "why": f"The assistant has made the {done} review(s) it may make during the session today, of {auto['max_per_day']} "
-                       "in one day; the review after the close still runs (Settings → Assistant)."}
+                       "in one day; the review after the close still runs" + (", and is told what the app saw meanwhile"
+                                                                              if state["due"] == "event" else "")
+                       + " (Settings → Assistant)."}
     try:
         with core.store.transaction():
             chat = new_chat(core, title=f"Autopilot · {cairo_now():%Y-%m-%d %H:%M}", kind="autopilot")
             note_autopilot(core, last_run=now_iso(), last_chat=chat["id"], day=today, count=done + 1,
                            last_session=state["session"] if state["due"] == "close" else chosen["autopilot"]["last_session"])
+            events = wakes.take(core)   # what the app saw while watching for it: told to this review and to no other
     except ConflictError:
         return {"ran": False, **state, "skipped": "another window is already running it"}
     # Without full access the review only looks and reports: nothing can be approved while nobody is there.
     access = "full" if chosen["access"] == "full" else "read"
     trades, error, text = 0, None, []
-    for event in send(core, model, chat["id"], _brief(core, chosen, state), "autopilot", access=access):
+    for event in send(core, model, chat["id"], _brief(core, chosen, state, events), "autopilot", access=access):
         if event["type"] == "tool_done" and event.get("changed"):
             trades += 1
         elif event["type"] == "text":
@@ -741,7 +804,9 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
             text.clear()
         elif event["type"] == "error":
             error = event["detail"]
-    return {"ran": True, "chat": chat["id"], "changes": trades, "error": error, "reason": state["due"],
+    if error and not trades and events:
+        wakes.give_back(core, events)   # it failed before it did anything: what it was told is kept for the next review
+    return {"ran": True, "chat": chat["id"], "changes": trades, "error": error, "reason": state["due"], "events": len(events),
             "summary": "".join(text).strip()[-700:], "notify": bool(auto["notify"])}
 
 

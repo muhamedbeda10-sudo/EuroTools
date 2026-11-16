@@ -26,7 +26,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Strategy Simulator | Historical backtest, side-by-side comparison of strategies, automatic paper trading |
 | Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
 | Journal | Why each decision was made, what was expected, what happened, what was learned |
-| Alerts | Price, day change, volume, RSI and strategy-signal alerts, shown in the app and as desktop notifications |
+| Alerts | Price, day change, volume, RSI, strategy-signal and time-of-day alerts, shown in the app and as notifications; an alert can wake the assistant |
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Fee schedule, starting capital, CSV data import, accounts (administrators), connections, audit trail |
 
@@ -379,6 +379,24 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   (`push.review`): the count only, never the model's words. One held back by a ceiling is told once (once in
   the month for the monthly ceiling). It runs only while the app is open in
   a browser; with anything less than full access it looks and reports only.
+- **Watches** (`backend/app/wakes.py`): the app watches, the assistant is woken. An alert marked `wake` (by the
+  person on the Alerts page, or by the assistant with `save_alert(wake_me=…)`) is checked in code like any
+  alert; when it fires it is switched off and what happened is queued (`settings/assistant_wakes`, in the same
+  transaction as the alert). In the `events` and `intraday` autopilot modes a queued event makes a review due
+  (`autopilot_state` → `event`): a short one, briefed with what happened and the note written for that moment.
+  The claim takes the queue, so an event is told to one review only. At least five minutes pass after any
+  review, so a burst is one review; event reviews count in the day's limit; outside the session, or in
+  `after_close` mode, they wait for the next review. The automation's own exits from a real position are
+  queued the same way (`wakes.note_exits`). Nothing in `wakes.py` calls the model or sends an order.
+  Guards: nothing is queued with the autopilot off; a queued event older than 20 hours is dropped; a review
+  that fails before changing anything gives its events back; a time seen more than 30 minutes late is marked
+  missed and wakes nobody; in `intraday` mode the timed review comes before an event review and takes the
+  events with it; the assistant cannot set a watch on a condition that already holds (it would wake itself).
+- **Alerts in the background**: the server's own look (`background.look`) checks the owner's alerts after the
+  automation's look and before the review, so what fires can wake the review in that same look; fired alerts
+  are pushed to the owner's devices from both the open app's check and the server's. With no device subscribed
+  the server checks only the alerts that wake the assistant (`check_alerts(only_wake=True)`), because an alert
+  is used up when it fires.
 - **Reference library**: Markdown files in `backend/app/knowledge/` (title on the first line, a one-line
   description on the second, then the text under `## ` headings). `app-guide` describes the app; any other
   file is one of the owner's trading references. The assistant's instructions list every reference, and its `knowledge` tool reads them: the outline of a

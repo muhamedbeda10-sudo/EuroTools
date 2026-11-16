@@ -1,6 +1,30 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.5.0 · 2026-11-16 · The app watches, and wakes the assistant only when needed
+For: everyone
+Open: /alerts
+عربي: التطبيق هو اللي يراقب، ويصحّي المساعد وقت اللزوم بس
+
+- An alert can now wake the assistant: tick "Also wake the assistant" on the Alerts page, or let the assistant set its own watches. The app does the watching itself, in code and at no cost; when one fires, the assistant makes a short review of that event alone.
+  عربي: التنبيه بقى يقدر يصحّي المساعد: علّم على «Also wake the assistant» في صفحة Alerts، أو سيب المساعد يحط مراقباته بنفسه. التطبيق هو اللي بيراقب بالكود ومن غير أي تكلفة، ولما التنبيه يشتغل المساعد بيعمل مراجعة قصيرة للحدث ده بس.
+- A new autopilot schedule, "When a watch fires": the review after each close, plus a short one whenever something it watches for happens. It costs far less than a review every so many minutes (Settings, Assistant).
+  عربي: جدول جديد للطيار الآلي «When a watch fires»: مراجعة بعد كل إغلاق، ومراجعة قصيرة كل ما حاجة بيراقبها تحصل. أرخص بكتير من مراجعة كل كام دقيقة (Settings ثم Assistant).
+- A new kind of alert: a time of day, Cairo time. Use it to be told, or to have the assistant look again, at a set time.
+  عربي: نوع تنبيه جديد: ميعاد في اليوم بتوقيت القاهرة، علشان يفكّرك أو يخلّي المساعد يبص تاني في وقت محدد.
+- The assistant now hands mechanical work to the app (stop-losses, automatic paper runs, alerts, watches) instead of looking again and again.
+  عربي: المساعد بقى يسيب الشغل الآلي للتطبيق (وقف الخسارة، التشغيل الآلي الورقي، التنبيهات، المراقبة) بدل ما يراجع كل شوية.
+
+## 0.5.0 · 2026-11-16 · Alerts reach your phone, also with the app closed
+For: owner
+Open: /alerts
+عربي: التنبيهات بتوصل موبايلك، حتى والتطبيق مقفول
+
+- With "Running without the app open" switched on, the server checks your alerts every minute during the session, and the devices you turned notifications on for are told when one fires.
+  عربي: لو «Running without the app open» شغّال، السيرفر بيفحص تنبيهاتك كل دقيقة وقت الجلسة، والأجهزة اللي مفعّل عليها الإشعارات بيوصلها إشعار لما تنبيه يشتغل.
+- When automatic orders sell a position at its stop-loss or take-profit, the assistant is woken to look at what is left, in the schedules that wake it.
+  عربي: لما الأوامر الآلية تبيع مركز عند وقف الخسارة أو جني الربح، المساعد بيتصحّى يراجع الباقي، في الجداول اللي بتصحّيه.
+
 ## 0.4.0 · 2026-11-16 · More control over the assistant
 For: everyone
 Open: /settings?tab=assistant

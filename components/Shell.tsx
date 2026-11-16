@@ -285,24 +285,31 @@ function Background() {
         if (sold.length && !stopped) {
           setToasts((t) => [...sold.map((o) => ({ seq: `order-${o.id}`, title: "Order filled", message: o.message, symbol: o.symbol })), ...t].slice(0, 5));
         }
-        // The assistant's own review, when the user switched the autopilot on. The server decides whether one is due.
+        // The alerts come first: one that wakes the assistant is handed to its review in this same round.
+        const out = await api("/api/v1/alerts/check", { method: "POST" });
+        if (out.wake) lastAuto = 0;
+        if (out.triggered.length && !stopped) {
+          setToasts((t) => [...out.triggered, ...t].slice(0, 5));
+          // The server tells the devices that have notifications on; without one, the browser's own notice does.
+          if (!out.pushed && typeof Notification !== "undefined" && Notification.permission === "granted") {
+            for (const e of out.triggered) new Notification("EGX Intelligence alert", { body: e.message + (e.note ? ` — ${e.note}` : "") });
+          }
+        }
+        // The assistant's own review, when the user switched the autopilot on. The server decides whether one is due:
+        // after a close, at the schedule, or because something the app was watching for it has happened.
         if (autopilot && Date.now() - lastAuto > AUTOPILOT_MS) {
           lastAuto = Date.now();
           const review = await api("/api/v1/assistant/autopilot", { method: "POST" });
           if (review.mode === "off") autopilot = false;
+          // Something the app saw waits for it (the pause after its last review is not over): ask again in a minute.
+          if (review.waiting > 0 && !review.ran && (review.mode === "events" || review.mode === "intraday")) lastAuto = Date.now() - AUTOPILOT_MS + 60_000;
           if (review.ran && !stopped) {
             if (review.changes > 0) window.dispatchEvent(new Event(DATA_UPDATED));
+            const did = `${review.changes} change${review.changes === 1 ? "" : "s"}`;
             setToasts((t) => [{ seq: `auto-${review.chat}`, title: "Autopilot", chat: review.chat,
                                 message: review.error ? `The review stopped: ${review.error}`
-                                  : `Reviewed the portfolio: ${review.changes} change${review.changes === 1 ? "" : "s"}.`,
+                                  : review.reason === "event" ? `Woken by what it was watching: ${did}.` : `Reviewed the portfolio: ${did}.`,
                                 note: review.error ? undefined : review.summary?.slice(0, 180) }, ...t].slice(0, 5));
-          }
-        }
-        const out = await api("/api/v1/alerts/check", { method: "POST" });
-        if (out.triggered.length && !stopped) {
-          setToasts((t) => [...out.triggered, ...t].slice(0, 5));
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            for (const e of out.triggered) new Notification("EGX Intelligence alert", { body: e.message + (e.note ? ` — ${e.note}` : "") });
           }
         }
       } catch {

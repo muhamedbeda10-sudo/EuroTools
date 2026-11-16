@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, whats_new
+from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, wakes, whats_new
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -34,7 +34,7 @@ from .domain.backtest import BacktestError
 from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
-from .extras import AlertIn, Extras, JournalIn, ResearchIn
+from .extras import AlertError, AlertIn, Extras, JournalIn, ResearchIn
 from .llm import ClaudeModel
 from .services import App, NotFound, clean
 from .store.errors import AuthError, ConflictError
@@ -200,6 +200,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @api.exception_handler(real_orders.OrderError)
+    @api.exception_handler(AlertError)
     @api.exception_handler(PrefsError)
     @api.exception_handler(whats_new.ReleaseNotesError)
     @api.exception_handler(background.BackgroundError)
@@ -559,6 +560,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         """
         result = real_auto.tick(core)
         push.report(core, result)   # the owner's other devices hear of it too
+        wakes.note_exits(core, result)   # and the assistant, when events wake it: a position is on its way out
         return result
 
     @api.put("/api/v1/real-orders/auto/positions/{symbol}")
@@ -715,8 +717,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
     @api.post("/api/v1/alerts/check")
     def check_alerts(core: App = Depends(get_core)):
-        """Evaluate the active alerts against the latest prices. The page calls this as prices update."""
-        return Extras(core).check_alerts()
+        """Evaluate the active alerts against the latest prices. The page calls this as prices update.
+
+        The owner's devices are told as well, so a phone hears of it when the app is open elsewhere. `wake`
+        says an alert that wakes the assistant fired, so the page asks for its review straight away.
+        """
+        out = Extras(core).check_alerts()
+        out["pushed"] = push.alerts(core, out["triggered"])["sent"] if out["triggered"] else 0
+        return out
 
     # ---- accounts --------------------------------------------------------
     def accounts_for(request: Request, core: App) -> Accounts | None:
