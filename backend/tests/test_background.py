@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from app import assistant, background, broker, push, real_orders, services
+from app import assistant, background, broker, push, real_orders, services, wakes
 from app.config import Settings
 from app.data.calendar import CAIRO
 from app.data.feed import Feed
@@ -501,3 +501,38 @@ def test_the_owner_hears_of_a_review_as_they_asked_to(floor, monkeypatch):
     core.store.put(*push.SEEN, {**seen, key: (datetime.now(UTC) - timedelta(days=9)).isoformat()})   # nine days on
     push.review(core, {**month, "why": "This month's assistant budget (about USD 80.00) is used up."})
     assert len(c.posted) == 4 and key in push._kept(core.store.get(*push.SEEN))
+
+
+def test_the_server_checks_the_alerts_too_and_what_it_saw_wakes_the_review_in_the_same_look(floor, monkeypatch):
+    c = floor
+    on(c)
+    switch(c)
+    sub, key, auth = device()
+    c.post("/api/v1/push/subscribe", json=sub)
+    core_of(c).store.put("settings", "assistant", {"autopilot": {"mode": "events"}})
+    note = "Breakout over the range high: check the volume first."
+    c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 36.5, "note": note, "wake": True})
+    c.post("/api/v1/alerts", json={"kind": "price_below", "symbol": "TMGH", "value": 40})
+    waiting = []
+    monkeypatch.setattr(assistant, "run_autopilot", lambda core, model: waiting.append(len(wakes.pending(core))) or {"ran": False})
+    monkeypatch.setattr(background, "wake", lambda settings, build, model, firestore, may_review=None: background.look(build(None, None), "a-model", may_review=may_review))
+    out = wake(c).json()
+    assert out["alerts"] == {"fired": 0, "active": 2, "wake": False} and waiting == [0] and c.posted == []
+    c.clock["now"] += timedelta(seconds=40)
+    c.fake.live_prices["COMI"] = 36.6
+    out = wake(c).json()
+    assert out["alerts"] == {"fired": 1, "active": 2, "wake": True}
+    assert waiting == [0, 1]                                                       # the review that follows in this look finds it waiting
+    said = read(c.posted[-1][1]["content"], key, auth)
+    assert said["title"] == "Alert: the assistant is woken" and said["url"] == "/alerts"
+    assert said["body"] == f"COMI is at 36.6, at or above 36.5 — {note}"
+    # the open app's own check tells the owner's devices as well, so a phone hears of it when the app is open elsewhere
+    price(c, TMGH=39.5)
+    out = c.post("/api/v1/alerts/check").json()
+    assert out["pushed"] == 1 and out["wake"] is False
+    assert read(c.posted[-1][1]["content"], key, auth)["title"] == "Alert"
+    # a failure to check the alerts is noted, and the look goes on
+    monkeypatch.setattr(background.Extras, "check_alerts", lambda self: (_ for _ in ()).throw(RuntimeError("no prices")))
+    c.clock["now"] += timedelta(seconds=40)
+    out = wake(c).json()
+    assert out["ran"] and out["alerts"] == {"problem": "RuntimeError"} and out["auto"]["ran"]

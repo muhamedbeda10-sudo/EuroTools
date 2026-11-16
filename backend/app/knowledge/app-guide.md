@@ -42,7 +42,11 @@ broker.
 - **Journal**: why a trade was made, what was expected, the exit condition, and afterwards the outcome and
   the lesson.
 - **Alerts**: price above or below a level, day change, volume against the average of the 20 sessions before,
-  RSI level, or a strategy signal. An alert fires at most once per trading session.
+  RSI level, a strategy signal, or a time of day (Cairo). An alert fires at most once per trading session. One
+  at a time of day, and one that wakes the assistant, fires once and is then switched off. The app checks them
+  itself as prices update: while it is open and, for the brokerage account's owner with running without the app
+  open switched on, from the server every minute during the session. The owner's devices with notifications on
+  are told when one fires.
 - **Guide**: short explanations of indicators, candle patterns, order-book reading, financial statements and ratios, risk
   management, fees, sectors and honest strategy testing.
 - **Settings**: fee schedule, starting capital and portfolio reset, market-data status and CSV import,
@@ -195,9 +199,26 @@ broker.
   trade and largest holding as a share of the portfolio, cash always kept, trades per day. Trades the user
   places by hand are not limited.
 - Autopilot, when the user switches it on, has the assistant review the portfolio after each completed session
-  (optionally also during the session) and act inside those limits following the user's written mandate. The
+  (optionally also during the session: when something the app watches for it happens, or every so many minutes)
+  and act inside those limits following the user's written mandate. The
   user sets the most reviews in one day (12 unless changed). The limit holds back the reviews during the
   session and always leaves a place for the one after the close, which is never skipped for it.
+
+## The app watches for the assistant (watches)
+- A review by the assistant costs money every time; a rule the app checks costs nothing. So an alert can be
+  marked "Also wake the assistant" (the Alerts page), and the assistant can set such watches for itself
+  (`save_alert` with `wake_me`): an entry level, the level that proves a trade wrong, a time to look again.
+  Each carries a note saying what to check when it fires.
+- When a watch fires the user is told, and the watch is switched off. What happens next depends on the
+  autopilot's schedule (Settings, Assistant): with "When a watch fires" or "During the session too", the
+  assistant makes a short review of that event alone, during the session, usually within a minute or two; with
+  "After each close" it is told of it at that review; with the autopilot off nothing wakes it.
+- "When a watch fires" is the cheapest schedule that still works during the session: one review after each
+  close, plus a short one per event. Several events close together are one review (at least five minutes pass
+  after any review), and these reviews count in the day's limit like the timed ones.
+- The assistant may have 12 watches on at once. One that has not fired in 14 days lapses by itself.
+- When automatic real orders sell a position on their own way out (stop-loss or take-profit), that is told to
+  the assistant the same way, in the schedules that wake it.
 
 ## The assistant's own settings (Settings, Assistant)
 - What it costs: a daily ceiling and a monthly one, in US dollars (USD 5 a day and USD 60 a month unless the

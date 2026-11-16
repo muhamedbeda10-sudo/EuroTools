@@ -297,6 +297,23 @@ def remark(core: App, title: str, message: str, *, every: float = SAME_REMARK_SE
     return out
 
 
+MAX_ALERTS = 4   # alerts told in one go; a burst is summed up in the last one
+
+
+def alerts(core: App, fired: list[dict], post=None) -> dict:
+    """Word of the alerts that just fired, to the owner's devices. The alert's own sentence and note: a price or a
+    time the person asked about, never a balance."""
+    total = {"sent": 0, "failed": 0, "removed": 0}
+    for n, event in enumerate(fired[:MAX_ALERTS]):
+        words = str(event.get("message") or "An alert fired") + (f" — {event['note']}" if event.get("note") else "")
+        if n == MAX_ALERTS - 1 and len(fired) > MAX_ALERTS:
+            words += f" (and {len(fired) - MAX_ALERTS} more)"
+        title = "Alert: the assistant is woken" if event.get("wake") else "Alert"
+        for k, v in send(core, title, words, tag=f"alert-{event.get('seq') or event.get('alert_id')}", url="/alerts", post=post).items():
+            total[k] += v
+    return total
+
+
 def review(core: App, done: dict, post=None) -> dict:
     """Word of a review the assistant made by itself: what it changed, that it stopped, or that a ceiling held it back."""
     if done.get("ran"):

@@ -18,7 +18,7 @@ from .llm import DEFAULT_MODEL, EFFORTS, PRICES, SUPPORTED_MODELS
 from .services import App
 
 ACCESS_LEVELS = ("full", "confirm", "read")
-AUTOPILOT_MODES = ("off", "after_close", "intraday")
+AUTOPILOT_MODES = ("off", "after_close", "events", "intraday")
 DEFAULT_LIMITS = {"max_position_pct": 25.0, "max_trade_pct": 20.0, "max_trades_per_day": 10, "min_cash_pct": 5.0}
 DEFAULT_AUTOPILOT = {"mode": "off", "every_minutes": 30, "mandate": "", "last_run": None, "last_session": None, "last_chat": None,
                      # the most reviews in one day, whether to tell the owner's devices after one that changed something,
@@ -56,7 +56,7 @@ class PrefsIn(BaseModel):
     max_trade_pct: float | None = Field(default=None, ge=1, le=100)
     max_trades_per_day: int | None = Field(default=None, ge=0, le=200)
     min_cash_pct: float | None = Field(default=None, ge=0, le=90)
-    autopilot_mode: Literal["off", "after_close", "intraday"] | None = None
+    autopilot_mode: Literal["off", "after_close", "events", "intraday"] | None = None
     autopilot_every_minutes: int | None = Field(default=None, ge=15, le=240)
     autopilot_mandate: str | None = Field(default=None, max_length=4000)
 

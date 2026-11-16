@@ -83,11 +83,12 @@ def _now():
     return _session + (datetime.now(UTC) - _started)
 
 
+import app.assistant as _assistant  # noqa: E402
 import app.background as _background  # noqa: E402
 
-for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto, _background):
+for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto, _background, _assistant):
     _module.cairo_now = _now
-for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker, _background):
+for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker, _background, _assistant):
     _module.market_open = lambda *a, **k: True
 
 _younit = MovingYounit()

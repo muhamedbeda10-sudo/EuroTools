@@ -85,8 +85,8 @@ export default function RealBackground() {
           <>
             <p className="muted" style={{ marginTop: 0, maxWidth: "95ch" }}>
               With this on, the server takes the automation&apos;s looks <strong>by itself, every minute during the session</strong>: it reads the prices, sends
-              what fits your automatic box, sells at stop-losses and take-profits, and runs the assistant&apos;s review at the schedule you chose in
-              Settings → Assistant. The app does not need to be open, and the phone can be locked. Everything it may do is still decided by your box and limits above.
+              what fits your automatic box, sells at stop-losses and take-profits, checks your alerts, and runs the assistant&apos;s review at the schedule
+              you chose in Settings → Assistant (also when something it watches for happens). The app does not need to be open, and the phone can be locked. Everything it may do is still decided by your box and limits above.
             </p>
             {!data.available && <div className="note">Not available: the server has no secret to seal a key with.</div>}
             <ul className="checks">

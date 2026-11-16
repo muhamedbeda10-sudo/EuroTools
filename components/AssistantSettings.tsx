@@ -21,7 +21,8 @@ const EFFORT: Record<string, string> = {
 const AUTOPILOT: Record<string, [string, string]> = {
   off: ["Off", "The assistant only acts when you ask."],
   after_close: ["After each close", "One review of the portfolio and the market after every completed session."],
-  intraday: ["During the session too", "The review after each close, plus a check every so many minutes while the market is open."],
+  events: ["When a watch fires", "The review after each close, plus a short review whenever something the app is watching for it happens: a level it set, a time, a stop-loss sold. The app does the watching at no cost, so this is the cheapest way to keep it working during the session."],
+  intraday: ["During the session too", "The review after each close, plus a check every so many minutes while the market is open, and a short review when a watch fires. The most thorough, and the most expensive."],
 };
 const LANGUAGE: Record<string, [string, string]> = {
   auto: ["The language I write in", "Arabic when you write Arabic, English when you write English."],
@@ -221,10 +222,16 @@ export default function AssistantSettings() {
             </p>
             {spend?.autopilot?.reviews_a_day > 0 && (
               <div className="note info" style={{ marginBottom: 14 }}>
-                <strong>What a day can cost.</strong> The schedule saved now runs at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day.{" "}
+                <strong>What a day can cost.</strong>{" "}
+                {spend.autopilot.mode === "events"
+                  ? <>The schedule saved now runs one review after the close, and a short one each time something it watches for happens: at most {spend.autopilot.reviews_at_most} a day in all.</>
+                  : <>The schedule saved now runs at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day by the clock{spend.autopilot.reviews_at_most > spend.autopilot.reviews_a_day ? <>, and up to {spend.autopilot.reviews_at_most} when its watches wake it too</> : null}.</>}{" "}
                 {spend.autopilot.reviews_asked > spend.autopilot.reviews_a_day && <>It asks for about {spend.autopilot.reviews_asked}, and your limit for one day holds the rest back: the last checks of the session will not run (the review after the close always does).{" "}</>}
                 {spend.autopilot.review_usd != null
-                  ? <>{spend.autopilot.reviews_counted === 1 ? "Your one review this week cost" : `Your ${spend.autopilot.reviews_counted} reviews this week cost on average`} about {usd(spend.autopilot.review_usd)}, so about <strong>{usd(spend.autopilot.day_usd)} a day</strong>.</>
+                  ? <>{spend.autopilot.reviews_counted === 1 ? "Your one review this week cost" : `Your ${spend.autopilot.reviews_counted} reviews this week cost on average`} about {usd(spend.autopilot.review_usd)}
+                    {spend.autopilot.mode === "events"
+                      ? <>; on the days it ran, about <strong>{usd(spend.autopilot.usual_day_usd)} a day</strong>.</>
+                      : <>, so about <strong>{usd(spend.autopilot.day_usd)} a day</strong>.</>}</>
                   : <>No review has run in the last week, so there is no figure of your own yet.</>}{" "}
                 {Number(spend.daily_limit_usd) > 0
                   ? <>It can never pass your daily ceiling of {usd(spend.daily_limit_usd)}, conversations included: at the ceiling it stops reviewing and proposing until the next day.</>

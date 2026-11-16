@@ -45,9 +45,10 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import assistant, push, real_auto, real_orders
+from . import assistant, push, real_auto, real_orders, wakes
 from .config import Settings
 from .data.calendar import cairo_now, is_trading_day, market_open
+from .extras import Extras
 from .services import App, now_iso
 from .store.errors import AuthError, ConflictError
 
@@ -291,8 +292,23 @@ def _may_go_on(core: App, kid: str | None) -> str | None:
     return None
 
 
+def _alerts(core: App, out: dict, pushed: dict) -> None:
+    """The owner's alerts, checked by the server as the open app would check them: the ones that fire are told to
+    their devices, and the ones that wake the assistant are queued for the review that follows in this same look.
+    A failure here is noted and never stops the look."""
+    try:
+        fired = Extras(core).check_alerts()
+        out["alerts"] = {"fired": len(fired["triggered"]), "active": fired["active"], "wake": fired["wake"]}
+        if fired["triggered"]:
+            for k, v in push.alerts(core, fired["triggered"]).items():
+                pushed[k] += v
+    except Exception as exc:  # noqa: BLE001
+        log.exception("background: the alerts could not be checked")
+        out["alerts"] = {"problem": type(exc).__name__}
+
+
 def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
-    """One look by the server for one owner: prices, the automation, the assistant's review when due.
+    """One look by the server for one owner: prices, the automation, the alerts, the assistant's review when due.
 
     `may_review(core)` says whether this person may use the assistant at all, as the open app's own route asks.
     """
@@ -309,6 +325,8 @@ def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
         # the automation's look, and word of it to the owner's devices
         result = real_auto.tick(core)
         pushed = push.report(core, result)
+        wakes.note_exits(core, result)
+        _alerts(core, out, pushed)
         # The assistant's review comes last, because it can take minutes, and only while there is time for it
         # and for what follows inside this one call.
         if model is not None and clock.monotonic() - started < REVIEW_LATEST_START and (may_review is None or may_review(core)):
@@ -330,6 +348,7 @@ def look(core: App, model, *, kid: str | None = None, may_review=None) -> dict:
                     again = real_auto.tick(core)
                     for k, v in push.report(core, again).items():
                         pushed[k] += v
+                    wakes.note_exits(core, again)
                     result = {**again, "notes": [*result.get("notes", []), *again.get("notes", [])],
                               "sent": [*result.get("sent", []), *again.get("sent", [])],
                               "exits": [*result.get("exits", []), *again.get("exits", [])]}

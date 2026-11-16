@@ -1,8 +1,9 @@
 """Research library, investment journal and alerts: each account's own notes and watches."""
 from __future__ import annotations
 
+import re
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -71,22 +72,48 @@ ALERT_KINDS = {
     "rsi_above": "RSI (14) is at or above",
     "rsi_below": "RSI (14) is at or below",
     "strategy_signal": "A saved strategy gives a signal",
+    "time_at": "The time is (Cairo)",
 }
+AT = re.compile(r"^(?:(\d{4}-\d{2}-\d{2})[T ])?(\d{1,2}):(\d{2})(?::\d{2})?(?:[+-]\d{2}:\d{2})?$")
+AT_DAYS_AHEAD = 30
+
+
+def alert_words(alert: dict) -> str:
+    """An alert's condition in a few words, for a list the assistant reads."""
+    kind, symbol = alert["kind"], alert.get("symbol")
+    if kind == "time_at":
+        return f"at {str(alert.get('at'))[:16].replace('T', ' ')} Cairo time" + (f" (about {symbol})" if symbol else "")
+    if kind == "strategy_signal":
+        return f"a signal from saved strategy {alert.get('strategy_id')}" + (f" on {symbol}" if symbol else "")
+    return f"{symbol}: {ALERT_KINDS.get(kind, kind).lower()} {float(alert['value']):g}"
+
+
+class AlertError(ValueError):
+    """An alert that cannot be saved as asked, in words for the person (or the assistant) who asked."""
 
 
 class AlertIn(BaseModel):
     kind: Literal["price_above", "price_below", "change_pct_above", "change_pct_below", "volume_ratio_above",
-                  "rsi_above", "rsi_below", "strategy_signal"]
+                  "rsi_above", "rsi_below", "strategy_signal", "time_at"]
     symbol: str | None = Field(default=None, max_length=12)
     value: float | None = Field(default=None, ge=-100, le=10_000_000)
     strategy_id: str | None = Field(default=None, max_length=40)
+    at: str | None = Field(default=None, max_length=32, description="For time_at: HH:MM Cairo time, or YYYY-MM-DD HH:MM")
     note: str = Field(default="", max_length=300)
     active: bool = True
+    # Also wake the assistant when it fires (see wakes.py). Such an alert fires once and is then switched off.
+    wake: bool = False
 
     @model_validator(mode="after")
     def complete(self) -> AlertIn:
         self.symbol = self.symbol.strip().upper() or None if self.symbol else None
-        if self.kind == "strategy_signal":
+        if self.kind != "time_at":
+            self.at = None
+        if self.kind == "time_at":
+            if not self.at or not AT.match(self.at.strip()):
+                raise ValueError("give the time as HH:MM (Cairo), or as YYYY-MM-DD HH:MM")
+            self.value = self.strategy_id = None
+        elif self.kind == "strategy_signal":
             if not self.strategy_id:
                 raise ValueError("choose the strategy to watch")
             self.value = None
@@ -99,6 +126,14 @@ class AlertIn(BaseModel):
                 raise ValueError("the level must be greater than zero")
             self.strategy_id = None
         return self
+
+
+def _days_old(doc: dict) -> float:
+    """Days since the document was last saved; 0 when that cannot be told."""
+    try:
+        return (datetime.now(UTC) - datetime.fromisoformat(doc["updated_at"])).total_seconds() / 86400
+    except (KeyError, TypeError, ValueError):
+        return 0.0
 
 
 class Extras:
@@ -184,7 +219,7 @@ class Extras:
         self._delete("journal", "journal_entry", id)
 
     # ---- alerts ----------------------------------------------------------
-    def save_alert(self, body: AlertIn, id: str | None = None) -> dict:
+    def save_alert(self, body: AlertIn, id: str | None = None, by: str | None = None) -> dict:
         from .services import NotFound
         if body.symbol:
             self._check_symbols([body.symbol])
@@ -192,7 +227,31 @@ class Extras:
             raise NotFound("strategy not found")
         doc = body.model_dump(mode="json")
         doc["last_triggered_on"] = None  # a new or edited alert is armed again straight away
+        if body.kind == "time_at":
+            doc["at"] = self._when(body.at).isoformat(timespec="minutes")
+        before = self.store.get("alerts", id) if id else None
+        doc["by"] = by or (before or {}).get("by") or "user"   # who asked for it: the person, or the assistant for itself
         return self._save("alerts", "alert", doc, id)
+
+    def _when(self, text: str) -> datetime:
+        """A time the person or the assistant wrote, as a moment in Cairo: today if it is still ahead on a
+        trading day, otherwise the next trading day; or the day they named."""
+        from .data.calendar import CAIRO, cairo_now, is_trading_day
+        day, hour, minute = AT.match(text.strip()).groups()
+        if int(hour) > 23 or int(minute) > 59:
+            raise AlertError("That is not a time of day.")
+        now = cairo_now()
+        if day:
+            at = datetime.combine(date.fromisoformat(day), datetime.min.time(), CAIRO).replace(hour=int(hour), minute=int(minute))
+        else:
+            at = now.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+            while at <= now or not is_trading_day(at.date()):
+                at += timedelta(days=1)
+        if at <= now:
+            raise AlertError("That time has already passed.")
+        if at - now > timedelta(days=AT_DAYS_AHEAD):
+            raise AlertError(f"That is more than {AT_DAYS_AHEAD} days ahead.")
+        return at
 
     def delete_alert(self, id: str) -> None:
         self._delete("alerts", "alert", id)
@@ -204,6 +263,13 @@ class Extras:
     def _observe(self, alert: dict, quotes: dict[str, dict], signals: list[dict]) -> tuple[bool, float | None, str]:
         """Is the alert's condition true right now? Returns (hit, observed value, sentence)."""
         kind, value, symbol = alert["kind"], alert["value"], alert["symbol"]
+        if kind == "time_at":
+            from .data.calendar import cairo_now
+            at, now = datetime.fromisoformat(alert["at"]), cairo_now()
+            if now < at:
+                return False, None, ""
+            about = f" (about {symbol})" if symbol else ""
+            return True, None, f"It is {now:%H:%M} Cairo time: the moment set for {at:%Y-%m-%d %H:%M} has come{about}"
         if kind == "strategy_signal":
             hits = [s for s in signals if s["strategy_id"] == alert["strategy_id"] and (not symbol or s["symbol"] == symbol)]
             if not hits:
@@ -245,18 +311,27 @@ class Extras:
         "Once" is counted by the session the observed price belongs to, not by the
         calendar: Thursday's move does not fire again on Friday, Saturday and Sunday morning.
         """
+        from . import wakes
         from .services import now_iso
         alerts = [a for a in self.store.list("alerts") if a["active"]]
         if not alerts:
-            return {"triggered": [], "active": 0}
-        table = self.core.quotes()
-        quotes = {} if table.empty else {r["symbol"]: r for r in table.to_dict("records")}
+            return {"triggered": [], "active": 0, "wake": False}
+        quotes: dict[str, dict] = {}
+        if any(a["kind"] not in ("time_at", "strategy_signal") for a in alerts):   # a time needs no prices
+            table = self.core.quotes()
+            quotes = {} if table.empty else {r["symbol"]: r for r in table.to_dict("records")}
         signals = self.core.active_signals() if any(a["kind"] == "strategy_signal" for a in alerts) else []
         settled = self.core.market.latest_settled()
-        fired = []
+        fired, woke = [], []
         with self.store.transaction():
             for alert in alerts:
-                if alert["kind"] == "strategy_signal":
+                if alert.get("wake") and _days_old(alert) > wakes.WATCH_DAYS:
+                    # A watch nobody renewed: what it was waiting for is stale by now, so it stops instead of waking anyone.
+                    self.store.put("alerts", alert["id"], {**alert, "active": False, "lapsed": True})
+                    continue
+                if alert["kind"] == "time_at":
+                    session = alert["at"]
+                elif alert["kind"] == "strategy_signal":
                     session = settled.strftime("%Y-%m-%d") if settled is not None else None
                 else:
                     session = (quotes.get(alert["symbol"]) or {}).get("as_of")
@@ -266,8 +341,15 @@ class Extras:
                 if not hit:
                     continue
                 alert["last_triggered_on"] = session
+                if alert.get("wake") or alert["kind"] == "time_at":
+                    alert["active"] = False   # these fire once: a new one is set when it is wanted again
                 self.store.put("alerts", alert["id"], alert)
-                fired.append(self.store.append("alert_events", {
+                event = self.store.append("alert_events", {
                     "ts": now_iso(), "alert_id": alert["id"], "kind": alert["kind"], "symbol": alert["symbol"],
-                    "level": alert["value"], "observed": seen, "message": text, "note": alert.get("note", "")}))
-        return {"triggered": fired, "active": len(alerts)}
+                    "level": alert["value"], "observed": seen, "message": text, "note": alert.get("note", ""),
+                    "wake": bool(alert.get("wake"))})
+                fired.append(event)
+                if alert.get("wake"):
+                    woke.append({k: event.get(k) for k in ("ts", "alert_id", "kind", "symbol", "level", "observed", "message", "note")})
+            wakes.add(self.core, woke)   # with the alerts themselves: an event is never queued twice, nor lost
+        return {"triggered": fired, "active": len(alerts), "wake": bool(woke)}
