@@ -619,9 +619,22 @@ class App:
 
     def trades(self) -> dict:
         state = replay(self.store.list(self._ledger_coll()))
-        rows = []
+        rows, latest = [], {}
         for r in state.rows:
+            # What the stock is at now, beside what the trade was filled at. It is read, never stored:
+            # the ledger keeps only what happened.
+            now = {}
+            symbol = r.get("symbol")
+            if symbol and "price" in r:
+                if symbol not in latest:
+                    latest[symbol] = self._last_price(symbol)
+                if latest[symbol]:
+                    last, as_of = latest[symbol]
+                    filled = D(r["price"])
+                    now = {"last": last, "last_as_of": as_of,
+                           "since_pct": round((last - filled) / filled * 100, 2) if filled else None}
             rows.append(clean({
+                **now,
                 **{k: r.get(k) for k in ("seq", "ts", "type", "symbol", "qty", "trade_date", "note", "price_source",
                                          "fees_verified", "remaining_qty", "origin", "price_date", "backdated")},
                 "price": D(r["price"]) if "price" in r else None,

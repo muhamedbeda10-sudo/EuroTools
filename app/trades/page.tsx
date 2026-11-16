@@ -5,6 +5,7 @@ import { Fragment, useState } from "react";
 import { download } from "@/lib/api";
 import { egp, int, num, price, tone } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
+import { LiveSince } from "@/components/LiveCells";
 import TradeTicket from "@/components/TradeTicket";
 import { Empty, Kpi, Profit, State } from "@/components/ui";
 
@@ -57,6 +58,7 @@ export default function Trades() {
                   <dt>Average cost</dt><dd>weighted buy price, fees excluded</dd>
                   <dt>Fill price</dt><dd>the stock&apos;s latest price</dd>
                   <dt>Trade date</dt><dd>the market&apos;s current session</dd>
+                  <dt>Now</dt><dd>the stock&apos;s latest price, and its move since the trade</dd>
                 </dl>
                 <p className="foot-note" style={{ marginTop: 14 }}>
                   Fees come from the schedule in <Link href="/settings">Settings</Link> at the moment of each trade and are stored with it, so later changes to the schedule never rewrite history.
@@ -74,7 +76,7 @@ export default function Trades() {
               <div className="table-wrap">
                 <table className="dense">
                   <thead>
-                    <tr><th>#</th><th className="l">Date</th><th className="l">Type</th><th className="l">Stock</th><th>Qty</th><th>Price</th><th>Value</th><th>Fees</th>
+                    <tr><th>#</th><th className="l">Date</th><th className="l">Type</th><th className="l">Stock</th><th>Qty</th><th>Price</th><th title="The stock's latest price, and how far it has moved since this trade (before fees)">Now</th><th className="col-wide" title="Quantity × price. On a narrow window it steps aside: open the entry's details for it">Value</th><th>Fees</th>
                       <th>Cash flow</th><th>Gross P/L</th><th>Net P/L</th><th className="col-wide" title="Shares still held after this trade">Left</th><th title="Cash balance after this entry">Balance</th>
                       <th><span className="sr-only">Details</span></th></tr>
                   </thead>
@@ -89,7 +91,8 @@ export default function Trades() {
                             {String(r.origin ?? "").startsWith("order:") && <span className="badge" title="A stop-loss or take-profit order carried out by the app" style={{ marginLeft: 6 }}>order</span>}
                             {r.backdated && <span className="badge warn" title="Entered afterwards at a past day's close, with later prices already known" style={{ marginLeft: 6 }}>back-dated</span>}</td>
                           <td className="l">{r.symbol ? <Link href={`/stock?symbol=${r.symbol}`}><strong>{r.symbol}</strong></Link> : "—"}</td>
-                          <td>{r.qty ? int(r.qty) : "—"}</td><td>{r.price == null ? "—" : price(r.price)}</td><td>{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>
+                          <td>{r.qty ? int(r.qty) : "—"}</td><td>{r.price == null ? "—" : price(r.price)}</td>
+                          <td>{r.symbol && r.price != null ? <LiveSince symbol={r.symbol} from={r.price} last={r.last} /> : "—"}</td><td className="col-wide">{num(r.gross)}</td><td>{r.type === "DEPOSIT" ? "—" : num(r.fees_total)}</td>
                           <td className={tone(r.cash_delta)}>{num(r.cash_delta)}</td>
                           <td className={tone(r.realized_gross)}>{r.realized_gross == null ? "—" : num(r.realized_gross)}</td>
                           <td className={tone(r.realized_net)}>{r.realized_net == null ? "—" : num(r.realized_net)}</td>
@@ -103,7 +106,7 @@ export default function Trades() {
                         </tr>
                         {open === r.seq && (
                           <tr className="detail">
-                            <td colSpan={14} className="l wrap">
+                            <td colSpan={15} className="l wrap">
                               <div className="grid cols-3">
                                 <dl className="kv">
                                   <dt>Gross value</dt><dd>{egp(r.gross)}</dd>

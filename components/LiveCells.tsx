@@ -9,6 +9,20 @@ export function LiveLast({ symbol, last }: { symbol: string; last?: number | nul
   return <Flash value={value}>{price(value)}</Flash>;
 }
 
+/** What a stock is at now, beside a price it was traded at: the price, and under it how far it has moved since. */
+export function LiveSince({ symbol, from, last }: { symbol: string; from?: number | null; last?: number | null }) {
+  const tick = useTick(symbol);
+  const value = tick?.[0] ?? last;
+  if (value == null) return <>—</>;
+  const move = from ? ((value - from) / from) * 100 : null;
+  return (
+    <div className="cell2">
+      <Flash value={value}>{price(value)}</Flash>
+      <small className={tone(move)}>{pct(move)}</small>
+    </div>
+  );
+}
+
 export function LiveChg({ symbol, value }: { symbol: string; value?: number | null }) {
   const tick = useTick(symbol);
   const v = tick?.[1] ?? value;

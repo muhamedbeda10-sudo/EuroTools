@@ -31,8 +31,8 @@ broker.
   (see "Real orders" below), with the proposals waiting for the owner's approval at the top, and, when the
   owner uses them, automatic orders: whether they are running, the budget, the shares the automation holds
   with their stop-losses, and the "Stop automatic orders" button.
-- **Trades**: the ledger. Every paper trade with its price, each fee line, cash movement and realized profit.
-  The ledger is append-only: entries are never edited or deleted. It can be exported as CSV.
+- **Trades**: the append-only ledger (never edited or deleted), with CSV export: every paper trade's price,
+  fee lines, cash movement, realized profit and "Now": the stock's price now and % move since, pre-fees.
 - **Strategies**: saved rule sets. Types: moving-average crossover, RSI mean reversion, MACD signal
   crossover, volume-confirmed breakout, candlestick reversal (buys a bullish reversal candle pattern after a
   decline, optionally only once the next close confirms it and only above a chosen moving average; sells on a
