@@ -137,6 +137,16 @@ def parse_side(text: str | None, near: float | None = None) -> list[dict]:
     return best[:MAX_LEVELS]
 
 
+def describe(row: dict) -> str:
+    """What the feed sent for one stock's book, in one line, for the server's log. Market data only."""
+    parts = []
+    for key in ("m_BidBook", "m_AskBook"):
+        text = str(row.get(key) or "")
+        parts.append(f"{key}[{len(text)}]={text[:500]!r}" if row.get(key) is not None else f"{key}=absent")
+    rest = {k: str(v)[:40] for k, v in sorted(row.items()) if k not in ("m_BidBook", "m_AskBook")}
+    return " ".join(parts) + " " + json.dumps(rest, separators=(",", ":"))[:900]
+
+
 def build(row: dict) -> dict:
     """Turn one streaming row into the depth view the page shows."""
     def num(key):

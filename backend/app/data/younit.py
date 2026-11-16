@@ -15,6 +15,7 @@ YOUNIT_API_KEY). They are never sent to the browser, logged, or stored.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
@@ -42,6 +43,8 @@ INDEX_PROBE = 25
 QUOTE_FIELDS = ["m_LastTradePrice", "m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_SectorName"]
 DEPTH_FIELDS = ["m_LastTradePrice", "m_ClosePrice", "m_BidPrice", "m_BidVol", "m_AskPrice", "m_AskVol",
                 "m_BidBook", "m_AskBook", "m_TotalBids", "m_TotalAsks"]
+# Asked for with a single look at the book only: what the feed says about the stock and this account's data.
+BOOK_STATUS_FIELDS = ["m_DataFeedSubscribtionStatus", "m_SymbolStatusUI", "m_TOP", "m_TOV"]   # the feed's own spelling
 TICK_FIELDS = DEPTH_FIELDS + ["m_OpenPrice", "m_DailyHighPrice", "m_DailyLowPrice", "m_TradedVolume", "m_TradedValue",
                              "m_TradesCount", "m_LastTradeVolume", "m_Change", "m_PercentChange", "m_LastUpdated"]
 MARKET_TICK_FIELDS = ["m_LastTradePrice", "m_PercentChange", "m_TradedVolume"]
@@ -53,6 +56,28 @@ ORDER_NORMAL = 0                    # 1 is a concealed (iceberg) order: never us
 EXPIRES_TODAY = 7                   # a day order: gone at the session's close
 VIA_API = 8
 EXECUTION_DEFAULT = 1
+
+
+book_log = logging.getLogger("egx.depth")
+_THIN_BOOK_NOTED: dict[str, float] = {}
+
+
+def _note_thin_book(item: str, row: dict, book: dict) -> None:
+    """Leave one line a minute per stock when a side of its book has no more than the best price.
+
+    The layout of the book fields is not documented: the line says what arrived, so that a layout
+    this code does not read (or a feed that sends no levels at all) can be told apart and handled.
+    """
+    from . import depth
+    if len(book["bids"]) > 1 and len(book["asks"]) > 1:
+        return
+    now = time.monotonic()
+    if now - _THIN_BOOK_NOTED.get(item, -1e9) < 60:
+        return
+    _THIN_BOOK_NOTED[item] = now
+    while len(_THIN_BOOK_NOTED) > 200:
+        _THIN_BOOK_NOTED.pop(next(iter(_THIN_BOOK_NOTED)))
+    book_log.warning("depth: %s has no more than the best price on a side: %s", item, depth.describe(row))
 
 
 class YounitError(RuntimeError):
@@ -452,11 +477,15 @@ class YounitClient:
         item = f"sy{int(stock_id)}"
         try:
             got = stream.snapshot(STREAM_URL, STREAM_ADAPTER,
-                                  [{"items": [item], "fields": DEPTH_FIELDS, "data_adapter": STREAM_ADAPTER}],
+                                  [{"items": [item], "fields": DEPTH_FIELDS + BOOK_STATUS_FIELDS,
+                                    "data_adapter": STREAM_ADAPTER}],
                                   user=self._trading_id, password=token, timeout=timeout, grace=0.2)
         except stream.StreamError as exc:
             raise YounitError(f"Younit price depth: {exc}") from None
-        return depth.build(got["values"].get(item, {}))
+        row = got["values"].get(item, {})
+        book = depth.build(row)
+        _note_thin_book(item, row, book)
+        return book
 
     def follow_stock(self, stock_id: int, *, max_seconds: float = 240.0):
         """Live feed of one stock: yields {"quote": {...}, "depth": {...}} on every change, None on heartbeats."""
@@ -472,7 +501,9 @@ class YounitClient:
                     continue
                 row = (update.get(item) or {}).get("row")
                 if row:
-                    yield {"quote": tick_quote(row), "depth": depth.build(row)}
+                    book = depth.build(row)
+                    _note_thin_book(item, row, book)
+                    yield {"quote": tick_quote(row), "depth": book}
         except stream.StreamError as exc:
             raise YounitError(f"Younit live stream: {exc}") from None
 

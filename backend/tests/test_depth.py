@@ -1,6 +1,6 @@
 import pytest
 
-from app.data.depth import build, parse_side
+from app.data.depth import build, describe, parse_side
 
 
 def levels(text, near=0.827):
@@ -47,3 +47,9 @@ def test_build_falls_back_to_the_top_of_book_and_reports_what_it_could_not_read(
     assert b["unread"] == {"bids": "<<opaque blob>>"}
     empty = build({})
     assert empty["bids"] == [] and empty["best_bid"] is None and empty["spread"] is None and empty["bid_share_pct"] is None
+
+
+def test_describe_says_what_arrived_for_the_book_in_one_line():
+    line = describe({"m_BidBook": "", "m_BidPrice": "9.9", "m_BidVol": "500"})
+    assert "m_BidBook[0]=''" in line and "m_AskBook=absent" in line and '"m_BidPrice":"9.9"' in line and "\n" not in line
+    assert "m_AskBook[9]='1,2|3,4x.'" in describe({"m_AskBook": "1,2|3,4x."}) and len(describe({"m_AskBook": "9" * 5000})) < 1500
