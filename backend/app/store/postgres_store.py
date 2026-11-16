@@ -33,7 +33,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .errors import ConflictError, StoreUnavailable
 
-SCHEMA_VERSION = "2"   # raise it with any change to SCHEMA: a server then brings its database up to date once
+SCHEMA_VERSION = "3"   # raise it with any change to SCHEMA: a server then brings its database up to date once
 SCHEMA = r"""
 create schema if not exists egx;
 create table if not exists egx.meta (key text primary key, value text not null);
@@ -64,8 +64,9 @@ alter table egx.market alter column version set default nextval('egx.versions');
 select setval('egx.versions', greatest(nextval('egx.versions'), (select coalesce(max(version), 0) from egx.docs) + 1,
                                        (select coalesce(max(version), 0) from egx.market) + 1));
 
--- What is known about each account: whether it may use the app (asked of the sign-in service, kept here for the
--- minutes it cannot be asked), and whether its data has been brought over from the previous database.
+-- Who may use the app. A row here is the record: an account with one is let in or kept out by `active`, and
+-- nothing else is asked. `admin` is who may open and close accounts. `migrated_at` says the account's data was
+-- brought over from the previous database (or that it never had any there).
 create table if not exists egx.accounts (
     uid         text primary key,
     active      boolean     not null,
@@ -73,6 +74,13 @@ create table if not exists egx.accounts (
     migrated_at timestamptz,
     migration   text
 );
+alter table egx.accounts add column if not exists admin      boolean not null default false;
+alter table egx.accounts add column if not exists email      text;
+alter table egx.accounts add column if not exists name       text;
+alter table egx.accounts add column if not exists created_at timestamptz;
+alter table egx.accounts add column if not exists created_by text;
+alter table egx.accounts add column if not exists updated_at timestamptz;
+alter table egx.accounts add column if not exists updated_by text;
 
 create or replace function egx.keep_records() returns trigger language plpgsql as $$
 begin

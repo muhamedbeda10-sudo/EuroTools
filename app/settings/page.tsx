@@ -191,7 +191,7 @@ function AccountsCard() {
     }
   };
   const toggle = async (a: any) => {
-    if (a.active && !confirm(`Deactivate ${a.email}? They will be locked out immediately. Their data is kept.`)) return;
+    if (a.active && !confirm(`Deactivate ${a.email}? They will be locked out within a minute. Their data is kept.`)) return;
     setMsg(null);
     try {
       await api(`/api/v1/accounts/${a.uid}`, { method: "PUT", json: { active: !a.active } });

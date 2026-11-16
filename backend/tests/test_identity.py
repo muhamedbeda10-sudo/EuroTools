@@ -137,42 +137,59 @@ def db():
 
 
 @needs_db
-def test_the_gate_asks_once_a_minute_and_refuses_a_closed_account(db, monkeypatch):
+def test_an_account_is_looked_up_once_and_after_that_the_database_is_the_record(db, monkeypatch):
     import app.identity as identity
-    uid, answers, asked = "g-" + uuid.uuid4().hex[:10], {"now": True}, []
+    uid, asked = "g-" + uuid.uuid4().hex[:10], []
 
-    def ask(u, token):
+    def first(u, token):
         asked.append((u, token))
-        return answers["now"]
-    gate = AccountGate(db, ask)
-    gate.check(uid, "t1")
+        return {"admin": False, "others": []}
+    gate = AccountGate(db, first)
+    gate.check(uid, "t1", "person@example.com")
     gate.check(uid, "t2")
-    assert asked == [(uid, "t1")]                              # the second request within the minute is not a question
-    answers["now"] = False                                     # the administrator closes the account
+    assert asked == [(uid, "t1")]
+    assert db.one("select active, admin, email from egx.accounts where uid=%s", (uid,)) == (True, False, "person@example.com")
+    # another server, later: the row is there, so nothing outside the database is asked, whatever it would say
+    AccountGate(db, lambda u, t: pytest.fail("must not be asked")).check(uid, "t3")
+    AccountGate(db, None).check(uid, "t3")
+    # the administrator closes it: refused within a minute on a server that had let it in, at once on any other
+    db.one("update egx.accounts set active=false where uid=%s returning uid", (uid,))
+    with pytest.raises(AuthError):
+        AccountGate(db, lambda u, t: {"admin": True}).check(uid, "t4")          # not reopened by an old record elsewhere
+    gate.check(uid, "t5")                                                        # still believed here, for the minute
     clock = {"t": time.monotonic()}
     monkeypatch.setattr(identity.time, "monotonic", lambda: clock["t"])
     clock["t"] += identity.ALLOWED_FOR + 1
     with pytest.raises(AuthError):
-        gate.check(uid, "t3")
-    with pytest.raises(AuthError):
-        AccountGate(db, lambda u, t: False).check("never-" + uuid.uuid4().hex[:8], "t")
+        gate.check(uid, "t6")
+    db.one("update egx.accounts set active=true where uid=%s returning uid", (uid,))
+    gate.forget(uid)                                                             # what closing or opening it here does
+    gate.check(uid, "t7")
 
 
 @needs_db
-def test_when_the_sign_in_service_cannot_be_asked_the_last_answer_serves_for_a_day(db):
-    uid = "g-" + uuid.uuid4().hex[:10]
-    AccountGate(db, lambda u, t: True).check(uid, "t")         # a server learns the account is allowed
-    AccountGate(db, lambda u, t: None).check(uid, "t")         # another server, during an outage: the kept answer serves
-    db.one("update egx.accounts set checked_at = now() - interval '25 hours' where uid=%s returning uid", (uid,))
-    with pytest.raises(StoreUnavailable):
-        AccountGate(db, lambda u, t: None).check(uid, "t")     # too old to trust
-    with pytest.raises(StoreUnavailable):
-        AccountGate(db, lambda u, t: None).check("unknown-" + uuid.uuid4().hex[:8], "t")   # never seen: not let in on a guess
-    closed = "g-" + uuid.uuid4().hex[:10]
+def test_an_account_nobody_recorded_is_not_let_in_and_nothing_is_written_for_it(db):
+    stranger = "never-" + uuid.uuid4().hex[:8]
+    for first in (lambda u, t: False, None):                   # no record allows it; or records elsewhere are no longer asked
+        with pytest.raises(AuthError):
+            AccountGate(db, first).check(stranger, "t")
+    with pytest.raises(StoreUnavailable):                      # the old records cannot be asked: not let in on a guess
+        AccountGate(db, lambda u, t: None).check(stranger, "t")
+    assert db.one("select 1 from egx.accounts where uid=%s", (stranger,)) is None
+
+
+@needs_db
+def test_an_administrators_first_visit_brings_the_list_of_accounts_with_it(db):
+    admin, open_one, closed_one = ("a-" + uuid.uuid4().hex[:10] for _ in range(3))
+    others = [{"uid": open_one, "email": "o@example.com", "name": "Open", "active": True, "createdAt": "2026-10-01T09:00:00Z", "createdBy": admin},
+              {"uid": closed_one, "email": "c@example.com", "name": "Closed", "active": False}, {"uid": admin, "active": False},
+              {"nonsense": 1}, "nonsense"]
+    AccountGate(db, lambda u, t: {"admin": True, "others": others}).check(admin, "t", "admin@example.com")
+    assert db.one("select active, admin from egx.accounts where uid=%s", (admin,)) == (True, True)
+    assert db.one("select active, admin, name, created_by, migrated_at from egx.accounts where uid=%s", (open_one,)) == (True, False, "Open", admin, None)
+    AccountGate(db, None).check(open_one, "t")                 # known from the list: let in without asking anywhere
     with pytest.raises(AuthError):
-        AccountGate(db, lambda u, t: False).check(closed, "t")
-    with pytest.raises(AuthError):
-        AccountGate(db, lambda u, t: None).check(closed, "t")  # an outage does not reopen a closed account
+        AccountGate(db, lambda u, t: {"admin": False}).check(closed_one, "t")   # closed in the list stays closed
 
 
 def test_an_answer_from_the_key_service_without_usable_keys_does_not_throw_the_good_ones_away():

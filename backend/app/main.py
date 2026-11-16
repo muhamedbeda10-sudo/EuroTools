@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, wakes, whats_new
-from .accounts import AccountError, Accounts
+from .accounts import AccountError, Accounts, PgAccounts
 from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
 from .data.calendar import cairo_now, market_open
@@ -35,7 +35,7 @@ from .domain.fees import FeeSchedule
 from .domain.ledger import LedgerError
 from .domain.strategies import STRATEGY_TYPES, StrategyConfig
 from .extras import AlertError, AlertIn, Extras, JournalIn, ResearchIn
-from .identity import AccountGate, TokenVerifier, ask_firestore
+from .identity import AccountGate, TokenVerifier, first_contact
 from .llm import ClaudeModel
 from .services import App, NotFound, clean
 from .store import migrate
@@ -168,7 +168,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         database = Database(settings.database_url)
     if postgres:
         verifier = verifier or TokenVerifier(settings.firebase_project_id)
-        gate = AccountGate(database, account_ask or (lambda uid, token: ask_firestore(settings.firebase_project_id, uid, token)))
+        # An account the database has no row for is looked up in Firestore's records once, while accounts are still
+        # being brought over. With that switched off, an account without a row is simply not let in.
+        gate = AccountGate(database, account_ask or (
+            (lambda uid, token: first_contact(settings.firebase_project_id, settings.firebase_web_api_key, uid, token))
+            if settings.migrate_from_firestore else None))
     local_store = None if firestore else (store or Store(settings.data_dir / "egx.sqlite3"))
     caches: OrderedDict[str, dict] = OrderedDict()
 
@@ -178,12 +182,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         The token is genuine and current (verified here, against the sign-in service's keys). It is for the
         account the caller says it is for. And an administrator's record says that account may use the app.
         """
-        proven = verifier.verify(token)
+        claims = verifier.claims(token)
+        proven = claims["sub"]
         if uid is not None and uid != proven:
             raise AuthError("invalid sign-in token")
         database.ensure_schema()
-        gate.check(proven, token)
-        if settings.migrate_from_firestore:
+        email = claims.get("email")
+        gate.check(proven, token, email if isinstance(email, str) and len(email) <= 254 else None)
+        if not settings.migrate_from_firestore:
+            migrate.must_be_here(database, proven)
+        else:
             source = ((lambda: firestore_source(proven)) if firestore_source
                       else (lambda: FirestoreStore(settings.firebase_project_id, token, proven)))
             migrate.bring_account(database, proven, source, cairo_now().date())
@@ -671,6 +679,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
             """The same rule the open app's route applies: on a key shared by several accounts, administrators only."""
             if not firestore or settings.assistant_users == "all":
                 return True
+            if postgres:
+                return PgAccounts(database, settings.firebase_web_api_key, core.uid).can_manage()
             return Accounts(settings.firebase_project_id, settings.firebase_web_api_key, core.id_token, core.uid).can_manage()
         return background.wake(settings, core_for, assistant_model, firestore=firestore, may_review=may_review)
 
@@ -815,9 +825,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
         return out
 
     # ---- accounts --------------------------------------------------------
-    def accounts_for(request: Request, core: App) -> Accounts | None:
+    def accounts_for(request: Request, core: App) -> Accounts | PgAccounts | None:
         if not firestore:
             return None  # local SQLite runs have no sign-in and no accounts
+        if postgres:
+            return PgAccounts(database, settings.firebase_web_api_key, core.store.uid, on_change=gate.forget)
         token = request.headers.get("authorization", "")[7:].strip()
         return Accounts(settings.firebase_project_id, settings.firebase_web_api_key, token, core.store.uid)
 

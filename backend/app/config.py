@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     # "postgres" when deployed on a Postgres database: its address and password, as one connection string.
     # Server-side only, like every secret here. With it the server verifies each sign-in itself (app/identity.py).
     database_url: str = ""
-    # On Postgres, bring each account's data over from Firestore the first time it is used (app/store/migrate.py).
+    # On Postgres, bring each account over from Firestore the first time it is used: its record of being allowed
+    # (app/identity.py) and its data (app/store/migrate.py). Switch it off once every account is over and Firestore
+    # is never asked again: an account the database does not know is then not let in, and one whose data was never
+    # brought over is refused rather than given an empty account.
     migrate_from_firestore: bool = True
     # Public web API key of the Firebase project (identifies it, grants nothing).
     firebase_web_api_key: str = ""

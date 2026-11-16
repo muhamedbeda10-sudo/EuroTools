@@ -40,16 +40,18 @@ One Vercel project serves everything from this repository:
 - the API (`backend/`, FastAPI) as a Python function behind `/api/*`.
 
 The data is in a Postgres database (Supabase), named to the server by `DATABASE_URL` (a connection
-string, Sensitive, in the server's environment only). Sign-in uses the existing Firebase project
-(`eurotools-a1ea6`): Firebase Authentication, email and password, accounts created by the
-administrator, whose records of who may use the app (`egxAccounts`, and `users` of the quality
-system) stay in that project's Firestore.
+string, Sensitive, in the server's environment only): each account's documents, the market prices
+all accounts share, and the record of who may use the app and who administers it (`egx.accounts`).
+Sign-in uses Firebase Authentication of the existing project (`eurotools-a1ea6`): email and
+password, accounts created by an administrator from Settings.
 
 Until 16 November 2026 the data was in Firestore too, one private tree per account under
 `egx/{uid}/`, read and written with the caller's own token so that `firestore.rules` decided
 everything and the server held no credentials. Firestore's daily allowance, shared with the
 quality system, stopped the app that morning, and the owner had the data moved. That tree is
-still there, closed to writing by the rules, as the copy each account is brought over from.
+still there, closed to writing by the rules, as the copy each account is brought over from. Once
+every account has been used since the move, `MIGRATE_FROM_FIRESTORE=false` stops the server asking
+Firestore anything at all.
 Pushing a change to `firestore.rules` publishes the rules through `.github/workflows/rules.yml`;
 that workflow never touches Firebase Hosting. `STORE_BACKEND=firestore` runs the API on Firestore
 as before (`backend/app/store/firestore_store.py`).
@@ -61,9 +63,12 @@ what Firestore's rules used to decide:
 
 - **The server verifies each sign-in itself** (`backend/app/identity.py`): the token's signature
   against Google's published keys, that it is for this project, and that it has not expired. Then
-  it asks whether an administrator's record (`egxAccounts`, or `users` of the quality system, both
-  still in Firestore) allows the account, with the caller's own token; the answer is kept for a
-  minute, and for a day in the database for when Firestore cannot be asked.
+  the account's row in `egx.accounts` says whether it may use the app (read at most once a minute,
+  so closing an account takes effect within a minute). An account with no row yet is looked up
+  once in the records Firestore held (`egxAccounts`, or `users` of the quality system), with the
+  caller's own token, and what is found becomes its row; an administrator's first visit brings the
+  whole list. Opening and closing accounts (`backend/app/accounts.py`, `PgAccounts`) is then a
+  matter of that table, and only a row marked `admin` may do it.
 - **The server holds the database's password.** Every statement is tied to the verified account;
   there is none that reads another account's rows. The ledger and the audit trail are append-only
   in the table itself: a trigger refuses any change or removal, whoever asks.

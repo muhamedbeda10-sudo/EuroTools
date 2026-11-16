@@ -51,8 +51,8 @@ npx firebase emulators:start --only firestore,auth --project demo-egx
   for what fits their automatic box, their standing approval (`real_auto.py`). The assistant has no tool that
   sends, approves or cancels one. Tests keep these fences; do not loosen a test to get a change through.
 - The API reads or writes an account's data only after it has verified that account's sign-in itself
-  (`identity.py`): the token's signature, its project, its expiry, and the administrator's record that the account
-  may use the app. Every statement in `store/postgres_store.py` is tied to that verified account; none takes the
+  (`identity.py`): the token's signature, its project, its expiry, and the account's row in `egx.accounts`, which
+  only an administrator's row may open or close (`accounts.py`). Every statement in `store/postgres_store.py` is tied to that verified account; none takes the
   account from a request, and none reads another account's rows. The ledger and the audit trail are append-only
   in the database itself (a trigger), not only in the application. The database's password (`DATABASE_URL`) is
   the server's alone. The timer works with the owner's sealed sign-in (`background.py`), verified the same way.

@@ -84,11 +84,13 @@ class OldData:
         return sorted(self.docs.get(coll, {}).items())
 
 
-def pg_api(db, old: dict[str, OldData] | None = None, allowed=lambda uid, token: True, younit=None, market=None):
+def pg_api(db, old: dict[str, OldData] | None = None, allowed=lambda uid, token: True, younit=None, market=None, **more):
+    """The API on Postgres. `old` is what each account has in Firestore (nothing, unless named); `allowed` is what
+    Firestore's records say about an account the database has no row for."""
     from app.config import Settings
     from app.main import create_app
     settings = Settings(store_backend="postgres", firebase_project_id=PROJECT, database_url="postgresql://not-used",
-                        migrate_from_firestore=old is not None)
+                        firebase_web_api_key="web-key", **more)
     return TestClient(create_app(settings, younit=younit, database=db, verifier=verifier(), account_ask=allowed,
                                  firestore_source=lambda uid: (old or {}).get(uid, OldData()),
                                  market_source=(lambda: market) if market is not None else None))
@@ -298,13 +300,14 @@ def test_the_timer_signs_in_as_the_owner_and_the_server_checks_that_sign_in_too(
         return {"id_token": sign(signed_as.get(uid, uid)), "user_id": uid, "expires_in": 3600}
     monkeypatch.setattr(background, "_exchange", exchange)
     timer = {"Authorization": "Bearer the-platforms-secret"}
-    cfg = Settings(store_backend="postgres", firebase_project_id=PROJECT, database_url="postgresql://not-used", migrate_from_firestore=False,
+    cfg = Settings(store_backend="postgres", firebase_project_id=PROJECT, database_url="postgresql://not-used",
                    broker_account_uids=owner, live_trading_enabled=True, cron_secret="the-platforms-secret",
                    background_secret="only-this-server-knows")
 
     def server(**more):
         return TestClient(create_app(cfg.model_copy(update=more), younit=FakeBroker(), database=db, verifier=verifier(),
-                                     account_ask=lambda uid, token: True))
+                                     account_ask=lambda uid, token: True, firestore_source=lambda uid: OldData(),
+                                     market_source=lambda: type("NoMarket", (), {"get": lambda self, id: None})()))
     ho, ha = headers(owner), headers(other)
     with server() as c:
         while c.post("/api/v1/data/refresh", headers=ho).json()["remaining"]:
@@ -332,3 +335,64 @@ def test_the_timer_signs_in_as_the_owner_and_the_server_checks_that_sign_in_too(
     for module in (Feed, broker, real_orders, background):
         module.reset()
     db.run(lambda conn: conn.execute("delete from egx.market"))
+
+
+@needs_db
+def test_accounts_are_opened_and_closed_in_the_database_by_an_administrator_only(db, monkeypatch):
+    import httpx
+
+    import app.accounts as accounts
+    admin, plain = new_uid(), new_uid()
+    made, removed = [], []
+
+    def sign_in_service(url, params=None, json=None, **kw):
+        if url.endswith("accounts:signUp"):
+            if json["email"] == "taken@example.com":
+                return httpx.Response(400, json={"error": {"message": "EMAIL_EXISTS"}})
+            uid = "n-" + uuid.uuid4().hex[:10]
+            made.append(uid)
+            return httpx.Response(200, json={"localId": uid, "idToken": "token-of-" + uid})
+        removed.append(json["idToken"])
+        return httpx.Response(200, json={})
+    monkeypatch.setattr(accounts._client, "post", sign_in_service)
+    api = pg_api(db, allowed=lambda uid, token: {"admin": uid == admin, "others": []})
+    ha, hp = headers(admin), headers(plain)
+    assert api.get("/api/v1/accounts", headers=hp).json() == {"can_manage": False, "accounts": []}
+    body = {"email": "New.Person@Example.com", "password": "long-enough-1", "name": "New Person"}
+    assert api.post("/api/v1/accounts", json=body, headers=hp).status_code == 401 and made == []     # not an administrator: nothing is made
+    assert api.put(f"/api/v1/accounts/{admin}", json={"active": False}, headers=hp).status_code == 401
+    assert api.post("/api/v1/accounts", json={**body, "email": "taken@example.com"}, headers=ha).status_code == 422
+    created = api.post("/api/v1/accounts", json=body, headers=ha)
+    assert created.status_code == 201, created.text
+    new = created.json()["uid"]
+    assert new == made[-1] and created.json()["email"] == "new.person@example.com" and removed == []
+    listed = api.get("/api/v1/accounts", headers=ha).json()
+    assert listed["can_manage"] is True and {a["uid"] for a in listed["accounts"]} >= {admin, plain, new}
+    assert next(a for a in listed["accounts"] if a["uid"] == new)["name"] == "New Person"
+    # the new account works at once, with nothing to bring over and nothing asked of the old records
+    fresh = pg_api(db, old={new: OldData(fail=RuntimeError("must not be read"))}, allowed=lambda uid, token: pytest.fail("must not be asked"))
+    hn = headers(new)
+    assert fresh.get("/api/v1/portfolio", headers=hn).json()["summary"]["cash"] == 50000
+    # closing it locks it out on the server where it was closed at once, and nobody can close their own
+    assert api.get("/api/v1/portfolio", headers=hn).status_code == 200
+    assert api.put(f"/api/v1/accounts/{admin}", json={"active": False}, headers=ha).status_code == 422
+    assert api.put("/api/v1/accounts/nobody-at-all", json={"active": False}, headers=ha).status_code == 422
+    assert api.put(f"/api/v1/accounts/{new}", json={"active": False}, headers=ha).json() == {"uid": new, "active": False}
+    assert api.get("/api/v1/portfolio", headers=hn).status_code == 401
+    assert api.put(f"/api/v1/accounts/{new}", json={"active": True}, headers=ha).status_code == 200
+    assert api.get("/api/v1/portfolio", headers=hn).status_code == 200
+    assert [e["action"] for e in api.get("/api/v1/audit", headers=ha).json() if e["entity"] == "account"] == ["activate", "deactivate", "create"]
+
+
+@needs_db
+def test_with_the_copying_switched_off_nothing_is_asked_of_firestore_and_no_empty_account_replaces_a_real_one(db):
+    known, listed_only, stranger = new_uid(), new_uid(), new_uid()
+    first = pg_api(db, allowed=lambda uid, token: {"admin": True, "others": [{"uid": listed_only, "active": True}]})
+    assert first.get("/api/v1/portfolio", headers=headers(known)).status_code == 200          # brought over while it was on
+    off = pg_api(db, old={u: OldData(fail=RuntimeError("must not be read")) for u in (known, listed_only, stranger)},
+                 allowed=None, migrate_from_firestore=False)
+    assert off.get("/api/v1/portfolio", headers=headers(known)).status_code == 200
+    assert off.get("/api/v1/portfolio", headers=headers(stranger)).status_code == 401         # no row: not let in, nothing asked
+    res = off.get("/api/v1/portfolio", headers=headers(listed_only))                           # a row, but its data never came over
+    assert res.status_code == 503 and "previous database" in res.json()["detail"]
+    assert db.one("select 1 from egx.docs where uid=%s limit 1", (listed_only,)) is None       # and no empty account was made for it
