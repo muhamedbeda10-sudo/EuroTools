@@ -2,15 +2,17 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app import assistant, wakes
 from app.assistant_tools import parse
 from app.config import Settings
 from app.data import calendar
 from app.data.calendar import CAIRO
-from app.llm import AssistantError
+from app.llm import AssistantError, cost_usd
 from app.services import App
 from app.store.sqlite_store import Store
-from tests.test_assistant import Script, app_with
+from tests.test_assistant import USAGE, Script, app_with, call, events, say
 
 NOTE = "Breakout over the range high: check the volume, buy only if it holds."
 
@@ -318,3 +320,74 @@ def test_during_the_session_too_the_timed_review_is_not_pushed_aside_by_an_event
         assert full["reason"] == "intraday" and full["events"] == 1
         told = brief(script.seen[2])
         assert told.startswith("AUTOPILOT REVIEW.") and "Work through it in this order" in told and "TMGH is at" in told
+
+
+def test_what_it_was_used_for_is_counted_apart_questions_its_own_reviews_and_what_a_watch_started(tmp_path, monkeypatch):
+    monkeypatch.setattr(assistant, "market_open", lambda *a, **k: True)
+    each = cost_usd("claude-opus-5-5", USAGE)
+    script = Script({"calls": [call(1, "portfolio")]}, {"say": "Here it is."},                        # one question, two paid calls
+                    {"calls": [call(2, "place_trade", side="BUY", symbol="COMI", qty=10)]}, {"say": "Bought."},   # one more, approved midway
+                    {"say": "review"}, {"say": "woken"})
+    with app_with(tmp_path, script, assistant_daily_usd=0) as c:
+        def use():
+            return c.get("/api/v1/assistant").json()["spending"]["use"]
+        nothing = {k: {"n": 0, "usd": 0} for k in ("chat", "review", "watch")} | {"whole": True}
+        assert use() == {"today": nothing, "week": nothing, "month": nothing}
+        chat = c.post("/api/v1/assistant/chats").json()["id"]
+        say(c, chat, "what do I hold?")
+        c.put("/api/v1/assistant/access", json={"access": "confirm"})
+        say(c, chat, "buy 10 COMI")
+        events(c.post(f"/api/v1/assistant/chats/{chat}/resolve", json={"decisions": {"toolu_02": "approve"}}))
+        today = use()["today"]
+        # an approval carries a question on: it costs, and is not counted as another question
+        assert today["chat"] == {"n": 2, "usd": pytest.approx(4 * each, abs=1e-4)} and today["review"]["n"] == today["watch"]["n"] == 0
+
+        c.put("/api/v1/assistant/settings", json={"access": "full", "autopilot_mode": "events"})
+        assert c.post("/api/v1/assistant/autopilot").json()["reason"] == "close"
+        c.post("/api/v1/alerts", json={"kind": "price_above", "symbol": "COMI", "value": 1, "note": NOTE, "wake": True})
+        assert c.post("/api/v1/alerts/check").json()["wake"] is True
+        long_ago(tmp_path)
+        assert c.post("/api/v1/assistant/autopilot").json()["reason"] == "event"
+        told = c.get("/api/v1/assistant").json()["spending"]
+        for period in ("today", "week", "month"):
+            got = told["use"][period]
+            assert (got["chat"]["n"], got["review"]["n"], got["watch"]["n"], got["whole"]) == (2, 1, 1, True), period
+            assert got["review"]["usd"] == got["watch"]["usd"] == pytest.approx(each, abs=1e-4)
+            assert sum(got[k]["usd"] for k in ("chat", "review", "watch")) == pytest.approx(told["today_usd"], abs=1e-3)
+        # the older split stays as it was: conversations, and everything it did by itself
+        assert told["today_by"] == {"chat": pytest.approx(4 * each, abs=1e-4), "autopilot": pytest.approx(2 * each, abs=1e-4)}
+        assert told["autopilot"]["reviews_counted"] == 2
+        # the assistant is told the same figures when it reads its settings
+        tool, args, problem = parse("settings", {})
+        assert problem is None
+        used = tool.run(core_at(tmp_path), args)["assistant"]["used"]
+        assert used["today"] == told["use"]["today"] and used["month_usd"] == told["month_usd"]
+
+
+def test_days_from_before_uses_were_counted_are_told_as_they_were_kept_and_marked(tmp_path, monkeypatch):
+    clock = {"now": datetime(2026, 11, 16, 12, 0, tzinfo=CAIRO)}
+    monkeypatch.setattr(assistant, "cairo_now", lambda: clock["now"])
+    each = cost_usd("claude-opus-5-5", USAGE)
+    with app_with(tmp_path, Script({"say": "one"}, {"say": "two"}), assistant_daily_usd=0) as c:
+        store = Store(tmp_path / "t.sqlite3")
+        # as the app kept them until now: the money apart and the reviews counted, the questions not
+        store.put("assistant_usage", "2026-11-14", {"date": "2026-11-14", "cost_usd": 0.5, "calls": 9, "reviews": 2,
+                                                    "by": {"chat": 0.2, "autopilot": 0.3}})
+        store.put("assistant_usage", "2026-11-16", {"date": "2026-11-16", "cost_usd": 0.1, "calls": 2, "by": {"chat": 0.1}})
+        store.put("assistant_usage", "2026-11", {"month": "2026-11", "cost_usd": 0.6, "calls": 11})
+        before = c.get("/api/v1/assistant").json()["spending"]["use"]
+        assert before["month"] == {"chat": {"n": 0, "usd": 0.3}, "review": {"n": 2, "usd": 0.3}, "watch": {"n": 0, "usd": 0}, "whole": False}
+        assert before["today"]["whole"] is False and before["today"]["chat"] == {"n": 0, "usd": 0.1}
+        chat = c.post("/api/v1/assistant/chats").json()["id"]
+        say(c, chat, "one")
+        after = c.get("/api/v1/assistant").json()["spending"]
+        # counted from here on, on top of what was kept, and still marked: the earlier questions are not in the number
+        assert after["use"]["today"] == {"chat": {"n": 1, "usd": pytest.approx(0.1 + each, abs=1e-4)}, "review": {"n": 0, "usd": 0},
+                                         "watch": {"n": 0, "usd": 0}, "whole": False}
+        assert after["use"]["month"]["chat"] == {"n": 1, "usd": pytest.approx(0.3 + each, abs=1e-4)}
+        assert after["use"]["month"]["review"] == {"n": 2, "usd": 0.3} and after["use"]["month"]["whole"] is False
+        assert after["month_usd"] == pytest.approx(0.6 + each, abs=1e-4)
+        clock["now"] = clock["now"].replace(month=12, day=1)                    # a month that starts after it is whole
+        say(c, chat, "two")
+        fresh = c.get("/api/v1/assistant").json()["spending"]["use"]
+        assert fresh["month"]["chat"]["n"] == 1 and fresh["month"]["whole"] is True and fresh["today"]["whole"] is True

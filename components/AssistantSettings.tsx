@@ -57,6 +57,26 @@ function Used({ label, spent, limit }: { label: string; spent: number; limit: nu
   );
 }
 
+/** What the assistant was used for: the name, what one of them is called, and what it covers. */
+const USES: [string, string, string, string][] = [
+  ["chat", "Questions you asked", "question", "Every message you sent it. The steps of one answer count as one question."],
+  ["review", "Trading by itself", "review", "The reviews it makes by itself after a close and by the clock, with the trades it decides in them."],
+  ["watch", "Monitoring", "wake-up", "The short reviews it was woken for when something it watches happened. The watching itself is the app's work and costs nothing."],
+];
+const PERIODS: [string, string][] = [["today", "Today"], ["week", "Last 7 days"], ["month", "This month"]];
+
+/** One use in a period: how many, what they cost, and how much of the period's cost that is. */
+function Use({ title, unit, about, n, cost, of }: { title: string; unit: string; about: string; n: number; cost: number; of: number }) {
+  const part = of > 0 ? Math.min(cost / of, 1) : 0;
+  return (
+    <div className="used">
+      <div className="used-line"><span>{title}</span><strong className="num">{n.toLocaleString("en-US")} <span className="muted">{unit}{n === 1 ? "" : "s"}</span></strong></div>
+      <div className="meter" role="img" aria-label={`${Math.round(part * 100)}% of what was spent in this period`}><span style={{ width: `${part * 100}%` }} /></div>
+      <p className="foot-note" style={{ marginTop: 6 }}><strong className="num">{usd(cost)}</strong>{of > 0 ? ` · ${Math.round(part * 100)}% of the cost` : ""}. {about}</p>
+    </div>
+  );
+}
+
 /** One choice out of a few, each said in a line: radio buttons, so the keyboard and a screen reader get them for free. */
 function Pick({ name, legend, value, options, onPick }: {
   name: string; legend: string; value: string; onPick: (v: string) => void;
@@ -91,6 +111,7 @@ export default function AssistantSettings() {
   const [saved, setSaved] = useState("");   // the draft as the server holds it, to say whether anything is unsaved
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [period, setPeriod] = useState("today");   // which period "What it was used for" shows
   const lastMode = useRef("events");        // the schedule to come back to when the autopilot is switched on again
   const live = useStatus()?.real_orders;   // whether this sign-in is the brokerage account's owner, and what is switched on
   useEffect(() => {
@@ -136,6 +157,9 @@ export default function AssistantSettings() {
   }, [msg]);
   const model = data?.models?.find((m: any) => m.id === draft?.model);
   const spend = data?.spending;
+  const use = spend?.use?.[period];         // questions, its own reviews and what a watch started, in the chosen period
+  const useCost = use ? USES.reduce((sum, [k]) => sum + Number(use[k]?.usd ?? 0), 0) : 0;
+  const ran = data?.settings?.autopilot;    // the schedule as saved: what a day of its own reviews is held to
   const own = data?.self_trading;           // what is in place for it to trade by itself, as saved (the server's own list)
   const owner = !!live?.allowed;
   const dirty = !!draft && JSON.stringify(draft) !== saved;
@@ -369,6 +393,30 @@ export default function AssistantSettings() {
                   : <>There is no daily ceiling: set one above to bound it.</>}{" "}
                 Watching stop-losses and sending what was already decided is the app&apos;s own work and costs nothing here.
               </div>
+            )}
+
+            {use && (
+              <>
+                <h3 className="sec" id="as-use">What it was used for</h3>
+                <div className="card-head" style={{ marginBottom: 12 }}>
+                  <p className="lead" style={{ margin: 0 }}>How much you asked it, and how much it worked by itself: how many, and what each came to.</p>
+                  <div className="seg" role="group" aria-label="Period">
+                    {PERIODS.map(([k, label]) => (
+                      <button key={k} type="button" className={period === k ? "on" : ""} aria-pressed={period === k} onClick={() => setPeriod(k)}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid cols-3" aria-live="polite">
+                  {USES.map(([k, title, unit, about]) => (
+                    <Use key={k} title={title} unit={unit} about={about} n={Number(use[k]?.n ?? 0)} cost={Number(use[k]?.usd ?? 0)} of={useCost} />
+                  ))}
+                </div>
+                <p className="foot-note">
+                  {period === "today" && ran && ran.mode !== "off" && <>By itself today: {Number(use.review.n) + Number(use.watch.n)} of at most {ran.max_per_day} review{ran.max_per_day === 1 ? "" : "s"} in one day. </>}
+                  {!use.whole && <>Part of this period is from before these were counted: its questions are in the cost but not in the number, and its wake-ups are counted with the reviews. </>}
+                  A question or a review is counted when the assistant starts working on it; the cost is an estimate, as above.
+                </p>
+              </>
             )}
           </div>
 
