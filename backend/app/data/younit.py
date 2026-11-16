@@ -59,25 +59,28 @@ EXECUTION_DEFAULT = 1
 
 
 book_log = logging.getLogger("egx.depth")
-_THIN_BOOK_NOTED: dict[str, float] = {}
+if not book_log.handlers:   # one line now and then; the host shows what is written here
+    book_log.addHandler(logging.StreamHandler())
+    book_log.setLevel(logging.INFO)
+BOOK_NOTE_SECONDS = 600
+_BOOK_NOTED: dict[str, float] = {}
 
 
-def _note_thin_book(item: str, row: dict, book: dict) -> None:
-    """Leave one line a minute per stock when a side of its book has no more than the best price.
+def _note_book(item: str, row: dict, book: dict) -> None:
+    """Leave a line every ten minutes per stock that says what the feed sent for its book.
 
-    The layout of the book fields is not documented: the line says what arrived, so that a layout
-    this code does not read (or a feed that sends no levels at all) can be told apart and handled.
+    The layout of the book fields is not documented. The line lets what this code read be checked
+    against what arrived, and tells a layout it does not read from a feed that sent no levels.
     """
     from . import depth
-    if len(book["bids"]) > 1 and len(book["asks"]) > 1:
-        return
     now = time.monotonic()
-    if now - _THIN_BOOK_NOTED.get(item, -1e9) < 60:
+    if now - _BOOK_NOTED.get(item, -1e9) < BOOK_NOTE_SECONDS:
         return
-    _THIN_BOOK_NOTED[item] = now
-    while len(_THIN_BOOK_NOTED) > 200:
-        _THIN_BOOK_NOTED.pop(next(iter(_THIN_BOOK_NOTED)))
-    book_log.warning("depth: %s has no more than the best price on a side: %s", item, depth.describe(row))
+    _BOOK_NOTED[item] = now
+    while len(_BOOK_NOTED) > 200:
+        _BOOK_NOTED.pop(next(iter(_BOOK_NOTED)))
+    book_log.info("depth: %s read as %d bids and %d asks (best price only: %s) from %s", item, len(book["bids"]),
+                  len(book["asks"]), ",".join(book["top_only"] or []) or "no", depth.describe(row))
 
 
 class YounitError(RuntimeError):
@@ -484,7 +487,7 @@ class YounitClient:
             raise YounitError(f"Younit price depth: {exc}") from None
         row = got["values"].get(item, {})
         book = depth.build(row)
-        _note_thin_book(item, row, book)
+        _note_book(item, row, book)
         return book
 
     def follow_stock(self, stock_id: int, *, max_seconds: float = 240.0):
@@ -502,7 +505,7 @@ class YounitClient:
                 row = (update.get(item) or {}).get("row")
                 if row:
                     book = depth.build(row)
-                    _note_thin_book(item, row, book)
+                    _note_book(item, row, book)
                     yield {"quote": tick_quote(row), "depth": book}
         except stream.StreamError as exc:
             raise YounitError(f"Younit live stream: {exc}") from None
