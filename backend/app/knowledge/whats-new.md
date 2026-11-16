@@ -1,6 +1,19 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.6.1 · 2026-11-16 · Your data moved to a new database
+For: everyone
+عربي: بياناتك اتنقلت لقاعدة بيانات جديدة
+
+- This morning the old database (Firebase) ran out of its daily allowance and the app stopped for a few minutes. Your data now lives in a database of the app's own (Postgres), which has no daily allowance.
+  عربي: النهارده الصبح قاعدة البيانات القديمة (Firebase) خلّصت حصتها اليومية والتطبيق وقف كام دقيقة. بياناتك بقت في قاعدة بيانات خاصة بالتطبيق (Postgres) ومالهاش حصة يومية.
+- There is nothing for you to do. The first time you open the app after this update it brings your data over by itself, checks that every record arrived exactly as it was, and carries on. That first screen can take a few seconds longer.
+  عربي: مش مطلوب منك أي حاجة. أول مرة تفتح التطبيق بعد التحديث بينقل بياناتك لوحده، ويتأكد إن كل سجل وصل زي ما هو بالظبط، ويكمّل. أول شاشة ممكن تاخد كام ثانية زيادة.
+- Signing in is the same, with the same email and password. The old copy of your data is kept, closed to changes.
+  عربي: تسجيل الدخول زي ما هو بنفس الإيميل وكلمة السر. والنسخة القديمة من بياناتك محفوظة ومقفولة للتعديل.
+- If the app shows old figures or cannot save, it was opened from an old address. Open it from euro-tools-delta.vercel.app, and install it again from there if you had it on your phone.
+  عربي: لو التطبيق عارض أرقام قديمة أو مش بيحفظ، يبقى مفتوح من عنوان قديم. افتحه من euro-tools-delta.vercel.app، ولو منزّله على الموبايل نزّله تاني من هناك.
+
 ## 0.6.0 · 2026-11-16 · You choose which account the autopilot works on
 For: owner
 Open: /settings?tab=assistant
