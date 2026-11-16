@@ -148,7 +148,9 @@ the app then wakes you with a short review of that event alone, your note in fro
 told. So when you are waiting for something, set a watch and stop: do not look again and again, and do not ask the \
 user to come back. A watch fires once; set a new one if you still need it.
 - What you cost and how far you go is the user's to set in Settings → Assistant, and you cannot change it: a daily and a \
-monthly spending ceiling (the screen shows what was spent today, this month and over the last week), the language you \
+monthly spending ceiling (the screen shows what was spent today, this month and over the last week, and what you \
+were used for: the questions asked, your own reviews and the short ones a watch started, how many of each and what \
+they cost; `settings` gives you the same figures as `used`), the language you \
 answer in, standing instructions, how many reviews the autopilot may run in a day and, for the brokerage account's \
 owner, which account the autopilot works on and how many real-order proposals you may write in a day (possibly none). \
 If you are asked about any of these, or one of them stops you, say which and where it is set. When the user wants you \
@@ -263,10 +265,12 @@ def _bound(core: App, model: AssistantModel) -> AssistantModel:
 UNTITLED = "New conversation"
 
 
-def new_chat(core: App, title: str = UNTITLED, kind: str = "chat") -> dict:
+def new_chat(core: App, title: str = UNTITLED, kind: str = "chat", reason: str | None = None) -> dict:
     chat = {"id": uuid.uuid4().hex[:12], "title": title, "kind": kind, "created_at": now_iso(), "updated_at": now_iso(),
             "messages": [], "pending": None, "labels": {}, "usage": {"input": 0, "output": 0, "cache_read": 0,
                                                                      "cache_write": 0, "cost_usd": 0.0, "calls": 0}}
+    if reason:   # why a review ran ("close", "intraday", "event"): what it cost is counted under it
+        chat["reason"] = reason
     core.store.put("assistant_chats", chat["id"], chat)
     return chat
 
@@ -345,11 +349,67 @@ def _month(core: App) -> tuple[str, dict]:
         days = [d for d in core.store.list("assistant_usage") if str(d.get("date", "")).startswith(month + "-")]
         doc = {"month": month, "cost_usd": round(sum(float(d.get("cost_usd") or 0.0) for d in days), 6),
                "calls": sum(int(d.get("calls") or 0) for d in days)}
+        uses, whole = _add_uses(days)   # what it was used for, added up the same way
+        doc["uses"] = uses
+        if not whole:
+            doc["uses_partial"] = True
     return month, doc
 
 
 def spent_month(core: App) -> float:
     return float(_month(core)[1].get("cost_usd") or 0.0)
+
+
+# What the assistant was used for: the questions someone asked it ("chat"), the reviews it makes by itself after
+# a close or by the clock ("review"), and the short ones the app wakes it for when a watch fires ("watch").
+USES = ("chat", "review", "watch")
+
+
+def _used_for(chat: dict) -> str:
+    if chat.get("kind") != "autopilot":
+        return "chat"
+    return "watch" if chat.get("reason") == "event" else "review"
+
+
+def _uses(doc: dict | None) -> tuple[dict, bool]:
+    """How many of each use a day or a month holds and what they cost, and whether that record is whole.
+
+    A record from before uses were counted has the money apart (conversations, reviews) and the number of
+    reviews, but not the number of questions, nor the reviews a watch started apart from the others: those
+    are told as they were kept, and the record is marked as not whole.
+    """
+    doc = doc or {}
+    kept = doc.get("uses")
+    if kept is not None:
+        return ({k: {"n": int((kept.get(k) or {}).get("n") or 0), "usd": float((kept.get(k) or {}).get("usd") or 0.0)}
+                 for k in USES}, not doc.get("uses_partial"))
+    by = doc.get("by") or {}
+    return ({"chat": {"n": 0, "usd": float(by.get("chat") or 0.0)},
+             "review": {"n": int(doc.get("reviews") or 0), "usd": float(by.get("autopilot") or 0.0)},
+             "watch": {"n": 0, "usd": 0.0}}, not int(doc.get("calls") or 0))
+
+
+def _add_uses(docs: list[dict]) -> tuple[dict, bool]:
+    total, whole = {k: {"n": 0, "usd": 0.0} for k in USES}, True
+    for doc in docs:
+        uses, complete = _uses(doc)
+        whole = whole and complete
+        for k in USES:
+            total[k]["n"] += uses[k]["n"]
+            total[k]["usd"] += uses[k]["usd"]
+    return total, whole
+
+
+def _month_uses(core: App, month: str, doc: dict) -> tuple[dict, bool]:
+    """The month's uses: its own running count, or, for a month's total kept before uses were counted, added up
+    from its days."""
+    if doc.get("uses") is not None:
+        return _uses(doc)
+    return _add_uses([d for d in core.store.list("assistant_usage") if str(d.get("date", "")).startswith(month + "-")])
+
+
+def _told(uses: dict, whole: bool) -> dict:
+    return {**{k: {"n": uses[k]["n"], "usd": round(uses[k]["usd"], 4)} for k in USES}, "whole": whole}
 
 
 SESSION_MINUTES = 270   # 10:00 to 14:30 Cairo
@@ -376,6 +436,10 @@ def spending(core: App) -> dict:
     `autopilot` is what a day of reviews can come to: how many the schedule asks for by the clock, the most a day
     can hold once watches wake it too, what a review did cost on average over those seven days and what a day
     of them did cost (None until one has run). An estimate; the ceilings are the limit.
+
+    `use` is what it was used for, today, over those seven days and this month: how many questions were asked,
+    how many reviews it made by itself and how many short ones a watch started, each with what it cost.
+    `whole` is false where part of the period is from before these were counted (see `_uses`).
     """
     chosen = prefs(core)
     today = cairo_now().date()
@@ -391,9 +455,12 @@ def spending(core: App) -> dict:
     a_day = at_most * each if each is not None else None
     if a_day is not None and chosen["daily_usd"] > 0:
         a_day = min(a_day, chosen["daily_usd"])
+    month, month_doc = _month(core)
     return {"today_usd": round(float(now.get("cost_usd") or 0.0), 4), "daily_limit_usd": chosen["daily_usd"],
             "today_by": {k: round(float((now.get("by") or {}).get(k) or 0.0), 4) for k in ("chat", "autopilot")},
-            "month_usd": round(spent_month(core), 4), "monthly_limit_usd": chosen["monthly_usd"],
+            "month_usd": round(float(month_doc.get("cost_usd") or 0.0), 4), "monthly_limit_usd": chosen["monthly_usd"],
+            "use": {"today": _told(*_uses(now)), "week": _told(*_add_uses(list(docs.values()))),
+                    "month": _told(*_month_uses(core, month, month_doc))},
             "days": [{"date": d, "usd": round(float(docs[d].get("cost_usd") or 0.0), 4), "calls": int(docs[d].get("calls") or 0)}
                      for d in days],
             "autopilot": {"mode": chosen["autopilot"]["mode"], "reviews_a_day": at_most, "reviews_asked": asked,
@@ -420,7 +487,17 @@ def over_budget(core: App) -> str | None:
     return hit[1] if hit else None
 
 
-def _record(core: App, chat: dict, model: str, usage: dict) -> None:
+def _count(doc: dict, uses: dict, whole: bool, what: str, cost: float, opens: bool) -> None:
+    uses[what]["usd"] += cost
+    uses[what]["n"] += 1 if opens else 0
+    doc["uses"] = {k: {"n": uses[k]["n"], "usd": round(uses[k]["usd"], 6)} for k in USES}
+    if not whole:
+        doc["uses_partial"] = True   # part of it is from before uses were counted, and stays told that way
+
+
+def _record(core: App, chat: dict, model: str, usage: dict, opens: bool = False) -> None:
+    """Add one paid call to the conversation, the day and the month. `opens` is the first call of a question or
+    of a review: that is when the question or the review is counted."""
     cost = cost_usd(model, usage) or 0.0
     total = chat["usage"]
     for key in ("input", "output", "cache_read", "cache_write"):
@@ -428,13 +505,17 @@ def _record(core: App, chat: dict, model: str, usage: dict) -> None:
     total["cost_usd"] = round(total.get("cost_usd", 0.0) + cost, 6)
     total["calls"] = total.get("calls", 0) + 1
     day, doc = _usage_doc(core)
-    kind = "autopilot" if chat.get("kind") == "autopilot" else "chat"
+    month, sum_ = _month(core)   # stored, or added up from the days, which do not yet hold this call
+    # read before this call is added: a record from before uses were counted is told from its older figures
+    day_uses, month_uses = _uses(doc), _month_uses(core, month, sum_)
+    kind, what = "autopilot" if chat.get("kind") == "autopilot" else "chat", _used_for(chat)
     by = dict(doc.get("by") or {})
     by[kind] = round(float(by.get(kind) or 0.0) + cost, 6)
     doc.update(cost_usd=round(float(doc.get("cost_usd") or 0.0) + cost, 6), calls=int(doc.get("calls") or 0) + 1, by=by)
-    if kind == "autopilot" and total["calls"] == 1:
+    if kind == "autopilot" and opens:
         doc["reviews"] = int(doc.get("reviews") or 0) + 1   # a review is counted when its first call is paid for
-    month, sum_ = _month(core)   # stored, or added up from the days, which do not yet hold this call
+    _count(doc, *day_uses, what, cost, opens)
+    _count(sum_, *month_uses, what, cost, opens)
     sum_.update(cost_usd=round(float(sum_.get("cost_usd") or 0.0) + cost, 6), calls=int(sum_.get("calls") or 0) + 1)
     try:
         with core.store.transaction():   # together or not at all, so the month never falls behind its days
@@ -501,7 +582,7 @@ def send(core: App, model: AssistantModel, chat_id: str, text: str, page: str | 
     if chat["title"] == UNTITLED:
         chat["title"] = " ".join(text.split())[:60]
     _save(core, chat)
-    return _converse(core, model, chat, access, account)  # everything above is checked before any of the reply is streamed
+    return _converse(core, model, chat, access, account, asked=True)  # everything above is checked before any of the reply is streamed
 
 
 def resolve(core: App, model: AssistantModel, chat_id: str, decisions: dict[str, str]) -> Iterator[dict]:
@@ -562,7 +643,10 @@ OTHER_ACCOUNT = {   # what a review made for one account is told when it reaches
 }
 
 
-def _converse(core: App, model: AssistantModel, chat: dict, access: str | None = None, account: str | None = None) -> Iterator[dict]:
+def _converse(core: App, model: AssistantModel, chat: dict, access: str | None = None, account: str | None = None,
+              asked: bool = False) -> Iterator[dict]:
+    """`asked` is true when this is the answer to something just said (a question, or a review's brief), and not
+    the rest of an answer after an approval: its first paid call is what counts the question or the review."""
     started = time.monotonic()
     specs, system = tool_specs(), system_prompt(core)
     model = _bound(core, model)
@@ -581,7 +665,7 @@ def _converse(core: App, model: AssistantModel, chat: dict, access: str | None =
                     final = event["message"]
                 else:
                     yield event
-            _record(core, chat, final["model"], final["usage"])
+            _record(core, chat, final["model"], final["usage"], opens=asked and not _step)
             if final["content"]:
                 chat["messages"].append({"role": "assistant", "content": final["content"]})
             if final["stop_reason"] == "refusal":
@@ -970,7 +1054,7 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
     try:
         with core.store.transaction():
             chat = new_chat(core, title=f"Autopilot · {'real account · ' if account == 'real' else ''}{cairo_now():%Y-%m-%d %H:%M}",
-                            kind="autopilot")
+                            kind="autopilot", reason=state["due"])
             note_autopilot(core, last_run=now_iso(), last_chat=chat["id"], day=today, count=done + 1,
                            last_session=state["session"] if state["due"] == "close" else chosen["autopilot"]["last_session"])
             events = wakes.take(core)   # what the app saw while watching for it: told to this review and to no other

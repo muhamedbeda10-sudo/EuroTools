@@ -247,6 +247,14 @@ broker.
   autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
   model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
   the middle when it is reached ("The assistant stopped here"); what was already done stays done.
+- "What it was used for", on the same card: three uses told apart, for today, the last seven days or this month.
+  Questions you asked (every message sent to the assistant; the steps of one answer, an approval included, are one
+  question), Trading by itself (the reviews it makes by itself after a close and by the clock) and Monitoring (the
+  short reviews it is woken for when a watch fires). Each shows how many, what they cost and its share of the
+  period's cost; today also shows the reviews made by itself against the most allowed in one day. A question or a
+  review is counted when its first call to the model is paid for. Counting began with version 0.7.1: for earlier
+  days the cost is complete, the questions were not counted and the wake-ups are counted with the reviews, and the
+  page says so. The `settings` tool gives the same figures as `used`.
 - A day of the autopilot is estimated there: the reviews the schedule can run, times a review's average
   cost over the last seven days. It never passes the daily
   ceiling. Only reviews and conversations cost money: the app's own looks at the real account, its stop-losses

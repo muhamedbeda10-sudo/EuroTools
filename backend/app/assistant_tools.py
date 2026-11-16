@@ -46,7 +46,7 @@ from .services import App, NotFound, clean
 
 MAX_RESULT_CHARS = 30_000
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
-KNOWLEDGE_PART = 24_000   # the most reference text one call returns, in characters
+KNOWLEDGE_PART = 26_000   # the most reference text one call returns, in characters
 KNOWLEDGE_MATCHES = 8
 CANDLE_PATTERNS_SHOWN = 12   # the latest patterns a stock report carries
 PAGES = {
@@ -755,8 +755,9 @@ def _delete(core: App, a: Delete) -> dict:
 # ---- settings, records, knowledge, navigation ---------------------------------------------
 def _settings(core: App, a: NoArgs) -> dict:
     from . import self_trading  # imported here because that module imports the assistant, which imports this one
+    from .assistant import spending
 
-    own = prefs(core)
+    own, spend = prefs(core), spending(core)
     auto = own["autopilot"]
     return {"settings": core.app_settings(), "fee_schedule": core.fee_schedule().model_dump(mode="json"),
             "market_data": core.provider_status(), "data_quality": core.market.status(),
@@ -767,7 +768,10 @@ def _settings(core: App, a: NoArgs) -> dict:
                           "daily_usd": own["daily_usd"], "monthly_usd": own["monthly_usd"],
                           "real_proposals_per_day": own["real_proposals_per_day"],
                           "autopilot": {k: auto[k] for k in ("mode", "account", "every_minutes", "max_per_day", "notify", "last_run")},
-                          "trading_by_itself": self_trading.report(core)}}
+                          # what was spent, and on what: questions asked (chat), the reviews you make by yourself
+                          # (review) and the short ones a watch started (watch), each a number and its cost in USD
+                          "used": {"today_usd": spend["today_usd"], "month_usd": spend["month_usd"], **spend["use"]},
+                          "trading_by_itself": self_trading.report(core, spend)}}
 
 
 class UpdateSettings(Args):
@@ -1141,9 +1145,11 @@ TOOLS: list[Tool] = [
          _delete, kind="confirm", label=lambda a: f"Delete a {a.kind}"),
     Tool("settings", "The app's settings: starting capital, the fee schedule and whether it was verified, the state of "
          "the market-data feed and data quality. Also your own settings as the user saved them in Settings → Assistant "
-         "(access, limits, ceilings, the autopilot's schedule and account) and `trading_by_itself`: what is in place for "
+         "(access, limits, ceilings, the autopilot's schedule and account), `used`: what you were used for today, over the "
+         "last seven days and this month (questions asked, your own reviews, the short reviews a watch started: how many "
+         "of each and what they cost in USD), and `trading_by_itself`: what is in place for "
          "you to trade by yourself and what is still missing, each with where the user sets it. Read it when asked why "
-         "you did or did not act by yourself, or how to set that up.", NoArgs, _settings,
+         "you did or did not act by yourself, how to set that up, or how much you were used and what it cost.", NoArgs, _settings,
          label=lambda a: "Reading the settings"),
     Tool("update_settings", "Change the starting capital or the benchmark.", UpdateSettings, _update_settings,
          account="paper", kind="confirm", label=lambda a: "Change the settings"),

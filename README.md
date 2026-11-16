@@ -419,7 +419,11 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   it may write in a day and which account the autopilot works on. The environment values above are only the
   defaults.
 - **Spending** is recorded per day and per month in the account's own data (`assistant_usage`), split into
-  conversations and autopilot reviews; the page shows today, the month and the last seven days. Both ceilings
+  conversations and autopilot reviews; the page shows today, the month and the last seven days. Each record also
+  counts what it was used for (`uses`): questions asked, the autopilot's own reviews, and the short reviews a watch
+  started, each a number and a cost. A question or a review is counted when its first model call is paid for
+  (a review's reason is kept on its conversation). Records from before 0.7.1 are told from their older figures and
+  marked as not whole. Both ceilings
   are checked before every model call, so a turn stops in the middle when one is reached. The autopilot card
   shows what a day can cost: the reviews the schedule asks for (`reviews_a_day`) times the measured average.
 - **What the person chose** (language, standing instructions) is appended at the very end of the system prompt,
@@ -480,7 +484,7 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   vowel marks are ignored). It is told to answer questions of method from these references, in their terms,
   and to apply them to what the app has: daily candles, long-only paper trades, alerts instead of pending
   orders. Add a file to teach it something; no code change is needed. A section longer than one answer holds
-  (24,000 characters) is cut at blank lines, so keep one topic per `## ` heading.
+  (26,000 characters) is cut at blank lines, so keep one topic per `## ` heading.
 - Try it locally without a key or any cost: `uvicorn e2e_assistant:app` runs the real API with a stand-in model.
 
 ## Protective orders

@@ -1,6 +1,22 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.7.1 · 2026-11-16 · What the assistant was used for: your questions, its own trading, its monitoring
+For: everyone
+Open: /settings?tab=assistant
+عربي: المساعد اتستخدم في إيه: أسئلتك، وتداوله لوحده، ومراقبته
+
+- Settings → Assistant → Model and cost has a new part, "What it was used for". It shows three things apart: the questions you asked it, the reviews it made by itself (Trading by itself), and the short reviews it was woken for when something it watches happened (Monitoring). For each: how many, what they cost, and its share of the cost.
+  عربي: في Settings → Assistant → Model and cost فيه جزء جديد «What it was used for». بيعرض تلات حاجات كل واحدة لوحدها: الأسئلة اللي سألتها له، والمراجعات اللي عملها لوحده (Trading by itself)، والمراجعات القصيرة اللي صحي لها لما حاجة بيراقبها حصلت (Monitoring). ولكل واحدة: العدد، والتكلفة، ونسبتها من إجمالي التكلفة.
+- Choose the period at its top: today, the last 7 days, or this month. For today it also says how many reviews it made by itself out of the most you allow in one day.
+  عربي: اختار المدة من فوق: النهارده، آخر ٧ أيام، أو الشهر ده. وفي النهارده بيقولك كمان عمل كام مراجعة لوحده من أقصى عدد انت سامح بيه في اليوم.
+- A question is counted once, however many steps its answer took. The watching itself is done by the app and costs nothing; only the review that follows a watch costs.
+  عربي: السؤال بيتحسب مرة واحدة مهما كانت خطوات إجابته. والمراقبة نفسها التطبيق هو اللي بيعملها ومابتكلفش حاجة؛ اللي بيكلف هو المراجعة اللي بتيجي بعد ما المراقبة تشتغل.
+- The counting starts with this version. For the days before it the cost is complete, but the questions were not counted and the wake-ups are counted with the reviews; the page says so where it applies.
+  عربي: العدّ بيبدأ من الإصدار ده. الأيام اللي قبله تكلفتها كاملة، بس أسئلتها ماكانتش بتتعد والصحيان بعد المراقبة محسوب مع المراجعات؛ والصفحة بتقول كده في المكان اللي ينطبق عليه.
+- You can also ask the assistant "how much were you used this month?": it reads the same figures.
+  عربي: وتقدر كمان تسأل المساعد «اتستخدمت قد إيه الشهر ده؟»: هو بيقرا نفس الأرقام.
+
 ## 0.7.0 · 2026-11-16 · A shorter menu, the assistant trading by itself in one place, and a moving price tape
 For: everyone
 Open: /settings?tab=assistant
