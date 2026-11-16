@@ -187,8 +187,8 @@ broker.
 - Live prices and the order book stream while the market is open, Sunday to Thursday, about 10:00 to 14:30.
   Figures the server works out from them (portfolio value, breadth) are re-read once a minute while they stream.
 - A stock the feed gives no history for is set aside and asked for again half an hour later; the rest is updated.
-- "The database has reached its usage limit for today": Firebase's daily allowance of reads is used up. Nothing
-  is lost; it resets about 10:00 Cairo time. Only the project's owner can lift it (pay-as-you-go plan).
+- Data: since 16 November 2026 each account's data is in the app's own Postgres database (no daily limit),
+  copied from Firestore; the old copy is kept, read-only. "The database is not answering": try again shortly.
 - A manual paper trade fills at the stock's latest price and is dated with the market's current session.
 
 ## Backtests and automatic runs

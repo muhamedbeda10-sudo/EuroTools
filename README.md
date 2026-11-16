@@ -39,27 +39,36 @@ One Vercel project serves everything from this repository:
 - the web app (Next.js static export, repository root),
 - the API (`backend/`, FastAPI) as a Python function behind `/api/*`.
 
-Sign-in and data use the existing Firebase project (`eurotools-a1ea6`), free tier:
+The data is in a Postgres database (Supabase), named to the server by `DATABASE_URL` (a connection
+string, Sensitive, in the server's environment only): each account's documents, the market prices
+all accounts share, and the record of who may use the app and who administers it (`egx.accounts`).
+Sign-in uses Firebase Authentication of the existing project (`eurotools-a1ea6`): email and
+password, accounts created by an administrator from Settings.
 
-- Firebase Authentication (email and password, accounts created by the administrator),
-- Firestore, one private tree per account under `egx/{uid}/`.
-
-The API holds **no credentials**. It forwards the caller's sign-in token to Firestore,
-so `firestore.rules` authorises every read and write. The ledger and the audit trail are
-append-only in the rules themselves. Pushing a change to `firestore.rules` publishes the
-rules through `.github/workflows/rules.yml`; that workflow never touches Firebase Hosting.
+Until 16 November 2026 the data was in Firestore too, one private tree per account under
+`egx/{uid}/`, read and written with the caller's own token so that `firestore.rules` decided
+everything and the server held no credentials. Firestore's daily allowance, shared with the
+quality system, stopped the app that morning, and the owner had the data moved. That tree is
+still there, closed to writing by the rules, as the copy each account is brought over from. Once
+every account has been used since the move, `MIGRATE_FROM_FIRESTORE=false` stops the server asking
+Firestore anything at all.
+Pushing a change to `firestore.rules` publishes the rules through `.github/workflows/rules.yml`;
+that workflow never touches Firebase Hosting. `STORE_BACKEND=firestore` runs the API on Firestore
+as before (`backend/app/store/firestore_store.py`).
 
 ### The Postgres backend
 
-`STORE_BACKEND=postgres` with `DATABASE_URL` (a Postgres connection string, Sensitive, in the
-server's environment only) keeps the same data in Postgres instead (`backend/app/store/postgres_store.py`).
-Sign-in stays with Firebase Authentication. What changes is who decides:
+`backend/app/store/postgres_store.py`. With a database the server opens itself, the server decides
+what Firestore's rules used to decide:
 
 - **The server verifies each sign-in itself** (`backend/app/identity.py`): the token's signature
   against Google's published keys, that it is for this project, and that it has not expired. Then
-  it asks whether an administrator's record (`egxAccounts`, or `users` of the quality system, both
-  still in Firestore) allows the account, with the caller's own token; the answer is kept for a
-  minute, and for a day in the database for when Firestore cannot be asked.
+  the account's row in `egx.accounts` says whether it may use the app (read at most once a minute,
+  so closing an account takes effect within a minute). An account with no row yet is looked up
+  once in the records Firestore held (`egxAccounts`, or `users` of the quality system), with the
+  caller's own token, and what is found becomes its row; an administrator's first visit brings the
+  whole list. Opening and closing accounts (`backend/app/accounts.py`, `PgAccounts`) is then a
+  matter of that table, and only a row marked `admin` may do it.
 - **The server holds the database's password.** Every statement is tied to the verified account;
   there is none that reads another account's rows. The ledger and the audit trail are append-only
   in the table itself: a trigger refuses any change or removal, whoever asks.
@@ -82,8 +91,8 @@ history, **read-only**. The same connection reads the owner's account and carrie
 orders (the two sections below). The credentials stay on the server; they are never sent to the
 browser, logged or committed.
 
-Prices are the same for every account, so they are cached once in Firestore
-(`egxMarket/`). The first page load of the day pulls the update in short batches, and
+Prices are the same for every account, so they are stored once (the table `egx.market`,
+compressed). The first page load of the day pulls the update in short batches, and
 Settings → Connections has a manual update button. The feed provides no sector and no index
 series: known symbols keep the seed list's sector, others show as "Unclassified", and index
 figures are simply not shown.
@@ -266,12 +275,12 @@ the session, so stop-losses and the box keep working with the app closed and the
   Thursday, over the hours the session can fall in (needs a plan that allows per-minute cron). The
   call is answered only with the platform's secret (`CRON_SECRET`), and does nothing outside the
   session.
-- **Whose hands.** The API holds no database credentials, and a timer has no sign-in. The owner
+- **Whose hands.** The API reads nobody's data without a verified sign-in, and a timer has none. The owner
   lends theirs: Settings → Real trading → *Running without the app open* → *Create a background key*
   seals their sign-in's renewal token with a key only this server can derive, and shows it once.
   The owner adds it to the server's environment as `BACKGROUND_KEY` (Sensitive) and redeploys.
-  With it the server signs in as the owner and nobody else; Firestore applies the owner's own rules,
-  as when the app is open. The key is never accepted from a request, only read from the
+  With it the server signs in as the owner and nobody else, and verifies that sign-in like any other
+  before it reads anything, as when the app is open. The key is never accepted from a request, only read from the
   environment; it cannot be opened anywhere else; a new key, or a changed password, retires it.
 - **The owner's switch** is in their own data. Off, a look ends before it does anything.
 - **A look**: read live prices (or the session's final bars after the close), `real_auto.tick`,
@@ -485,8 +494,9 @@ ledger (`origin: order:<id>`) with the usual fees. One stop and one target per s
 
 ## Concurrency
 
-- Firestore documents read in a request are written back with an `updateTime` precondition; a stale write is
-  refused (409) instead of silently overwriting. User actions retry once.
+- A document read in a request is written back only if it is still the version that was read (`version` in
+  Postgres, `updateTime` in Firestore); a stale write is refused (409) instead of silently overwriting. User
+  actions retry once. All the writes of one transaction are committed together or not at all.
 - Shared market documents (`egxMarket/index`, `chunk_NN`) are version-checked and re-merged on conflict.
 - The data feed is asked once per session close, at a steady pace; a rate-limit answer pauses the update and
   resumes it, keeping what was already saved. A stock that failed is retried after 30 minutes.

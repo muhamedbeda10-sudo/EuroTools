@@ -238,3 +238,82 @@ def test_an_unreachable_database_says_so(monkeypatch):
             PostgresStore(dead, "u1").get("settings", "app")
     finally:
         dead.close()
+
+
+def test_a_document_removed_and_made_again_is_not_the_one_that_was_read(db, uid):
+    """A version is never used twice: somebody who read the first document cannot write over the second."""
+    from app.store.errors import ConflictError
+    store(db, uid).put("watchlist", "COMI", {"n": 1})
+    reader = store(db, uid)
+    assert reader.get("watchlist", "COMI") == {"n": 1}
+    remover = store(db, uid)
+    assert remover.delete("watchlist", "COMI") is True
+    store(db, uid).put("watchlist", "COMI", {"n": 2})          # made again by somebody else
+    with pytest.raises(ConflictError):
+        reader.put("watchlist", "COMI", {"n": "stale"})
+    assert store(db, uid).get("watchlist", "COMI") == {"n": 2}
+    versions = [r[0] for r in db.all("select version from egx.docs where uid=%s", (uid,))]
+    assert versions and min(versions) > 2                       # numbers no document has had before, not a count from 1
+
+
+def test_writing_and_removing_in_one_transaction_does_not_remove_what_somebody_else_made(db, uid):
+    from app.store.errors import ConflictError
+    mine = store(db, uid)
+    assert mine.get("alerts", "a1") is None                     # read as absent
+    store(db, uid).put("alerts", "a1", {"theirs": True})        # then made by another request
+    with pytest.raises(ConflictError):
+        with mine.transaction():
+            mine.put("alerts", "a1", {"mine": True})
+            mine.delete("alerts", "a1")
+    assert store(db, uid).get("alerts", "a1") == {"theirs": True}
+    quiet = store(db, uid)                                      # and when nobody did, it is simply nothing
+    assert quiet.get("alerts", "a2") is None
+    with quiet.transaction():
+        quiet.put("alerts", "a2", {"mine": True})
+        quiet.delete("alerts", "a2")
+    assert store(db, uid).get("alerts", "a2") is None
+
+
+def test_two_requests_writing_the_same_documents_in_opposite_order_do_not_block_each_other_for_good(db, uid):
+    from app.store.errors import ConflictError
+    store(db, uid).put("orders", "a", {"n": 0})
+    store(db, uid).put("orders", "b", {"n": 0})
+    outcomes, barrier = [], threading.Barrier(2)
+
+    def change(first, second, tag):
+        s = store(db, uid)
+        try:
+            barrier.wait(timeout=5)
+            with s.transaction():
+                s.put("orders", first, {"n": tag})
+                s.put("orders", second, {"n": tag})
+            outcomes.append("written")
+        except ConflictError:
+            outcomes.append("conflict")
+        except Exception as exc:  # noqa: BLE001 - the point of the test: nothing else may come out
+            outcomes.append(type(exc).__name__)
+    for _ in range(15):
+        threads = [threading.Thread(target=change, args=("a", "b", 1)), threading.Thread(target=change, args=("b", "a", 2))]
+        [t.start() for t in threads]
+        [t.join(timeout=20) for t in threads]
+    assert set(outcomes) <= {"written", "conflict"} and len(outcomes) == 30
+    a, b = store(db, uid).get("orders", "a"), store(db, uid).get("orders", "b")
+    assert a == b                                               # each transaction went in whole
+
+
+def test_the_schema_is_brought_up_to_date_once_and_a_server_that_starts_later_finds_it_done(db):
+    from app.store import postgres_store
+    from app.store.postgres_store import Database
+    assert db.one("select value from egx.meta where key='schema'")[0] == postgres_store.SCHEMA_VERSION
+    db.one("update egx.meta set value='0' where key='schema' returning key")     # as if written by an older version
+    later = Database(URL)
+    try:
+        later.ensure_schema()
+        assert db.one("select value from egx.meta where key='schema'")[0] == postgres_store.SCHEMA_VERSION
+        seen = []
+        real = later.run
+        later.run = lambda work: (seen.append(1), real(work))[1]
+        later.ensure_schema()                                    # asked again by the same server: no query at all
+        assert seen == []
+    finally:
+        later.close()

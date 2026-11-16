@@ -10,11 +10,14 @@ server's to answer now, before it reads a single row for anybody. Two things are
    fails any of this is believed, including the account it names.
 
 2. The account may use the app (`AccountGate`). Being able to sign in is not enough: an
-   administrator opens an account for EGX Intelligence (`egxAccounts`) or for the quality system
-   (`users`), and can close it again. Those records stay where the administrator keeps them, in
-   Firestore, and are asked with the caller's own token, as before. The answer is kept for a
-   minute, so closing an account takes effect within a minute, and is kept in the database for the
-   hours in which the sign-in service cannot be asked at all.
+   administrator opens an account, and can close it again. The record of that is a row in
+   `egx.accounts`, and for an account that has one nothing else is asked. The answer is kept for a
+   minute, so closing an account takes effect within a minute.
+
+   An account with no row has not been seen since the data left Firestore. While accounts are still
+   being brought over (MIGRATE_FROM_FIRESTORE), it is looked up once in the records the
+   administrator kept there (`egxAccounts`, or `users` of the quality system), with the caller's own
+   token, and what is found becomes its row. After that Firestore is not asked about it again.
 """
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ import json
 import os
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -39,7 +42,6 @@ KEYS_DEFAULT_LIFE = 3600.0
 CLOCK_LEEWAY = 60            # seconds a clock may be off by
 ALLOWED_FOR = 60.0           # how long "this account may use the app" is believed without asking again
 REFUSED_FOR = 15.0
-GRACE = timedelta(hours=24)  # how old the last known answer may be when the sign-in service cannot be asked
 
 
 def _b64(part: str) -> bytes:
@@ -76,9 +78,13 @@ class TokenVerifier:
             unknown = kid not in self._keys and now - self._fetched >= KEYS_MIN_AGE
             if unknown or now >= self._expires or not self._fetched:
                 try:
-                    self._keys, life = self._fetch()
+                    found, life = self._fetch()
+                    usable = {kid: k for kid, k in found.items() if isinstance(k, dict) and k.get("n") and k.get("e")}
+                    if not usable:
+                        raise ValueError("the key service answered without a usable key")
+                    self._keys = usable
                     self._expires = now + max(life, KEYS_MIN_AGE)
-                except (httpx.HTTPError, ValueError, KeyError):
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
                     if not self._keys:
                         raise StoreUnavailable("sign-ins cannot be checked right now; try again in a moment") from None
                     self._expires = now + KEYS_MIN_AGE   # keep the keys there are, and ask again soon
@@ -90,6 +96,10 @@ class TokenVerifier:
 
     def verify(self, token: str) -> str:
         """The account a genuine, current token is for. Anything else is AuthError."""
+        return self.claims(token)["sub"]
+
+    def claims(self, token: str) -> dict:
+        """What a genuine, current token says (its account is `sub`). Anything else is AuthError."""
         refused = AuthError("invalid sign-in token")
         try:
             head64, body64, sig64 = token.split(".")
@@ -121,7 +131,7 @@ class TokenVerifier:
             raise AuthError("the sign-in has expired; sign in again")
         if number("auth_time") is not None and number("auth_time") > now + CLOCK_LEEWAY:
             raise refused
-        return uid
+        return claims
 
 
 def ask_firestore(project_id: str, uid: str, token: str) -> bool | None:
@@ -129,13 +139,17 @@ def ask_firestore(project_id: str, uid: str, token: str) -> bool | None:
 
     Asked with the caller's own token, which the Firestore rules let read exactly two things about
     itself: its `egxAccounts` document, and its `users` document while that account is active.
+
+    "The token was not accepted" (401) is not an answer about the account: Firestore allows a clock no
+    leeway and this server allows a minute, so a sign-in in its last seconds is refused there and not
+    here. It counts as "cannot be asked", never as "closed".
     """
     emulator = os.environ.get("FIRESTORE_EMULATOR_HOST")
     root = f"{'http://' + emulator if emulator else 'https://firestore.googleapis.com'}/v1/projects/{project_id}/databases/(default)/documents"
     unknown = False
     for coll in ("egxAccounts", "users"):
         try:
-            res = _http.get(f"{root}/{coll}/{uid}", headers={"Authorization": f"Bearer {token}"})
+            res = _http.get(f"{root}/{coll}/{quote(uid, safe='')}", headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError:
             unknown = True
             continue
@@ -145,42 +159,92 @@ def ask_firestore(project_id: str, uid: str, token: str) -> bool | None:
                     return True
             except (ValueError, KeyError, TypeError):
                 pass
-        elif res.status_code not in (401, 403, 404):
-            unknown = True     # refusing requests (429) or failing (5xx): this is not an answer about the account
+        elif res.status_code not in (403, 404):
+            unknown = True     # the token refused (401), requests refused (429), or failing (5xx): not an answer about the account
     return None if unknown else False
 
 
 _http = httpx.Client(timeout=10.0)
 
 
-class AccountGate:
-    """Whether an account may use the app, asked at most once a minute per server instance."""
+def first_contact(project_id: str, api_key: str, uid: str, token: str) -> dict | bool | None:
+    """What Firestore's records say about an account the database has no row for.
 
-    def __init__(self, db, ask):
-        self._db, self._ask = db, ask                    # ask(uid, token) -> True | False | None
+    False: no record allows it. None: it cannot be asked right now. Otherwise what to write down:
+    {"admin", "others"}, where `others` are the accounts an administrator's list holds, so that the
+    administrator can still see and close accounts that have not signed in since.
+    """
+    from .accounts import Accounts
+    from .store.errors import DatabaseError
+    allowed = ask_firestore(project_id, uid, token)
+    if not allowed:
+        return allowed
+    records = Accounts(project_id, api_key, token, uid)
+    try:
+        admin = records.can_manage()
+    except (AuthError, DatabaseError, httpx.HTTPError):
+        return None            # allowed, but whether it administers is not known yet: ask again rather than guess
+    others = []
+    if admin:
+        try:
+            others = records.list()
+        except (AuthError, DatabaseError, httpx.HTTPError):
+            return None
+    return {"admin": admin, "others": others}
+
+
+class AccountGate:
+    """Whether an account may use the app: its row in `egx.accounts`, read at most once a minute per server instance."""
+
+    def __init__(self, db, first_contact=None):
+        self._db, self._first = db, first_contact         # first_contact(uid, token) -> dict | False | None
         self._known: dict[str, tuple[bool, float]] = {}
         self._lock = threading.Lock()
 
-    def check(self, uid: str, token: str) -> None:
+    def forget(self, uid: str) -> None:
+        """An account was just opened or closed here: do not go on believing what was read before."""
+        with self._lock:
+            self._known.pop(uid, None)
+
+    def check(self, uid: str, token: str, email: str | None = None) -> None:
         """Returns when the account may use the app; AuthError when it may not; StoreUnavailable when nobody can say."""
+        refused = AuthError("not signed in, or this account is not allowed to use the app")
         now = time.monotonic()
         with self._lock:
             known = self._known.get(uid)
         if known and now - known[1] < (ALLOWED_FOR if known[0] else REFUSED_FOR):
             allowed = known[0]
         else:
-            allowed = self._ask(uid, token)
-            if allowed is None:
-                row = self._db.one("select active, checked_at from egx.accounts where uid=%s", (uid,))
-                if row is None or datetime.now(UTC) - row[1] > GRACE:
-                    raise StoreUnavailable("the sign-in service cannot be asked about this account right now; try again in a moment")
+            row = self._db.one("select active from egx.accounts where uid=%s", (uid,))
+            if row is not None:
                 allowed = bool(row[0])
             else:
-                self._db.one("insert into egx.accounts (uid, active, checked_at) values (%s,%s,now()) on conflict (uid) do update "
-                             "set active=excluded.active, checked_at=excluded.checked_at returning uid", (uid, allowed))
+                found = self._first(uid, token) if self._first else False
+                if found is None:
+                    raise StoreUnavailable("the record of who may use the app cannot be asked right now; try again in a moment")
+                allowed = bool(found)
+                if allowed:
+                    self._write_down(uid, email, found if isinstance(found, dict) else {})
             with self._lock:
                 self._known[uid] = (allowed, now)
                 while len(self._known) > 500:
                     self._known.pop(next(iter(self._known)))
         if not allowed:
-            raise AuthError("not signed in, or this account is not allowed to use the app")
+            raise refused
+
+    def _write_down(self, uid: str, email: str | None, found: dict) -> None:
+        """Make the row of an account seen for the first time, and of the accounts its administrator's list holds."""
+        def work(conn) -> None:
+            with conn.transaction():
+                conn.execute(
+                    "insert into egx.accounts (uid, active, admin, email, checked_at, created_at) values (%s, true, %s, %s, now(), now()) "
+                    "on conflict (uid) do nothing", (uid, bool(found.get("admin")), email))
+                for other in found.get("others") or []:
+                    if not isinstance(other, dict) or not isinstance(other.get("uid"), str) or other["uid"] == uid:
+                        continue
+                    conn.execute(
+                        "insert into egx.accounts (uid, active, admin, email, name, checked_at, created_at, created_by) "
+                        "values (%s, %s, false, %s, %s, now(), coalesce(%s::timestamptz, now()), %s) on conflict (uid) do nothing",
+                        (other["uid"], other.get("active") is True, other.get("email"), other.get("name"),
+                         other.get("createdAt"), other.get("createdBy")))
+        self._db.run(work)

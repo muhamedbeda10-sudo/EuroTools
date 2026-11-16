@@ -140,6 +140,17 @@ def bring_account(db, uid: str, make_source, today: date) -> dict | None:
         return report if copied else None
 
 
+def must_be_here(db, uid: str) -> None:
+    """With the copying switched off: an account whose data was never brought over is not given an empty one in its place."""
+    if uid in _done:
+        return
+    row = db.one("select migrated_at from egx.accounts where uid=%s", (uid,))
+    if row is None or row[0] is None:
+        raise MigrationError("this account's data is still in the previous database, and bringing it over is switched off "
+                             "(MIGRATE_FROM_FIRESTORE)")
+    _done.add(uid)
+
+
 def bring_market(db, source_docs) -> int:
     """Copy the shared market documents from Firestore when the new database has none. Returns how many came over."""
     if "market" in _done:
