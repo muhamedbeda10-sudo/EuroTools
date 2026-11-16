@@ -210,8 +210,8 @@ broker.
   places by hand are not limited.
 - Autopilot, when switched on, has the assistant review after each completed session (optionally during the
   session: when a watch fires, or every so many minutes) and act inside those limits, following the user's
-  mandate. The user sets the most reviews in a day (12 by default); the one after the close always runs.
-- The owner chooses the account it works on: "Paper portfolio only" (no real-order proposal in a review),
+  mandate. The user sets the most reviews in a day (default 12); the one after the close always runs.
+- The owner chooses its account: "Paper portfolio only" (no real-order proposal in a review),
   "Real account only" (proposals only; paper left alone) or "Both" (default). The app enforces it.
 
 ## The app watches for the assistant (watches)
