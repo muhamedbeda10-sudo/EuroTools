@@ -397,7 +397,7 @@ the assistant gets the result (`stock_report`, `candle_scan`).
 | Setting (server environment) | Meaning |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude API key. **Secret.** Without it the assistant is off and nothing is charged. |
-| `ASSISTANT_MODEL` | `claude-opus-5-5` (default), `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-2`. |
+| `ASSISTANT_MODEL` | `claude-opus-5-5` (default), `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-2`. The default for both of an account's model choices. |
 | `ASSISTANT_EFFORT` | `low`, `medium` (default), `high`, `xhigh`, `max`: how much the model thinks, and costs. |
 | `ASSISTANT_USERS` | `admins` (default) or `all`: who may spend from the key when several people have accounts. |
 | `ASSISTANT_DAILY_USD` | Rough daily ceiling per account, default `5`. `0` removes it. |
@@ -413,7 +413,13 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   service methods the screens use, with its input validated before it runs.
 - A conversation is one document in the user's own data and only ever grows: the instructions and tool list
   are fixed and anything that varies (time, current page) is written into the user's message when it is sent.
-- **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): model, thinking effort, access,
+- **Two models** (`assistant_prefs.model_for`): `model` answers in conversations and `trading_model` runs the
+  reviews the assistant makes by itself; `trading_model` is `"same"` until one is chosen, which is how it worked
+  before. The choice follows the conversation's kind (`assistant._bound`): a review's conversation stays on the
+  trading model, the owner's replies in it included, so one conversation keeps one model. The effort is shared.
+  The panel changes `model` alone (the list at its foot); the status gives `model`, `trading_model` (resolved)
+  and `trading_problem` (the key cannot use it, asked only while the reviews are on and the two differ).
+- **Settings → Assistant** (stored per account, `backend/app/assistant_prefs.py`): the two models, thinking effort, access,
   the daily and monthly ceilings, the language it answers in, standing instructions, the limits on the
   assistant's own trades, the autopilot and, for the brokerage account's owner, how many real-order proposals
   it may write in a day and which account the autopilot works on. The environment values above are only the

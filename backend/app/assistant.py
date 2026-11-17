@@ -29,8 +29,10 @@ from .assistant_prefs import (
     AUTOPILOT_ACCOUNTS,
     AUTOPILOT_MODES,
     LANGUAGES,
+    SAME_MODEL,
     autopilot_account,
     autopilot_blocked,
+    model_for,
     models,
     note_autopilot,
     prefs,
@@ -150,7 +152,10 @@ user to come back. A watch fires once; set a new one if you still need it.
 - What you cost and how far you go is the user's to set in Settings → Assistant, and you cannot change it: a daily and a \
 monthly spending ceiling (the screen shows what was spent today, this month and over the last week, and what you \
 were used for: the questions asked, your own reviews and the short ones a watch started, how many of each and what \
-they cost; `settings` gives you the same figures as `used`), the language you \
+they cost; `settings` gives you the same figures as `used`), which Claude model answers in a conversation and which \
+one runs the reviews you make by yourself (two separate choices under Model and cost, the first also in the list at \
+the bottom of this panel; a review's conversation stays on the second, the user's replies in it included; `settings` \
+gives both as `models`), the language you \
 answer in, standing instructions, how many reviews the autopilot may run in a day and, for the brokerage account's \
 owner, which account the autopilot works on and how many real-order proposals you may write in a day (possibly none). \
 If you are asked about any of these, or one of them stops you, say which and where it is set. When the user wants you \
@@ -255,10 +260,18 @@ def access_level(core: App) -> str:
     return prefs(core)["access"]
 
 
-def _bound(core: App, model: AssistantModel) -> AssistantModel:
-    """The model and effort this account chose in Settings, on the server's one connection."""
+def _by_itself(chat: dict | None) -> bool:
+    """Whether a conversation is a review the assistant made by itself (the autopilot's), and so runs on the model
+    chosen for trading. It stays one for its whole life, the owner's replies in it included: one conversation, one model."""
+    return bool(chat) and chat.get("kind") == "autopilot"
+
+
+def _bound(core: App, model: AssistantModel, chat: dict | None = None, *, trading: bool | None = None) -> AssistantModel:
+    """The model and effort this account chose in Settings, on the server's one connection: the model for trading by
+    itself for a review's conversation, the conversations' one for any other."""
     chosen = prefs(core)
-    return model.using(chosen["model"], chosen["effort"]) if hasattr(model, "using") else model
+    name = model_for(chosen, _by_itself(chat) if trading is None else trading)
+    return model.using(name, chosen["effort"]) if hasattr(model, "using") else model
 
 
 # ---- conversations ---------------------------------------------------------------------
@@ -649,7 +662,7 @@ def _converse(core: App, model: AssistantModel, chat: dict, access: str | None =
     the rest of an answer after an approval: its first paid call is what counts the question or the review."""
     started = time.monotonic()
     specs, system = tool_specs(), system_prompt(core)
-    model = _bound(core, model)
+    model = _bound(core, model, chat)
     access = access or access_level(core)
     try:
         for _step in range(MAX_STEPS):
@@ -1085,9 +1098,15 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
 def status(core: App, model: AssistantModel | None, *, allowed: bool) -> dict:
     chosen = prefs(core) if model else None
     check = getattr(_bound(core, model), "check", None) if model else None
+    # The model its own reviews run on is asked about only where it is another one and those reviews are switched on.
+    apart = bool(chosen) and chosen["trading_model"] not in (SAME_MODEL, chosen["model"]) and chosen["autopilot"]["mode"] != "off"
+    check_trading = getattr(_bound(core, model, trading=True), "check", None) if apart else None
     return {"configured": model is not None, "allowed": allowed, "model": chosen["model"] if chosen else None,
+            # the model the reviews it makes by itself run on: the one chosen for them, else the conversations' one
+            "trading_model": model_for(chosen, True) if chosen else None,
             # set when the saved key is refused or has no access to the model, so the user hears it before typing
             "problem": check() if check and allowed else None,
+            "trading_problem": check_trading() if check_trading and allowed else None,
             "access": chosen["access"] if chosen else None, "access_levels": list(ACCESS_LEVELS),
             "settings": chosen, "models": models(), "efforts": list(EFFORTS), "autopilot_modes": list(AUTOPILOT_MODES),
             "autopilot_accounts": list(AUTOPILOT_ACCOUNTS),

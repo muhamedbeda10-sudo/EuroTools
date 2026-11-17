@@ -241,6 +241,14 @@ broker.
 ## The assistant's own settings (Settings, Assistant)
 - "Trading by itself", the first card: what it works on by itself, when it reviews, and each step marked
   ready or missing (also in the `settings` tool).
+- Which model: two separate choices under "Model and cost". "Model you talk to" answers in conversations; it can
+  also be changed from the list at the bottom of the assistant's panel, and applies from the next message. "Model
+  that trades by itself" runs the reviews the assistant makes by itself (after a close, by the clock, when a watch
+  fires) and decides the trades in them; it starts as "Same as the model you talk to". A review's conversation
+  stays on the trading model, the user's replies in it included, and the top of the panel names the model the open
+  conversation runs on. A trade the user asks for in a conversation is made by the model they talk to. "How much
+  it thinks" is one setting for both. Each call is costed at its own model's price. When the key cannot use the
+  model chosen for trading while its reviews are on, the page says so. The `settings` tool gives both as `models`.
 - What it costs: a daily ceiling and a monthly one, in US dollars (USD 5 a day and USD 60 a month unless the
   user changes them; 0 means none; the daily one cannot be above the monthly one). When either is reached the assistant stops, for conversations and reviews alike, until the
   next day or month, or until the user raises it. The page shows what was spent today (conversations and the

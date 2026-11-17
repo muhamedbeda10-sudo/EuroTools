@@ -258,7 +258,8 @@ def _explain(exc) -> str:
     if isinstance(exc, anthropic.PermissionDeniedError):
         return f"The Claude API key is not allowed to do this: {detail}"
     if isinstance(exc, anthropic.NotFoundError):
-        return "This Claude API account cannot use the chosen model. Check ASSISTANT_MODEL in the hosting settings."
+        return ("This Claude API account cannot use the chosen model. Choose another in Settings → Assistant → Model and cost "
+                "(the server's default is ASSISTANT_MODEL in the hosting settings).")
     if status in (402,) or "credit balance" in detail.lower():
         return "The Claude API account has no credit left. Add credit in the Anthropic Console, then try again."
     if status in (500, 502, 503, 504, 529):

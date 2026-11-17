@@ -117,7 +117,7 @@ export default function AssistantSettings() {
   useEffect(() => {
     const s = data?.settings;
     if (!s) return;
-    const d = { model: s.model, effort: s.effort, access: s.access, daily_usd: s.daily_usd, monthly_usd: s.monthly_usd,
+    const d = { model: s.model, trading_model: s.trading_model ?? "same", effort: s.effort, access: s.access, daily_usd: s.daily_usd, monthly_usd: s.monthly_usd,
                 language: s.language, instructions: s.instructions, real_proposals_per_day: s.real_proposals_per_day, ...s.limits,
                 autopilot_mode: s.autopilot.mode, autopilot_account: s.autopilot.account ?? "both", autopilot_every_minutes: s.autopilot.every_minutes,
                 autopilot_mandate: s.autopilot.mandate, autopilot_max_per_day: s.autopilot.max_per_day, autopilot_notify: s.autopilot.notify };
@@ -156,6 +156,8 @@ export default function AssistantSettings() {
     return () => clearTimeout(t);
   }, [msg]);
   const model = data?.models?.find((m: any) => m.id === draft?.model);
+  // The model its own reviews run on: the one chosen for them, else the conversations' one.
+  const trader = draft?.trading_model === "same" ? model : data?.models?.find((m: any) => m.id === draft?.trading_model);
   const spend = data?.spending;
   const use = spend?.use?.[period];         // questions, its own reviews and what a watch started, in the chosen period
   const useCost = use ? USES.reduce((sum, [k]) => sum + Number(use[k]?.usd ?? 0), 0) : 0;
@@ -191,6 +193,7 @@ export default function AssistantSettings() {
       {data?.configured && data.allowed && draft && (
         <>
           {data.problem && <div className="note danger" role="alert"><strong>Claude is not answering.</strong> {data.problem}</div>}
+          {data.trading_problem && <div className="note danger" role="alert"><strong>The model chosen for trading by itself is not answering,</strong> so its reviews will fail until another is chosen under Model and cost. {data.trading_problem}</div>}
 
           <div className="card">
             <div className="card-head"><h2>Trading by itself</h2>
@@ -198,6 +201,7 @@ export default function AssistantSettings() {
             <p className="lead">
               The autopilot: the assistant reviews and acts without being asked, inside the limits on this page. Each review is a conversation you can read
               afterwards, and each one uses the API (typically a few cents to a few tens of cents, depending on the model).
+              {trader && <> Its reviews run on <strong>{trader.name}</strong>; <a href="#as-models">choose the model that trades</a> under Model and cost.</>}
             </p>
             {own && (
               <div className={`status-line ${levelTone}`} role="status">
@@ -330,21 +334,32 @@ export default function AssistantSettings() {
           </div>
 
           <div className="card">
-            <h2>Model and cost</h2>
+            <h2 id="as-models" style={{ scrollMarginTop: 76 }}>Model and cost</h2>
             <div className="grid cols-2">
               <div className="field">
-                <label htmlFor="as-model">Model</label>
-                <select id="as-model" value={draft.model} onChange={(e) => set({ model: e.target.value })}>
+                <label htmlFor="as-model">Model you talk to</label>
+                <select id="as-model" value={draft.model} aria-describedby="as-model-about" onChange={(e) => set({ model: e.target.value })}>
                   {data.models.map((m: any) => <option key={m.id} value={m.id}>{m.name} · ${m.input_usd_per_mtok} in / ${m.output_usd_per_mtok} out per million tokens</option>)}
                 </select>
-                <p className="foot-note" style={{ marginTop: 6 }}>{model?.about} Model id: <code>{draft.model}</code></p>
+                <p className="foot-note" id="as-model-about" style={{ marginTop: 6 }}>Answers in your conversations with it. {model?.about} You can also change it at the bottom of the assistant&apos;s panel. Model id: <code>{draft.model}</code></p>
+              </div>
+              <div className="field">
+                <label htmlFor="as-trading-model">Model that trades by itself</label>
+                <select id="as-trading-model" value={draft.trading_model} aria-describedby="as-trading-model-about" onChange={(e) => set({ trading_model: e.target.value })}>
+                  <option value="same">Same as the model you talk to{model ? ` (${model.name})` : ""}</option>
+                  {data.models.map((m: any) => <option key={m.id} value={m.id}>{m.name} · ${m.input_usd_per_mtok} in / ${m.output_usd_per_mtok} out per million tokens</option>)}
+                </select>
+                <p className="foot-note" id="as-trading-model-about" style={{ marginTop: 6 }}>
+                  Runs the reviews it makes by itself and decides the trades in them. {draft.trading_model === "same" ? "It follows the model you talk to." : trader?.about}{" "}
+                  A review&apos;s conversation stays on this model when you reply in it.{draft.trading_model !== "same" && <> Model id: <code>{draft.trading_model}</code></>}
+                </p>
               </div>
               <div className="field">
                 <label htmlFor="as-effort">How much it thinks</label>
                 <select id="as-effort" value={draft.effort} onChange={(e) => set({ effort: e.target.value })}>
                   {data.efforts.map((e: string) => <option key={e} value={e}>{EFFORT[e] ?? e}</option>)}
                 </select>
-                <p className="foot-note" style={{ marginTop: 6 }}>More thinking costs more and takes longer. Medium suits most questions.</p>
+                <p className="foot-note" style={{ marginTop: 6 }}>For both models. More thinking costs more and takes longer. Medium suits most questions.</p>
               </div>
             </div>
 
