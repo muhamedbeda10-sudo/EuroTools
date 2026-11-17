@@ -35,7 +35,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import broker, orders, paper, real_auto, real_orders, wakes
-from .assistant_prefs import check_trade, prefs
+from .assistant_prefs import check_trade, model_for, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
 from .domain.fees import FeeItem, FeeSchedule
@@ -765,6 +765,8 @@ def _settings(core: App, a: NoArgs) -> dict:
             # What the person saved in Settings → Assistant (they change it there, you cannot), and what is and is not
             # in place for you to trade by yourself: the same checklist that page shows them.
             "assistant": {"access": own["access"], "language": own["language"], "limits": own["limits"],
+                          # the Claude model a conversation runs on, and the one your own reviews run on
+                          "models": {"conversations": own["model"], "trading_by_itself": model_for(own, True)},
                           "daily_usd": own["daily_usd"], "monthly_usd": own["monthly_usd"],
                           "real_proposals_per_day": own["real_proposals_per_day"],
                           "autopilot": {k: auto[k] for k in ("mode", "account", "every_minutes", "max_per_day", "notify", "last_run")},
@@ -1145,11 +1147,13 @@ TOOLS: list[Tool] = [
          _delete, kind="confirm", label=lambda a: f"Delete a {a.kind}"),
     Tool("settings", "The app's settings: starting capital, the fee schedule and whether it was verified, the state of "
          "the market-data feed and data quality. Also your own settings as the user saved them in Settings → Assistant "
-         "(access, limits, ceilings, the autopilot's schedule and account), `used`: what you were used for today, over the "
+         "(access, limits, ceilings, the autopilot's schedule and account, and `models`: which Claude model answers in a "
+         "conversation and which one runs the reviews you make by yourself), `used`: what you were used for today, over the "
          "last seven days and this month (questions asked, your own reviews, the short reviews a watch started: how many "
          "of each and what they cost in USD), and `trading_by_itself`: what is in place for "
          "you to trade by yourself and what is still missing, each with where the user sets it. Read it when asked why "
-         "you did or did not act by yourself, how to set that up, or how much you were used and what it cost.", NoArgs, _settings,
+         "you did or did not act by yourself, how to set that up, which model is in use, or how much you were used and what "
+         "it cost.", NoArgs, _settings,
          label=lambda a: "Reading the settings"),
     Tool("update_settings", "Change the starting capital or the benchmark.", UpdateSettings, _update_settings,
          account="paper", kind="confirm", label=lambda a: "Change the settings"),

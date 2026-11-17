@@ -10,13 +10,11 @@ import Markdown from "./Markdown";
 type ToolChip = { id: string; label: string; state: "running" | "ok" | "failed" | "declined" | "waiting" };
 type Item = { role: "user" | "assistant" | "note"; text: string; tools?: ToolChip[] };
 type Pending = { id: string; label: string };
-const MODEL_NAMES: Record<string, string> = {
-  "claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-haiku-5-5": "Claude Haiku 5.5",
-  "claude-fable-5-2": "Claude Fable 5.2",
-};
 type Status = {
-  configured: boolean; allowed: boolean; model: string | null; access: "full" | "confirm" | "read" | null; problem?: string | null;
-  spent_today_usd: number; daily_limit_usd: number; chats: { id: string; title: string; updated_at: string }[];
+  configured: boolean; allowed: boolean; access: "full" | "confirm" | "read" | null; problem?: string | null;
+  /** The model that answers in a conversation, and the one the reviews it makes by itself run on. */
+  model: string | null; trading_model: string | null; models: { id: string; name: string; about: string }[];
+  spent_today_usd: number; daily_limit_usd: number; chats: { id: string; title: string; updated_at: string; kind?: string }[];
 };
 
 const ACCESS: [NonNullable<Status["access"]>, string, string][] = [
@@ -222,6 +220,14 @@ function Panel({ onClose }: { onClose: () => void }) {
     } catch (e: any) { setError(e.message); }
   };
 
+  /** The model that answers in conversations: saved for the account, and used from the next message on. */
+  const setModel = async (model: string) => {
+    try {
+      await api("/api/v1/assistant/settings", { method: "PUT", json: { model } });
+      loadStatus();
+    } catch (e: any) { setError(e.message); }
+  };
+
   const remove = async (id: string) => {
     try { await api(`/api/v1/assistant/chats/${id}`, { method: "DELETE" }); } catch {}
     if (id === chat) fresh();
@@ -230,6 +236,10 @@ function Panel({ onClose }: { onClose: () => void }) {
 
   const ready = status?.configured && status.allowed;
   const level = ACCESS.find(([k]) => k === status?.access);
+  // A review the assistant made by itself runs on the model chosen for trading, your replies in it included.
+  const review = status?.chats.find((c) => c.id === chat)?.kind === "autopilot";
+  const running = review ? status?.trading_model : status?.model;
+  const modelName = (id?: string | null) => status?.models?.find((m) => m.id === id)?.name ?? id ?? "";
   // the message box takes the keyboard as soon as it exists, and again after leaving the history list
   useEffect(() => { if (ready && !showHistory) input.current?.focus(); }, [ready, showHistory, chat]);
 
@@ -238,7 +248,9 @@ function Panel({ onClose }: { onClose: () => void }) {
       <header className="as-head">
         <Sparkles size={17} aria-hidden="true" />
         <div className="as-title"><strong>Assistant</strong>
-          {status?.model && <span title="Change the model in Settings → Assistant">{MODEL_NAMES[status.model] ?? status.model}</span>}</div>
+          {running && <span title={review ? "This is a review it made by itself: it runs on the model chosen for trading by itself (Settings → Assistant)."
+                                           : "The model that answers here. Change it in the list at the bottom of this panel."}>
+            {modelName(running)}{review ? " · its own review" : ""}</span>}</div>
         {ready && (
           <>
             <button className="icon-btn ghost" onClick={() => setShowHistory((v) => !v)} aria-pressed={showHistory} aria-label="Earlier conversations" title="Earlier conversations"><History size={16} /></button>
@@ -329,14 +341,24 @@ function Panel({ onClose }: { onClose: () => void }) {
                 : <button type="submit" className="icon-btn primary" disabled={!text.trim()} aria-label="Send" title="Send"><SendHorizontal size={16} /></button>}
             </form>
             <div className="as-foot">
+              <label htmlFor="as-chat-model" className="sr-only">The model that answers</label>
+              {review
+                ? <select id="as-chat-model" value={running ?? ""} disabled title="A review it made by itself stays on the model chosen for trading by itself. Change that one in Settings → Assistant.">
+                    <option value={running ?? ""}>{modelName(running)}</option>
+                  </select>
+                : <select id="as-chat-model" value={status.model ?? ""} onChange={(e) => setModel(e.target.value)} disabled={busy}
+                    title={`${status.models.find((m) => m.id === status.model)?.about ?? ""} Used from your next message on; the model that trades by itself is chosen in Settings → Assistant.`}>
+                    {status.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>}
               <label htmlFor="as-access" className="sr-only">What the assistant may do</label>
               <select id="as-access" value={status.access ?? "full"} onChange={(e) => setAccess(e.target.value)} disabled={busy} title={level?.[2]}>
                 {ACCESS.map(([k, name]) => <option key={k} value={k}>{name}</option>)}
               </select>
+              <span className="as-break" aria-hidden="true" />
               <span className="muted" title={`About ${usd(status.spent_today_usd)} used today${status.daily_limit_usd ? ` of a ${usd(status.daily_limit_usd)} daily ceiling` : ""}. An estimate from the tokens used.`}>
                 {cost != null ? `This chat ≈ ${usd(cost)} · ` : ""}today ≈ {usd(status.spent_today_usd)}
               </span>
-              <Link className="muted" href="/settings?tab=assistant" title="Model, limits and autopilot">Settings</Link>
+              <Link className="muted" href="/settings?tab=assistant" title="The model that trades by itself, limits and autopilot">Settings</Link>
             </div>
           </>
         )}

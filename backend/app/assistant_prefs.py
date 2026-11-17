@@ -30,6 +30,9 @@ DEFAULT_AUTOPILOT = {"mode": "off", "account": "both", "every_minutes": 30, "man
                      # and how many ran on which day
                      "max_per_day": 12, "notify": True, "day": None, "count": 0}
 LANGUAGES = ("auto", "ar", "en")
+# The model for the reviews the assistant makes by itself, when none was chosen for them: whatever the conversations use.
+# That is how it worked before the two could be chosen apart, so a setting saved before then means what it meant.
+SAME_MODEL = "same"
 DEFAULT_REAL_PROPOSALS = 20   # proposals for real orders the assistant may write in a day
 MODEL_NOTES = {
     "claude-opus-5-5": ("Claude Opus 5.5", "The default: strong analysis at a moderate price."),
@@ -48,7 +51,8 @@ class PrefsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     access: Literal["full", "confirm", "read"] | None = None
-    model: str | None = Field(default=None, max_length=60)
+    model: str | None = Field(default=None, max_length=60)             # the conversations
+    trading_model: str | None = Field(default=None, max_length=60)     # the reviews it makes by itself; "same" for the one above
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     daily_usd: float | None = Field(default=None, ge=0, le=200)
     monthly_usd: float | None = Field(default=None, ge=0, le=3000)
@@ -73,6 +77,13 @@ class PrefsIn(BaseModel):
             raise ValueError(f"choose one of: {', '.join(SUPPORTED_MODELS)}")
         return v
 
+    @field_validator("trading_model")
+    @classmethod
+    def known_trading_model(cls, v: str | None) -> str | None:
+        if v is not None and v != SAME_MODEL and v not in SUPPORTED_MODELS:
+            raise ValueError(f"choose one of: {SAME_MODEL}, {', '.join(SUPPORTED_MODELS)}")
+        return v
+
 
 def prefs(core: App) -> dict:
     """The stored settings with every default filled in."""
@@ -88,6 +99,7 @@ def prefs(core: App) -> dict:
     return {
         "access": doc.get("access") if doc.get("access") in ACCESS_LEVELS else "full",
         "model": model, "effort": effort,
+        "trading_model": doc.get("trading_model") if doc.get("trading_model") in SUPPORTED_MODELS else SAME_MODEL,
         "daily_usd": float(daily) if daily is not None else float(cfg.assistant_daily_usd),
         "monthly_usd": float(monthly) if monthly is not None else float(cfg.assistant_monthly_usd),
         "language": doc.get("language") if doc.get("language") in LANGUAGES else "auto",
@@ -96,6 +108,12 @@ def prefs(core: App) -> dict:
         "limits": {**DEFAULT_LIMITS, **{k: v for k, v in (doc.get("limits") or {}).items() if k in DEFAULT_LIMITS}},
         "autopilot": autopilot,
     }
+
+
+def model_for(chosen: dict, trading: bool) -> str:
+    """The model a piece of work runs on: the one chosen for trading by itself when it is a review the assistant makes
+    by itself, the conversations' one for everything else. `chosen` is what `prefs` returns."""
+    return chosen["trading_model"] if trading and chosen["trading_model"] != SAME_MODEL else chosen["model"]
 
 
 def autopilot_account(core: App, auto: dict | None = None) -> str:
@@ -121,7 +139,7 @@ def save_prefs(core: App, change: PrefsIn) -> dict:
     with core.store.transaction():
         current = prefs(core)
         given = change.model_dump(exclude_none=True)
-        for key in ("access", "model", "effort", "daily_usd", "monthly_usd", "language", "real_proposals_per_day"):
+        for key in ("access", "model", "trading_model", "effort", "daily_usd", "monthly_usd", "language", "real_proposals_per_day"):
             if key in given:
                 current[key] = given[key]
         if "instructions" in given:

@@ -1,6 +1,22 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.7.2 · 2026-11-17 · Choose the model that trades by itself apart from the one you talk to
+For: everyone
+Open: /settings?tab=assistant
+عربي: اختار الموديل اللي بيتداول لوحده لوحده، والموديل اللي بتكلمه في الشات لوحده
+
+- Settings → Assistant → Model and cost now has two choices instead of one: "Model you talk to", which answers in your conversations, and "Model that trades by itself", which runs the reviews the assistant makes by itself and decides the trades in them.
+  عربي: في Settings → Assistant → Model and cost بقى فيه اختيارين بدل واحد: «Model you talk to» وده اللي بيرد عليك في المحادثات، و«Model that trades by itself» وده اللي بيعمل المراجعات اللي المساعد بيعملها لوحده وبياخد قرارات التداول فيها.
+- Nothing changes until you choose: the model that trades starts as "Same as the model you talk to". Pick a stronger one for trading and a cheaper one for everyday questions, or the other way round; each use is costed at its own model's price.
+  عربي: مفيش حاجة بتتغير غير لما تختار: موديل التداول بيبدأ على «Same as the model you talk to». تقدر تختار موديل أقوى للتداول وموديل أرخص للأسئلة اليومية، أو العكس؛ وكل استخدام بيتحسب بسعر الموديل بتاعه.
+- You can also change the model you talk to from the assistant's panel itself: the list at the bottom, beside what it may do. It applies from your next message.
+  عربي: وتقدر كمان تغيّر الموديل اللي بتكلمه من لوحة المساعد نفسها: القائمة اللي تحت، جنب صلاحياته. بيتطبق من رسالتك الجاية.
+- A review the assistant made by itself stays on the trading model, also when you open it and reply in it; the top of the panel says which model the open conversation runs on.
+  عربي: المراجعة اللي المساعد عملها لوحده بتفضل على موديل التداول، حتى لو فتحتها ورديت جواها؛ وأعلى اللوحة بيقولك المحادثة المفتوحة شغالة على أنهي موديل.
+- "How much it thinks" is one setting for both models. If the key cannot use the model chosen for trading, the page says so before a review fails.
+  عربي: «How much it thinks» إعداد واحد للموديلين. ولو المفتاح مايقدرش يستخدم الموديل المختار للتداول، الصفحة بتقولك قبل ما مراجعة تفشل.
+
 ## 0.7.1 · 2026-11-16 · What the assistant was used for: your questions, its own trading, its monitoring
 For: everyone
 Open: /settings?tab=assistant

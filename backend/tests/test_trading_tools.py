@@ -246,6 +246,62 @@ def test_the_model_and_everything_else_are_chosen_in_settings(tmp_path):
     assert base.using("claude-haiku-5-5").plain is True and base.plain is False
 
 
+class Chosen(Script):
+    """A stand-in that, like the real wrapper, is asked for a model by name: it records which one each call ran on,
+    and can be told that one of them is not available to the key."""
+
+    def __init__(self, *turns, unavailable=(), _root=None, _name="claude-opus-5-5"):
+        super().__init__(*turns)
+        self.root, self.name, self.unavailable = _root or self, _name, unavailable
+        self.ran = []
+
+    def using(self, model=None, effort=None):
+        return Chosen(unavailable=self.root.unavailable, _root=self.root, _name=model or self.name)
+
+    def check(self):
+        return "not available to this key" if self.name in self.root.unavailable else None
+
+    def turn(self, **kw):
+        if self is not self.root:
+            self.root.ran.append(self.name)
+            self.turns, self.seen = self.root.turns, self.root.seen
+        yield from super().turn(**kw)
+
+
+def test_the_model_that_trades_by_itself_is_chosen_apart_from_the_one_in_conversations(tmp_path):
+    script = Chosen({"say": "hi"}, {"say": "Nothing to do today."}, {"say": "Because nothing moved."}, {"say": "hi again"},
+                    unavailable=("claude-fable-5-2",))
+    with app_with(tmp_path, script) as c:
+        status = c.get("/api/v1/assistant").json()
+        # until one is chosen for it, its own reviews run on the conversations' model: what was saved before means the same
+        assert (status["model"], status["trading_model"], status["settings"]["trading_model"]) == ("claude-opus-5-5",) * 2 + ("same",)
+        out = c.put("/api/v1/assistant/settings", json={"model": "claude-sonnet-5-5", "trading_model": "claude-fable-5-2"}).json()
+        assert (out["model"], out["trading_model"], out["settings"]["trading_model"]) == ("claude-sonnet-5-5",) + ("claude-fable-5-2",) * 2
+        assert out["trading_problem"] is None and out["problem"] is None          # its reviews are off: that model is not asked about
+        assert c.put("/api/v1/assistant/settings", json={"trading_model": "gpt-9"}).status_code == 422
+        chat = new_chat(c)
+        assert say(c, chat, "hello")[-1]["type"] == "done"
+        out = c.put("/api/v1/assistant/settings", json={"autopilot_mode": "after_close"}).json()
+        assert out["trading_problem"] == "not available to this key" and out["problem"] is None
+        review = c.post("/api/v1/assistant/autopilot").json()
+        assert review["ran"] and review["error"] is None
+        assert say(c, review["chat"], "why nothing?")[-1]["type"] == "done"      # a reply in a review stays on the review's model
+        assert say(c, chat, "hello again")[-1]["type"] == "done"
+        assert script.ran == ["claude-sonnet-5-5", "claude-fable-5-2", "claude-fable-5-2", "claude-sonnet-5-5"]
+        # each call is costed at its own model's prices: 1,000 tokens in and 200 out
+        by = c.get("/api/v1/assistant").json()["spending"]["today_by"]
+        assert by == {"chat": 0.008, "autopilot": 0.032}
+        # the assistant is told which model does what, by the tool it reads its settings with
+        core = App(Store(tmp_path / "t.sqlite3"), Settings(data_dir=tmp_path)).bootstrap()
+        assert run_tool(core, "settings")[0]["assistant"]["models"] == {"conversations": "claude-sonnet-5-5",
+                                                                        "trading_by_itself": "claude-fable-5-2"}
+        # "same" hands the reviews back to the conversations' model, and changing that one then moves both
+        out = c.put("/api/v1/assistant/settings", json={"trading_model": "same", "model": "claude-haiku-5-5"}).json()
+        assert (out["model"], out["trading_model"], out["trading_problem"]) == ("claude-haiku-5-5", "claude-haiku-5-5", None)
+        saved = [a for a in c.get("/api/v1/audit").json() if a["entity"] == "assistant_settings"]
+        assert any("trading_model" in json.dumps(a) for a in saved)
+
+
 def test_the_autopilot_reviews_once_per_session_inside_the_limits(tmp_path):
     script = Script({"calls": [call(1, "screen_stocks", trend="uptrend"), call(2, "place_trade", side="BUY", symbol="COMI", qty=5)]},
                     {"calls": [call(3, "set_protective_order", symbol="COMI", kind="stop", price=1.0)]},
