@@ -336,6 +336,7 @@ function Background() {
         const runs = await api("/api/v1/paper-runs/process", { method: "POST" });
         const sold: any[] = runs.orders ?? [];   // stop-loss / take-profit orders the app just carried out
         if (runs.fills > 0 || sold.length) window.dispatchEvent(new Event(DATA_UPDATED));
+        if (sold.length) lastAuto = 0;   // a position just went: the assistant is told in this same round, when events wake it
         if (sold.length && !stopped) {
           setToasts((t) => [...sold.map((o) => ({ seq: `order-${o.id}`, title: "Order filled", message: o.message, symbol: o.symbol })), ...t].slice(0, 5));
         }

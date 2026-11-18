@@ -203,7 +203,8 @@ class ClaudeModel:
 
     def _call(self, system: str, tools: list[dict], messages: list[dict]) -> Iterator[dict]:
         common = {
-            "model": self.name, "max_tokens": MAX_TOKENS, "tools": tools,
+            "model": self.name, "max_tokens": MAX_TOKENS,
+            **({"tools": tools} if tools else {}),   # a call that needs no tools (the radar's quick sort) sends none
             "system": [{"type": "text", "text": system}],
             "output_config": {"effort": self.effort},
             "cache_control": {"type": "ephemeral"},  # the growing conversation is read from cache on each step

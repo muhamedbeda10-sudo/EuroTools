@@ -1,9 +1,9 @@
 """Trading by itself: what is in place for the assistant to act without being asked, and what is not.
 
 The pieces were already there, each with its own switch, on three settings pages: the autopilot's schedule and
-the access level (assistant_prefs.py), the spending ceilings (assistant.py), real orders and their limits
-(real_orders.py), the automatic box (real_auto.py), and the server's own looks with the app closed
-(background.py). This module reads them together and says, in one list, which are in place and which are
+the access level (assistant_prefs.py), the spending ceilings (assistant.py), the radar (radar.py), real orders
+and their limits (real_orders.py), the automatic box (real_auto.py), and the server's own looks with the app
+closed (background.py). This module reads them together and says, in one list, which are in place and which are
 missing, so that the settings page can show one checklist and the assistant can explain itself.
 
 It only reads. It switches nothing on, decides nothing, and sends nothing: every switch it names is the
@@ -15,6 +15,7 @@ from . import background, broker, real_auto, real_orders
 from .assistant import reached, spending
 from .assistant_prefs import autopilot_account, autopilot_blocked, prefs
 from .services import App
+from .wakes import WOKEN
 
 SCHEDULE_SAYS = {
     "after_close": "One review after each completed session.",
@@ -76,6 +77,24 @@ def report(core: App, spend: dict | None = None) -> dict:
     else:
         row("closed", "note", "It keeps going with the app closed",
             "Reviews, stop-losses and automatic runs happen while the app is open on one of your devices.")
+
+    radar = chosen["radar"]
+    if not radar["on"]:
+        row("radar", "note", "The radar watches the market for it",
+            "Off: between its reviews it hears only of the watches it or you set. Switch the radar on to have the app go over "
+            "the live prices for it every minute.", fix="radar")
+    elif mode in WOKEN:
+        row("radar", "ok", "The radar watches the market for it",
+            "On: during the session the app goes over the live prices once a minute, your own stocks closely"
+            + (" and the rest of the market loosely" if radar["market"] else "") + ", and wakes it for what stands out"
+            + (", after a small model has sorted what is worth it." if radar["triage"] else "."))
+    elif mode != "off":
+        row("radar", "note", "The radar watches the market for it",
+            "On, but with reviews after the close only it does not wake it: what it finds is told to that review. Choose a "
+            "schedule that wakes it to have it act at once.")
+    else:
+        row("radar", "note", "The radar watches the market for it",
+            "On, and it starts with the schedule: with no reviews of its own there is nobody to tell.")
 
     blocked = autopilot_blocked(core, auto)
     real_part = owner and account in ("real", "both")

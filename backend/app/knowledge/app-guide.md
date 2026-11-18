@@ -221,10 +221,11 @@ broker.
   (`save_alert` with `wake_me`): an entry level, the level that proves a trade wrong, a time to look again.
   Each carries a note saying what to check when it fires.
 - When a watch fires the user is told, and the watch is switched off. What happens next depends on the
-  autopilot's schedule (Settings, Assistant): with "When a watch fires" or "During the session too", the
+  autopilot's schedule (Settings, Assistant): with "When something happens" (called "When a watch fires" until
+  version 0.8.0) or "During the session too", the
   assistant makes a short review of that event alone, during the session, usually within a minute or two; with
   "After each close" it is told of it at that review; with the autopilot off nothing wakes it.
-- "When a watch fires" is the cheapest schedule that still works during the session: one review after each
+- "When something happens" is the cheapest schedule that still works during the session: one review after each
   close, plus a short one per event. Several events close together are one review (at least five minutes pass
   after any review), and these reviews count in the day's limit like the timed ones.
 - The assistant may have 12 watches on at once. A watch on a level that has not fired in 14 days lapses by
@@ -236,7 +237,48 @@ broker.
 - In a notice to the owner's devices, a note the person wrote goes with the alert; a note the assistant wrote
   for itself does not.
 - When automatic real orders sell a position on their own way out (stop-loss or take-profit), that is told to
-  the assistant the same way, in the schedules that wake it.
+  the assistant the same way, in the schedules that wake it. So is a stop-loss or take-profit the app carried
+  out on the paper portfolio, unless the autopilot is set to the real account only.
+
+## The radar: the app watches the live prices without being asked (Settings, Assistant, Radar)
+- A watch is something the assistant or the person asked for. The radar is what nobody asked for: during the
+  session, at every look at the live prices (once a minute, from the open app and, for the brokerage account's
+  owner who switched on running without the app open, from the server), the app goes over the stocks in code,
+  at no cost.
+- The person's own stocks are watched closely: what the paper portfolio holds, the watchlist and, for the
+  brokerage account's owner whose autopilot has the real account in it, the real holdings, what the automation
+  holds and the stocks of the automatic box. With "My stocks and the whole market" (the default) every other
+  listed stock is watched loosely; with "My stocks only" it is not looked at.
+- What it looks for, with the defaults: for the person's own stocks, a move of 3% on the day (said again at 6%,
+  9% and so on), volume already 2 times the 20-session average, a break of the 20-session high or low, and a
+  holding within 1.5% of its stop-loss or take-profit. For the rest of the market: a move of 7%, volume 4 times
+  the average while the stock is up at least 2%, a break of the 60-session high. The person changes the five
+  figures on the card; the windows (20 and 60 sessions) are fixed. Each thing is said once in a session. When
+  more than four stocks outside the person's own stand out in the same minute they are told as one find: the
+  market itself is moving.
+- What becomes of a find. It joins the same queue as the watches. With the schedules that wake the assistant
+  ("When something happens", "During the session too") it starts a short review, in the same look, subject to
+  the same rules as a watch: at least five minutes after any review, inside the most reviews in one day, inside
+  the spending ceilings. With "After each close" it is told to that review. With the autopilot off the radar
+  does nothing.
+- The quick sort. Before the model that trades is woken for the radar's finds, a small model (Claude Haiku)
+  reads them with the person's brief and their own stocks and answers which are worth waking it for. Those wake
+  it; the rest stay in the queue marked as minor, start no review, and are told to the next full review as what
+  the app saw meanwhile. A sort costs a fraction of a cent and is counted as its own use ("Sorting what the
+  radar found"), not as a review. Only the radar's own finds are sorted: with a watch or a sale by the app
+  waiting as well, the assistant is woken and told everything. A sort that fails, or whose answer cannot be
+  read, wakes the assistant: a find is never dropped because the cheap look went wrong. The person can switch
+  the sort off; then every find wakes the model that trades.
+- A wake-up brief marks those lines "the radar saw". There is no note of the assistant's behind them: it judges
+  each against the brief and the holdings, and doing nothing is a valid outcome.
+- "What it found lately", on the card, lists each find and how each batch was sorted (how many woke the
+  assistant, and why). The `radar` tool gives the assistant the same list, the settings and the stocks watched
+  closely. The checklist "What is in place" has a row for the radar.
+- Its limits. It sees the market once a minute, not every trade, so a spike that reverses inside a minute can be
+  missed. It needs the live feed: on sample or imported data it says nothing. With the app closed it runs only
+  for the brokerage account's owner with "Running without the app open" switched on. It decides nothing and
+  sends nothing: what the assistant may do when woken is bounded by its own limits and the owner's box, as ever.
+  The assistant cannot change the radar's settings.
 
 ## The assistant's own settings (Settings, Assistant)
 - "Trading by itself", the first card: what it works on by itself, when it reviews, and each step marked
@@ -244,7 +286,7 @@ broker.
 - Which model: two separate choices under "Model and cost". "Model you talk to" answers in conversations; it can
   also be changed from the list at the bottom of the assistant's panel, and applies from the next message. "Model
   that trades by itself" runs the reviews the assistant makes by itself (after a close, by the clock, when a watch
-  fires) and decides the trades in them; it starts as "Same as the model you talk to". A review's conversation
+  fires or the radar finds something) and decides the trades in them; it starts as "Same as the model you talk to". A review's conversation
   stays on the trading model, the user's replies in it included, and the top of the panel names the model the open
   conversation runs on. A trade the user asks for in a conversation is made by the model they talk to. "How much
   it thinks" is one setting for both. Each call is costed at its own model's price. When the key cannot use the
@@ -255,10 +297,12 @@ broker.
   autopilot's reviews apart), this month, and each of the last seven days. The figures are estimates from the
   model's published prices. A ceiling is asked before every call to the model, so a long piece of work stops in
   the middle when it is reached ("The assistant stopped here"); what was already done stays done.
-- "What it was used for", on the same card: three uses told apart, for today, the last seven days or this month.
+- "What it was used for", on the same card: four uses told apart, for today, the last seven days or this month.
   Questions you asked (every message sent to the assistant; the steps of one answer, an approval included, are one
-  question), Trading by itself (the reviews it makes by itself after a close and by the clock) and Monitoring (the
-  short reviews it is woken for when a watch fires). Each shows how many, what they cost and its share of the
+  question), Trading by itself (the reviews it makes by itself after a close and by the clock), Monitoring (the
+  short reviews it is woken for when a watch fires or the radar finds something; a trade it decides in one is
+  still counted here, not under Trading by itself) and Sorting what the radar found (the small model's quick
+  looks, since version 0.8.0). Each shows how many, what they cost and its share of the
   period's cost; today also shows the reviews made by itself against the most allowed in one day. A question or a
   review is counted when its first call to the model is paid for. Counting began with version 0.7.1: for earlier
   days the cost is complete, the questions were not counted and the wake-ups are counted with the reviews, and the

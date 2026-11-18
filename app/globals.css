@@ -517,6 +517,16 @@ label.choice input:focus { box-shadow: none; }
 .status-line .say { min-width: 0; }
 .status-line .say strong { display: block; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
 .status-line .say span { color: var(--text-2); font-size: 13px; }
+/* what the radar saw: the time, then what happened; the time moves above the words where there is no room beside them */
+.finds { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--border); }
+.finds li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 4px 14px; padding: 10px 0; border-bottom: 1px solid var(--border);
+  font-size: 13px; line-height: 1.5; }
+.finds time { color: var(--muted); font-size: 12px; padding-top: 1px; }
+.finds li > div { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.finds a { text-decoration: none; }
+.finds a:hover { text-decoration: underline; }
+.finds .badge { height: auto; min-height: 21px; padding-top: 2px; padding-bottom: 2px; white-space: normal; }
+@media (max-width: 640px) { .finds li { grid-template-columns: 1fr; } }
 .checks li.act { grid-template-columns: 18px minmax(0, 1fr) auto; }
 .checks li.todo > svg { color: var(--warn); }
 .checks li.fyi > svg { color: var(--muted); }

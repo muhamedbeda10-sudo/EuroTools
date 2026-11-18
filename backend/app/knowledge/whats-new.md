@@ -1,6 +1,30 @@
 # What's new in EGX Intelligence
 The app's release notes, newest first: what changed in each version, for whom, and where to find it. The app shows the same list to its users after an update.
 
+## 0.8.0 · 2026-11-18 · A radar: the app watches the live prices for the assistant and wakes it for what matters
+For: everyone
+Open: /settings?tab=assistant
+عربي: رادار: التطبيق بيراقب الأسعار الحية للمساعد ويصحّيه للمهم بس
+
+- Settings → Assistant has a new card, "Radar". During the session the app now goes over the live prices for the assistant by itself, once a minute, in code and at no cost. Until now the assistant heard only of the watches it or you had set.
+  عربي: في Settings → Assistant فيه كارت جديد «Radar». وقت الجلسة التطبيق بقى يمرّ على الأسعار الحية للمساعد لوحده، مرة كل دقيقة، بالكود ومن غير تكلفة. قبل كده المساعد كان بيعرف بس بالمراقبات اللي هو أو انت حطيتوها.
+- Your own stocks are watched closely: what the paper portfolio holds, the watchlist and, for the brokerage account's owner, the real holdings and the automatic box. With "My stocks and the whole market" every other listed stock is watched loosely, for what is large enough to be an opportunity or a sign that the market itself is moving.
+  عربي: أسهمك بتتراقب عن قرب: اللي في المحفظة الورقية، وقائمة المتابعة، ولصاحب حساب الوساطة الأسهم الحقيقية وأسهم الصندوق التلقائي. ومع «My stocks and the whole market» باقي الأسهم المدرجة بتتراقب بحدود أوسع، للحركة الكبيرة اللي تبقى فرصة أو علامة إن السوق كله بيتحرك.
+- What it looks for: a sharp move on the day (3% for your stocks and again at each further 3%, 7% for the rest), volume far above the 20-session average, a break of the recent high or low, and a holding within 1.5% of its stop-loss or take-profit. You can change these figures on the card. Each is said once in a session.
+  عربي: بيدوّر على: حركة حادة في اليوم (٣٪ لأسهمك وتاني عند كل ٣٪ زيادة، و٧٪ لباقي السوق)، وحجم تداول أعلى بكتير من متوسط ٢٠ جلسة، وكسر القمة أو القاع الأخير، وسهم عندك قرّب ١٫٥٪ من وقف الخسارة أو جني الربح. تقدر تغيّر الأرقام دي من الكارت. وكل حاجة بتتقال مرة واحدة في الجلسة.
+- A small model (Claude Haiku) sorts what the radar found first, with your brief and your holdings in front of it, and the model that trades is woken only for what is worth it. A sort costs a fraction of a cent. What it sets aside is not lost: the next full review is told of it. You can switch the sort off; then every find wakes the model that trades.
+  عربي: موديل صغير (Claude Haiku) بيفرز اللي الرادار لقاه الأول، وقدامه تعليماتك وأسهمك، والموديل اللي بيتداول بيصحى بس للّي يستاهل. الفرزة بتكلّف جزء من السنت. واللي بيتركن مابيضيعش: المراجعة الكاملة الجاية بتتبلّغ بيه. وتقدر تقفل الفرز؛ ساعتها كل حاجة الرادار يلاقيها بتصحّي موديل التداول.
+- The radar is on by default and wakes the assistant with the schedules "When something happens" (the new name of "When a watch fires") and "During the session too". So with one of those schedules it may now be woken more often than before, always inside the most reviews in one day and the spending ceilings you set. With "After each close" its finds are told to that review; to stop it, switch it off on the card.
+  عربي: الرادار شغال افتراضيًا وبيصحّي المساعد مع جدول «When something happens» (الاسم الجديد لـ «When a watch fires») وجدول «During the session too». يعني مع أي جدول منهم ممكن يصحى أكتر من الأول، ودايمًا جوه أقصى عدد مراجعات في اليوم وسقف الصرف اللي انت حاططهم. ومع «After each close» اللي بيلاقيه بيتقال للمراجعة دي؛ ولو عايز توقفه اقفله من الكارت.
+- "What it found lately", on the same card, lists each thing the radar saw and what became of it: whether the assistant was woken, and why. "What it was used for" has a fourth line, "Sorting what the radar found", and the checklist "What is in place" has a line for the radar.
+  عربي: «What it found lately» في نفس الكارت بيعرض كل حاجة الرادار شافها وإيه اللي حصل فيها: المساعد اتصحّى ولا لأ، وليه. و«What it was used for» بقى فيها سطر رابع «Sorting what the radar found»، وقائمة «What is in place» بقى فيها سطر للرادار.
+- When the app carries out a stop-loss or take-profit on the paper portfolio, the assistant is now told at once, in the schedules that wake it, as it already was for the automation's sales on the real account.
+  عربي: لما التطبيق ينفّذ وقف خسارة أو جني ربح على المحفظة الورقية، المساعد بقى يتبلّغ فورًا في الجداول اللي بتصحّيه، زي ما كان بيحصل مع بيع الأوامر التلقائية على الحساب الحقيقي.
+- What it cannot do: it sees the market once a minute, not every trade, and only with the live feed. With the app closed it runs only for the brokerage account's owner who switched on "Running without the app open". It decides nothing itself: what the assistant may do when woken is still bounded by your limits.
+  عربي: اللي مايقدرش عليه: بيشوف السوق مرة كل دقيقة مش كل صفقة، وبس مع الأسعار الحية. والتطبيق مقفول بيشتغل بس لصاحب حساب الوساطة اللي مشغّل «Running without the app open». وهو مابياخدش أي قرار: اللي المساعد يقدر يعمله لما يصحى لسه محكوم بحدودك.
+- You can ask the assistant "what did the radar see today?" or "why did you not wake up for this move?": it reads the same list.
+  عربي: وتقدر تسأل المساعد «الرادار شاف إيه النهارده؟» أو «ليه ماصحيتش للحركة دي؟»: هو بيقرا نفس القائمة.
+
 ## 0.7.2 · 2026-11-17 · Choose the model that trades by itself apart from the one you talk to
 For: everyone
 Open: /settings?tab=assistant

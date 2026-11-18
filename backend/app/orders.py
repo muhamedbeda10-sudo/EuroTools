@@ -23,6 +23,7 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import wakes
 from .domain.ledger import LedgerError, build_trade, replay
 from .domain.money import D, px
 from .services import App, NotFound, now_iso
@@ -152,6 +153,7 @@ def process(core: App) -> dict:
                                    "message": f"{NAMES[order['kind']]} on {symbol}: sold {qty:,} at {float(tx['price']):g}"})
             if order != before:
                 core.store.put("orders", order["id"], order)
+    wakes.note_paper_fills(core, filled)   # the assistant hears that a position went, when events wake it
     return {"filled": filled, "cancelled": cancelled}
 
 

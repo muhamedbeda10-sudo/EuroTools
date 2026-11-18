@@ -331,7 +331,7 @@ def test_what_it_was_used_for_is_counted_apart_questions_its_own_reviews_and_wha
     with app_with(tmp_path, script, assistant_daily_usd=0) as c:
         def use():
             return c.get("/api/v1/assistant").json()["spending"]["use"]
-        nothing = {k: {"n": 0, "usd": 0} for k in ("chat", "review", "watch")} | {"whole": True}
+        nothing = {k: {"n": 0, "usd": 0} for k in ("chat", "review", "watch", "sort")} | {"whole": True}
         assert use() == {"today": nothing, "week": nothing, "month": nothing}
         chat = c.post("/api/v1/assistant/chats").json()["id"]
         say(c, chat, "what do I hold?")
@@ -376,14 +376,15 @@ def test_days_from_before_uses_were_counted_are_told_as_they_were_kept_and_marke
         store.put("assistant_usage", "2026-11-16", {"date": "2026-11-16", "cost_usd": 0.1, "calls": 2, "by": {"chat": 0.1}})
         store.put("assistant_usage", "2026-11", {"month": "2026-11", "cost_usd": 0.6, "calls": 11})
         before = c.get("/api/v1/assistant").json()["spending"]["use"]
-        assert before["month"] == {"chat": {"n": 0, "usd": 0.3}, "review": {"n": 2, "usd": 0.3}, "watch": {"n": 0, "usd": 0}, "whole": False}
+        assert before["month"] == {"chat": {"n": 0, "usd": 0.3}, "review": {"n": 2, "usd": 0.3}, "watch": {"n": 0, "usd": 0},
+                                   "sort": {"n": 0, "usd": 0}, "whole": False}
         assert before["today"]["whole"] is False and before["today"]["chat"] == {"n": 0, "usd": 0.1}
         chat = c.post("/api/v1/assistant/chats").json()["id"]
         say(c, chat, "one")
         after = c.get("/api/v1/assistant").json()["spending"]
         # counted from here on, on top of what was kept, and still marked: the earlier questions are not in the number
         assert after["use"]["today"] == {"chat": {"n": 1, "usd": pytest.approx(0.1 + each, abs=1e-4)}, "review": {"n": 0, "usd": 0},
-                                         "watch": {"n": 0, "usd": 0}, "whole": False}
+                                         "watch": {"n": 0, "usd": 0}, "sort": {"n": 0, "usd": 0}, "whole": False}
         assert after["use"]["month"]["chat"] == {"n": 1, "usd": pytest.approx(0.3 + each, abs=1e-4)}
         assert after["use"]["month"]["review"] == {"n": 2, "usd": 0.3} and after["use"]["month"]["whole"] is False
         assert after["month_usd"] == pytest.approx(0.6 + each, abs=1e-4)

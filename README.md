@@ -27,6 +27,7 @@ Personal Egyptian Exchange (EGX) analysis and **paper-trading** workspace.
 | Research & News | Your own library of links and notes, tied to stocks, sectors and strategies, with impact, reliability and a verified flag |
 | Journal | Why each decision was made, what was expected, what happened, what was learned |
 | Alerts | Price, day change, volume, RSI, strategy-signal and time-of-day alerts, shown in the app and as notifications; an alert can wake the assistant |
+| Radar | The app goes over the live prices for the assistant once a minute by itself; a small model sorts what it found and the trading model is woken only for what is worth it (Settings → Assistant) |
 | Guide | Indicators, candle patterns, price depth, financial statements and ratios, disclosures, risk, fees, sectors, testing a strategy |
 | Settings | Five tabs: Assistant (first: trading by itself, with a checklist of what is in place), Real trading (the owner), Paper & fees, Market data (CSV import, connections), Accounts & log (administrators, audit trail) |
 
@@ -288,6 +289,7 @@ the session, so stop-losses and the box keep working with the app closed and the
   then the paper portfolio's own standing work (`paper.process_runs` and `orders.process`: automatic runs
   brought up to date, stop-losses and take-profits carried out, a notice to the owner's devices for each
   fill; paper only, and a failure there never stops the look),
+  then the alerts and the radar's own look at the same prices (`radar.scan`),
   then the assistant's review when one is due (its own switch and schedule in Settings →
   Assistant), and what the review proposed is judged in the same look.
 - **It decides nothing.** What may be sent is still the owner's box and limits, checked at every look.
@@ -426,8 +428,8 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   defaults.
 - **Spending** is recorded per day and per month in the account's own data (`assistant_usage`), split into
   conversations and autopilot reviews; the page shows today, the month and the last seven days. Each record also
-  counts what it was used for (`uses`): questions asked, the autopilot's own reviews, and the short reviews a watch
-  started, each a number and a cost. A question or a review is counted when its first model call is paid for
+  counts what it was used for (`uses`): questions asked, the autopilot's own reviews, the short reviews a watch or
+  the radar started, and the small model's sorting of the radar's finds, each a number and a cost. A question or a review is counted when its first model call is paid for
   (a review's reason is kept on its conversation). Records from before 0.7.1 are told from their older figures and
   marked as not whole. Both ceilings
   are checked before every model call, so a turn stops in the middle when one is reached. The autopilot card
@@ -473,11 +475,35 @@ the assistant gets the result (`stock_report`, `candle_scan`).
   The claim takes the queue, so an event is told to one review only. At least five minutes pass after any
   review, so a burst is one review; event reviews count in the day's limit; outside the session, or in
   `after_close` mode, they wait for the next review. The automation's own exits from a real position are
-  queued the same way (`wakes.note_exits`). Nothing in `wakes.py` calls the model or sends an order.
+  queued the same way (`wakes.note_exits`), and so is a stop-loss or take-profit carried out on the paper
+  portfolio (`wakes.note_paper_fills`, from `orders.process`). Nothing in `wakes.py` calls the model or sends an order.
   Guards: nothing is queued with the autopilot off; a queued event older than 20 hours is dropped; a review
   that fails before changing anything gives its events back; a time seen more than 30 minutes late is marked
   missed and wakes nobody; in `intraday` mode the timed review comes before an event review and takes the
   events with it; the assistant cannot set a watch on a condition that already holds (it would wake itself).
+- **Radar** (`backend/app/radar.py`): the watching nobody asked for. At every look at the live prices (the open
+  app's round through `POST /api/v1/alerts/check`, and the server's own look) `radar.scan` goes over the live
+  quotes in code: the person's own stocks closely (paper holdings, the watchlist and, for the owner whose
+  autopilot has the real account in it, the real holdings, the automation's positions and the box's stocks),
+  every other listed stock loosely when `market` is on. It looks for a move on the day (again at each further
+  step), volume against the 20-session average, a break of the recent high or low (20 sessions for the person's
+  own stocks, 60 for the rest) and a holding close to its stop-loss or take-profit. What was said in a session
+  is kept in `settings/radar_state`, written in the same transaction as the queue, so a find is told once even
+  when the open app and the server look in the same minute (the second write is refused). Finds join the
+  watches' queue (`kind: radar`) and are listed in `radar_events` for the person. Many finds outside the
+  person's own stocks in one look are merged into one. The thresholds are the person's (`prefs()["radar"]`,
+  Settings → Assistant → Radar). It judges live prices only, so without a live feed it is silent; it never
+  raises into the look it is part of; it calls no model and sends nothing.
+- **The quick sort** (`assistant._sort`): when the only fresh events waiting are the radar's, a small model
+  (`SORT_MODEL`, Claude Haiku, no tools) is given the brief, the person's stocks and the finds, and answers
+  with the ones worth waking the trading model for. The others are marked `sorted: minor` in the queue: they
+  start no review (`autopilot_state` counts fresh events only), a short review is not handed them
+  (`wakes.take(only_fresh=True)`), and the next full review is told them. Its cost is recorded as the use
+  `sort`, and it runs only after the day's limit and the ceilings have let a review through. A watch, a sale by
+  the automation or a paper stop that was carried out is never sorted. An error or an unreadable answer wakes
+  the trading model: the sort can save a wake-up, never lose a find. `wakes.add` bounds the queue by dropping
+  minor finds first, then other radar finds, and only then what was asked for.
+  Tests: `backend/tests/test_radar.py`, and the queue on the deployed store in `test_postgres.py`.
 - **Alerts in the background**: the server's own look (`background.look`) checks the owner's alerts after the
   automation's look and before the review, so what fires can wake the review in that same look; fired alerts
   are pushed to the owner's devices from both the open app's check and the server's. With no device subscribed

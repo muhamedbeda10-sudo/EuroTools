@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import assistant, background, broker, orders, paper, push, real_auto, real_orders, self_trading, wakes, whats_new
+from . import assistant, background, broker, orders, paper, push, radar, real_auto, real_orders, self_trading, wakes, whats_new
 from .accounts import AccountError, Accounts
 from .assistant_prefs import PrefsError, PrefsIn, save_prefs
 from .config import Settings, get_settings
@@ -774,9 +774,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
 
         The owner's devices are told as well, so a phone hears of it when the app is open elsewhere. `wake`
         says an alert that wakes the assistant fired, so the page asks for its review straight away.
+
+        The radar takes its look at the same prices here (radar.py): what it finds by itself for the assistant
+        sets `wake` too, and `radar` says how many finds there were.
         """
         out = Extras(core).check_alerts()
         out["pushed"] = push.alerts(core, out["triggered"])["sent"] if out["triggered"] else 0
+        seen = radar.scan(core)
+        out.update(wake=bool(out["wake"] or seen["wake"]), radar=seen["events"])
         return out
 
     # ---- accounts --------------------------------------------------------
@@ -849,6 +854,12 @@ def create_app(settings: Settings | None = None, store: Store | None = None, you
     @api.get("/api/v1/assistant")
     def assistant_status(request: Request, core: App = Depends(get_core)):
         return assistant_state(core, assistant_model is not None and assistant_allowed(request, core))
+
+    @api.get("/api/v1/assistant/radar")
+    def assistant_radar(request: Request, core: App = Depends(get_core)):
+        """The radar: what it is set to, the stocks it watches closely, and what it found lately."""
+        assistant_ready(request, core)
+        return radar.view(core)
 
     @api.put("/api/v1/assistant/access")
     def assistant_access(request: Request, body: AssistantAccessIn, core: App = Depends(get_core)):

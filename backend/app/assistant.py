@@ -16,6 +16,8 @@ pending, and it resumes when the user answers.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import time
 import uuid
 from collections.abc import Iterator
@@ -23,7 +25,7 @@ from datetime import datetime, timedelta
 
 from pydantic import ValidationError
 
-from . import broker, orders, real_auto, real_orders, wakes
+from . import broker, orders, radar, real_auto, real_orders, wakes
 from .assistant_prefs import (
     ACCESS_LEVELS,
     AUTOPILOT_ACCOUNTS,
@@ -46,13 +48,14 @@ from .domain.backtest import BacktestError
 from .domain.ledger import LedgerError
 from .extras import Extras, alert_words
 from .llm import EFFORTS, AssistantError, AssistantModel, cost_usd
-from .services import App, NotFound, now_iso
+from .services import App, NotFound, now_iso, retry_conflict
 from .store.errors import ConflictError
 
 MAX_STEPS = 14            # model calls per user message
 MAX_SECONDS = 200.0       # leave room inside the host's time limit
 MAX_CHAT_BYTES = 600_000  # a conversation is one stored document; past this, start a new one
 MAX_MESSAGE_CHARS = 8000
+log = logging.getLogger("egx.assistant")
 DECLINED = "The user did not approve this action. Do not try it again unless they ask."
 
 SYSTEM_PROMPT = """You are the assistant built into EGX Intelligence, a personal workspace for analysing the Egyptian \
@@ -149,10 +152,21 @@ strategy signal or a time (kind time_at), with a note saying what to check when 
 the app then wakes you with a short review of that event alone, your note in front of you; without it, the user is \
 told. So when you are waiting for something, set a watch and stop: do not look again and again, and do not ask the \
 user to come back. A watch fires once; set a new one if you still need it.
+- The app also has a radar (Settings → Assistant → Radar), which watches without being asked. During the session it \
+goes over the live prices once a minute, in code: the user's own stocks closely (what the paper portfolio holds, the \
+watchlist and, for the brokerage account's owner, the real holdings and the automatic box) and, if they switched that \
+on, every other listed stock loosely. It looks for a sharp move on the day, volume far above the usual, a break of the \
+recent high or low, and a holding coming close to its stop-loss or take-profit. What it finds wakes you for a short \
+review in the schedules that wake you, after a small model has sorted what is worth waking you for; a brief marks \
+those lines "the radar saw", and the ones sorted as minor reach you at your next full review. It sees the market \
+once a minute, not every trade, and only with a live feed. `radar` shows its settings, the stocks it watches closely \
+and what it found lately. The user sets its thresholds; you cannot change them. So you need no watch for an ordinary \
+move in a stock that is theirs: keep your watches for the exact levels and times that only your reasoning knows.
 - What you cost and how far you go is the user's to set in Settings → Assistant, and you cannot change it: a daily and a \
 monthly spending ceiling (the screen shows what was spent today, this month and over the last week, and what you \
-were used for: the questions asked, your own reviews and the short ones a watch started, how many of each and what \
-they cost; `settings` gives you the same figures as `used`), which Claude model answers in a conversation and which \
+were used for: the questions asked, your own reviews, the short ones a watch or the radar started and the small \
+model's sorting of what the radar found, how many of each and what they cost; `settings` gives you the same figures \
+as `used`), which Claude model answers in a conversation and which \
 one runs the reviews you make by yourself (two separate choices under Model and cost, the first also in the list at \
 the bottom of this panel; a review's conversation stays on the second, the user's replies in it included; `settings` \
 gives both as `models`), the language you \
@@ -374,8 +388,9 @@ def spent_month(core: App) -> float:
 
 
 # What the assistant was used for: the questions someone asked it ("chat"), the reviews it makes by itself after
-# a close or by the clock ("review"), and the short ones the app wakes it for when a watch fires ("watch").
-USES = ("chat", "review", "watch")
+# a close or by the clock ("review"), the short ones the app wakes it for when a watch fires or the radar finds
+# something ("watch"), and the small model's quick sorting of what the radar found before anyone is woken ("sort").
+USES = ("chat", "review", "watch", "sort")
 
 
 def _used_for(chat: dict) -> str:
@@ -399,7 +414,7 @@ def _uses(doc: dict | None) -> tuple[dict, bool]:
     by = doc.get("by") or {}
     return ({"chat": {"n": 0, "usd": float(by.get("chat") or 0.0)},
              "review": {"n": int(doc.get("reviews") or 0), "usd": float(by.get("autopilot") or 0.0)},
-             "watch": {"n": 0, "usd": 0.0}}, not int(doc.get("calls") or 0))
+             "watch": {"n": 0, "usd": 0.0}, "sort": {"n": 0, "usd": 0.0}}, not int(doc.get("calls") or 0))
 
 
 def _add_uses(docs: list[dict]) -> tuple[dict, bool]:
@@ -517,15 +532,21 @@ def _record(core: App, chat: dict, model: str, usage: dict, opens: bool = False)
         total[key] = total.get(key, 0) + usage.get(key, 0)
     total["cost_usd"] = round(total.get("cost_usd", 0.0) + cost, 6)
     total["calls"] = total.get("calls", 0) + 1
+    kind = "autopilot" if chat.get("kind") == "autopilot" else "chat"
+    _charge(core, kind, _used_for(chat), cost, opens, review=kind == "autopilot" and opens)
+
+
+def _charge(core: App, kind: str, what: str, cost: float, opens: bool, *, review: bool = False) -> None:
+    """Add what one paid call cost to the day and the month, under what it was used for. `review` counts one more
+    review the assistant made by itself (a sort is its work too, but is not a review)."""
     day, doc = _usage_doc(core)
     month, sum_ = _month(core)   # stored, or added up from the days, which do not yet hold this call
     # read before this call is added: a record from before uses were counted is told from its older figures
     day_uses, month_uses = _uses(doc), _month_uses(core, month, sum_)
-    kind, what = "autopilot" if chat.get("kind") == "autopilot" else "chat", _used_for(chat)
     by = dict(doc.get("by") or {})
     by[kind] = round(float(by.get(kind) or 0.0) + cost, 6)
     doc.update(cost_usd=round(float(doc.get("cost_usd") or 0.0) + cost, 6), calls=int(doc.get("calls") or 0) + 1, by=by)
-    if kind == "autopilot" and opens:
+    if review:
         doc["reviews"] = int(doc.get("reviews") or 0) + 1   # a review is counted when its first call is paid for
     _count(doc, *day_uses, what, cost, opens)
     _count(sum_, *month_uses, what, cost, opens)
@@ -769,7 +790,8 @@ def autopilot_state(core: App) -> dict:
     latest = core.market.latest_settled()
     session = latest.strftime("%Y-%m-%d") if latest is not None else None
     due = None
-    waiting = len(wakes.pending(core)) if auto["mode"] != "off" else 0
+    # what still asks for a review: the radar's finds that were sorted as minor wait for the next full one
+    waiting = len(wakes.fresh(wakes.pending(core))) if auto["mode"] != "off" else 0
     if auto["mode"] != "off" and session:
         last = datetime.fromisoformat(auto["last_run"]) if auto["last_run"] else None
         since = (datetime.fromisoformat(now_iso()) - last).total_seconds() if last else None
@@ -923,6 +945,19 @@ def _watches(core: App, chosen: dict) -> list[str]:
                  + ("When it fires during the session the app wakes you with a short review of that event alone. " if woken else
                     "You are told of it at your next review. ")
                  + f"A watch fires once and is then off; switch off those that no longer matter. At most {wakes.MAX_WATCHES} at once.")
+    r = chosen["radar"]
+    if r["on"]:
+        lines.append(
+            "The app's radar is on as well: during the session it goes over the live prices once a minute without being asked. "
+            f"Your own stocks (the holdings, the watchlist, the automatic box) closely: a move of {r['move_pct']:g}% on the day and "
+            f"each further {r['move_pct']:g}%, volume {r['volume_x']:g} times the 20-session average, a break of the "
+            f"{radar.HIGH_MINE}-session high or low, a holding within {r['near_pct']:g}% of its stop-loss or take-profit. "
+            + (f"Every other listed stock loosely: a move of {r['market_move_pct']:g}%, volume {r['market_volume_x']:g} times the "
+               f"average while rising, a break of the {radar.HIGH_MARKET}-session high. " if r["market"] else
+               "The rest of the market is not watched. ")
+            + ("It wakes you for what stands out" + (", after a small model has sorted what is worth it" if r["triage"] else "")
+               + ". " if woken else "What it finds is told to your next review. ")
+            + "So set no watch for an ordinary move in those: keep your watches for the exact levels and times only you know.")
     return lines
 
 
@@ -985,6 +1020,10 @@ def _brief(core: App, chosen: dict, state: dict, events: list[dict] | None = Non
             "This is not a full review. Deal with what happened and nothing else: look up only what you need for it (usually "
             "that stock's report), act if the case you wrote down still holds and leave it alone if it does not.",
         ]
+        if any(e.get("kind") == "radar" for e in events):
+            lines.append("A line that begins “the radar saw” is something the app noticed by itself in the live prices: you did "
+                         "not ask to be told of it, and there is no note of yours behind it. Judge it against the mandate and the "
+                         "holdings: act where there is a case, and leave it where there is none.")
     else:
         lines = [
             "AUTOPILOT REVIEW. Nobody is reading this as you work: act on your own judgement inside the limits, and do not ask questions.",
@@ -1043,6 +1082,118 @@ def _brief(core: App, chosen: dict, state: dict, events: list[dict] | None = Non
     return "\n".join(lines)
 
 
+SORT_MODEL = "claude-haiku-5-5"   # the small model that sorts what the radar found: a fraction of a cent a look
+SORT_PROMPT = """You are the first, quick look at what a market radar found in the live prices of the Egyptian \
+Exchange, for a trading assistant that works by itself for the owner of a portfolio. Waking that assistant costs the \
+owner real money each time, and it may be woken only a few times in a day. So it is woken for what it can and should \
+act on now, and left alone otherwise.
+
+You are given the owner's mandate, the stocks that are theirs, and the radar's finds, numbered. Decide which finds \
+are worth waking the assistant for now.
+
+Worth it: a holding moving sharply against its owner, or coming close to its stop-loss, when a decision could still \
+change the outcome; a holding close to its take-profit or breaking out, when the mandate is about managing winners; a \
+stock the owner follows (the watchlist, the automatic box) giving the kind of entry the mandate asks for; a move in a \
+stock nobody holds only when it is exceptional, the mandate is open to new stocks and there is cash for one.
+Not worth it: ordinary noise; a move that an existing stop-loss or take-profit will deal with by itself, with nothing \
+to add; a stock the mandate rules out; several finds that say the same thing (keep the one that matters most); \
+anything the assistant could do nothing about.
+When in real doubt about a holding at risk, wake it. For a stock nobody holds, prefer not to.
+
+Answer with one JSON object and nothing else: {"wake": [the numbers of the finds worth waking for, possibly none], \
+"why": "one short sentence the owner will read"}."""
+SORT_WHY_IN = {"auto": "Write `why` in the language of the mandate, or in Egyptian Arabic if there is none.",
+               "ar": "Write `why` in Egyptian Arabic.", "en": "Write `why` in English."}
+
+
+def _sort_brief(core: App, chosen: dict, account: str, finds: list[dict]) -> str:
+    """What the small model is told: the mandate, the person's own stocks, what the assistant already watches,
+    and the finds. Short on purpose: it is read at every sort."""
+    auto = chosen["autopilot"]
+    done = auto["count"] if auto["day"] == cairo_now().date().isoformat() else 0
+    lines = [f"Cairo time {cairo_now():%Y-%m-%d %H:%M}. The assistant's reviews work on: "
+             + {"paper": "the paper portfolio only", "real": "the real brokerage account only",
+                "both": "the paper portfolio, and the real account when the mandate asks for real orders"}[account] + ".",
+             f"It has made {done} of the {auto['max_per_day']} reviews it may make today (one is kept for after the close).",
+             "", "The owner's mandate:", (auto["mandate"] or NO_MANDATE["real" if account == "real" else "paper"])[:1500], ""]
+    if account != "real":
+        s = core.portfolio()["summary"]
+        lines.append(f"Paper portfolio: total EGP {s['total_value']:,.2f}, cash EGP {s['cash']:,.2f}.")
+    own = radar.own_stocks(core, core.store.get(*radar.STATE) or {}, read=False)
+    lines.append("The owner's own stocks:" if own else "The owner holds and follows no stock.")
+    for symbol, e in sorted(own.items())[:40]:
+        levels = [f"stop-loss {price:g}" for _, price in e["stops"]] + [f"take-profit {price:g}" for _, price in e["targets"]]
+        lines.append(f"- {symbol}: {'; '.join(e['why'])}" + (f"; {', '.join(levels)}" if levels else ""))
+    watches = [a for a in Extras(core).alerts()["alerts"] if a.get("wake") and a["active"]]
+    if watches:
+        lines += ["", "Watches the assistant already has on (it is woken for these anyway):",
+                  *[f"- {alert_words(a)}" for a in watches[:wakes.MAX_WATCHES]]]
+    lines += ["", "The radar's finds:", *[f"{n}. {e.get('message')}" for n, e in enumerate(finds, 1)],
+              "", SORT_WHY_IN[chosen.get("language") or "auto"]]
+    return "\n".join(lines)
+
+
+def _sort_answer(text: str, count: int) -> tuple[list[int], str] | None:
+    """The small model's answer as (the finds to wake for, why); None when it cannot be read."""
+    found = re.search(r"\{.*\}", text or "", re.DOTALL)
+    try:
+        said = json.loads(found.group(0)) if found else None
+    except ValueError:
+        said = None
+    if not isinstance(said, dict) or not isinstance(said.get("wake"), list):
+        return None
+    try:
+        numbers = sorted({int(n) for n in said["wake"]})
+    except (TypeError, ValueError):
+        return None
+    if any(n < 1 or n > count for n in numbers):
+        return None
+    return numbers, " ".join(str(said.get("why") or "").split())[:300]
+
+
+def _sort(core: App, model: AssistantModel, chosen: dict, account: str) -> dict | None:
+    """Have the small model sort the radar's finds that wait. Returns {"why", "of"} when none of them is worth
+    waking the assistant for (they are then marked as minor and wait for the next full review), else None: wake it.
+
+    Only the radar's own finds are sorted. A watch the assistant or the person set, and a sale the app made, were
+    asked for or cannot wait: with one of those waiting, the assistant is woken and told everything. A sort that
+    fails or cannot be read wakes it too: a find is never dropped because the cheap look went wrong."""
+    waiting = wakes.fresh(wakes.pending(core))
+    if account == "paper":
+        waiting = [e for e in waiting if e.get("kind") != "real_exit"]
+    if not chosen["radar"]["triage"] or not waiting or any(e.get("kind") != "radar" for e in waiting):
+        return None
+    small = model.using(SORT_MODEL, "low") if hasattr(model, "using") else model
+    try:
+        final = None
+        for event in small.turn(system=SORT_PROMPT, tools=[], messages=[
+                {"role": "user", "content": [{"type": "text", "text": _sort_brief(core, chosen, account, waiting)}]}]):
+            if event["type"] == "final":
+                final = event["message"]
+    except AssistantError as exc:
+        log.warning("assistant: the radar's finds could not be sorted (%s)", str(exc)[:200])
+        return None
+    except Exception:  # noqa: BLE001 - the sort is a saving, never a reason to lose a find
+        log.exception("assistant: the radar's finds could not be sorted")
+        return None
+    cost = cost_usd(final["model"], final["usage"]) or 0.0
+    _charge(core, "autopilot", "sort", cost, True)
+    answer = _sort_answer("".join(b.get("text", "") for b in final["content"] if b.get("type") == "text"), len(waiting))
+    if answer is None:
+        radar.note_sort(core, waiting, waiting, "The sort's answer could not be read, so the assistant was woken.", final["model"], cost)
+        return None
+    numbers, why = answer
+    woke = [waiting[n - 1] for n in numbers]
+    minor = [e for n, e in enumerate(waiting, 1) if n not in numbers]
+    try:
+        if minor:
+            retry_conflict(wakes.mark_minor)(core, minor, why)
+    except ConflictError:
+        return None   # the queue moved under it twice: wake it rather than guess
+    radar.note_sort(core, waiting, woke, why, final["model"], cost)
+    return None if woke else {"why": why or "Nothing the radar found was worth waking the assistant for.", "of": len(waiting)}
+
+
 def run_autopilot(core: App, model: AssistantModel) -> dict:
     """Run one review if one is due. The claim is written first, so two open tabs cannot both run it."""
     state = autopilot_state(core)
@@ -1064,13 +1215,22 @@ def run_autopilot(core: App, model: AssistantModel) -> dict:
                        "in one day; the review after the close still runs" + (", and is told what the app saw meanwhile"
                                                                               if state["due"] == "event" else "")
                        + " (Settings → Assistant)."}
+    if state["due"] == "event":
+        # What woke it may be the radar's finds alone. A small model looks at those first: the model that trades is
+        # woken only for the ones worth it, and the rest wait, marked, for the next full review.
+        held = _sort(core, model, chosen, account)
+        if held:
+            return {"ran": False, **state, "due": None, "waiting": len(wakes.fresh(wakes.pending(core))),
+                    "skipped": "the radar's finds were sorted as minor", "why": held["why"], "sorted": held["of"]}
     try:
         with core.store.transaction():
             chat = new_chat(core, title=f"Autopilot · {'real account · ' if account == 'real' else ''}{cairo_now():%Y-%m-%d %H:%M}",
                             kind="autopilot", reason=state["due"])
             note_autopilot(core, last_run=now_iso(), last_chat=chat["id"], day=today, count=done + 1,
                            last_session=state["session"] if state["due"] == "close" else chosen["autopilot"]["last_session"])
-            events = wakes.take(core)   # what the app saw while watching for it: told to this review and to no other
+            # what the app saw while watching for it: told to this review and to no other. A short review is handed
+            # what woke it; the radar's finds that were sorted as minor stay for the next full one.
+            events = wakes.take(core, only_fresh=state["due"] == "event")
             if account == "paper":      # the real account is no part of this review, nor is what happened in it
                 events = [e for e in events if e.get("kind") != "real_exit"]
     except ConflictError:
