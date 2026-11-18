@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { CircleAlert, CircleCheck, Info, Landmark, Power, Sparkles } from "lucide-react";
+import { CircleAlert, CircleCheck, Info, Landmark, Power, Radar, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useApi } from "@/lib/useApi";
 import { useStatus } from "@/components/Shell";
-import { State } from "@/components/ui";
+import { Empty, State } from "@/components/ui";
 
 /** Fired on `window` when the assistant's settings were saved, so the background job re-reads them. */
 export const ASSISTANT_SETTINGS = "egx:assistant-settings";
@@ -22,8 +22,8 @@ const EFFORT: Record<string, string> = {
 /** When the autopilot reviews: the name, what it means, and whether it is the one to start with. */
 const SCHEDULE: Record<string, [string, string, boolean?]> = {
   after_close: ["After each close", "One review of the portfolio and the market after every completed session. The cheapest."],
-  events: ["When a watch fires", "The review after each close, plus a short one whenever something the app is watching for it happens: a level it set, a time, a stop-loss sold. The app does the watching at no cost.", true],
-  intraday: ["During the session too", "The review after each close, plus a check every so many minutes while the market is open, and a short one when a watch fires. The most thorough, and the most expensive."],
+  events: ["When something happens", "The review after each close, plus a short one whenever something the app is watching for it happens: a level it set, a time, a stop-loss sold, or what the radar below found in the live prices. The app does the watching at no cost.", true],
+  intraday: ["During the session too", "The review after each close, plus a check every so many minutes while the market is open, and a short one when a watch fires or the radar finds something. The most thorough, and the most expensive."],
 };
 /** What the autopilot works on by itself: the name and what it means. "off" is the autopilot switched off. */
 const TARGET: Record<string, [string, string]> = {
@@ -43,8 +43,17 @@ const LEVEL: Record<string, [string, string]> = {
   blocked: ["Not running", "warn"], proposals: ["On · real orders wait for your approval", "warn"], automatic: ["On · real orders are sent without you", "real"],
 };
 const usd = (v: unknown) => `$${Number(v ?? 0).toFixed(2)}`;
+/** The radar's thresholds: the field, what it is, its unit, and the range the server takes. */
+const RADAR: [string, string, string, number, number, number][] = [
+  ["radar_move_pct", "A move on the day, your stocks", "% (said again at each further step)", 1, 15, 0.5],
+  ["radar_volume_x", "Volume, your stocks", "times the 20-session average", 1.5, 20, 0.5],
+  ["radar_near_pct", "Close to a stop-loss or take-profit", "% away from the level", 0.5, 5, 0.5],
+  ["radar_market_move_pct", "A move on the day, the rest of the market", "%", 3, 20, 0.5],
+  ["radar_market_volume_x", "Volume, the rest of the market", "times the average, while rising", 2, 50, 0.5],
+];
 const NUMBERS = ["daily_usd", "monthly_usd", "max_trade_pct", "max_position_pct", "min_cash_pct", "max_trades_per_day", "autopilot_every_minutes",
-                 "real_proposals_per_day", "autopilot_max_per_day"];
+                 "real_proposals_per_day", "autopilot_max_per_day", ...RADAR.map(([k]) => k)];
+const cairo = (stamp?: string | null) => (stamp ? new Date(stamp).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" }) : "");
 
 /** How much of a ceiling is used. Without a ceiling there is nothing to fill. */
 function Used({ label, spent, limit }: { label: string; spent: number; limit: number }) {
@@ -61,7 +70,8 @@ function Used({ label, spent, limit }: { label: string; spent: number; limit: nu
 const USES: [string, string, string, string][] = [
   ["chat", "Questions you asked", "question", "Every message you sent it. The steps of one answer count as one question."],
   ["review", "Trading by itself", "review", "The reviews it makes by itself after a close and by the clock, with the trades it decides in them."],
-  ["watch", "Monitoring", "wake-up", "The short reviews it was woken for when something it watches happened. The watching itself is the app's work and costs nothing."],
+  ["watch", "Monitoring", "wake-up", "The short reviews it was woken for when something it watches happened or the radar found something. The watching itself is the app's work and costs nothing."],
+  ["sort", "Sorting what the radar found", "sort", "The small model's quick look at the radar's finds, to decide which are worth waking the assistant for. A fraction of a cent each."],
 ];
 const PERIODS: [string, string][] = [["today", "Today"], ["week", "Last 7 days"], ["month", "This month"]];
 
@@ -98,6 +108,46 @@ function Pick({ name, legend, value, options, onPick }: {
   );
 }
 
+/** What the radar found lately, and how each batch was sorted: read from the server when the page is, and after a save. */
+function RadarFinds({ stamp }: { stamp: string }) {
+  const { data, loading, error, reload } = useApi("/api/v1/assistant/radar");
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }   // the hook has just read it: read again only after a save
+    reload();
+  }, [stamp, reload]);
+  return (
+    <State loading={loading} error={error}>
+      {data && (
+        <>
+          <p className="foot-note" style={{ marginTop: 0 }}>
+            {data.standing}{" "}
+            {data.own.length ? <>Watched closely now: <span className="num">{data.own.join(", ")}</span>.</> : "No stock is yours to watch closely yet: hold one, or add one to the watchlist."}
+            {data.events.length ? " Newest first, in Cairo time." : ""}
+          </p>
+          {data.events.length ? (
+            <ul className="finds" aria-label="What the radar saw, newest first, and what became of it">
+              {data.events.map((e: any, i: number) => (
+                <li key={`${e.ts}-${i}`} className={e.type === "sort" ? "sorted" : ""}>
+                  <time className="num" dateTime={e.ts}>{cairo(e.ts)}</time>
+                  {e.type === "sort" ? (
+                    <div>
+                      <span className={`badge ${e.woke ? "paper" : ""}`}>{e.woke ? `woke the assistant for ${e.woke} of ${e.of}` : `sorted ${e.of}: nothing worth waking it for`}</span>{" "}
+                      <span className="muted" dir="auto">{e.why}</span>
+                    </div>
+                  ) : (
+                    <div>{e.symbol ? <Link href={`/stock?symbol=${e.symbol}`}>{e.message}</Link> : e.message}</div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : <Empty icon={Radar} title="Nothing found yet" left>During the session, what stands out in the live prices is listed here with what became of it.</Empty>}
+        </>
+      )}
+    </State>
+  );
+}
+
 const LIMITS: [string, string, string, number, number][] = [
   ["max_trade_pct", "Largest single trade", "% of the portfolio", 1, 100],
   ["max_position_pct", "Largest holding in one stock", "% of the portfolio", 1, 100],
@@ -120,7 +170,8 @@ export default function AssistantSettings() {
     const d = { model: s.model, trading_model: s.trading_model ?? "same", effort: s.effort, access: s.access, daily_usd: s.daily_usd, monthly_usd: s.monthly_usd,
                 language: s.language, instructions: s.instructions, real_proposals_per_day: s.real_proposals_per_day, ...s.limits,
                 autopilot_mode: s.autopilot.mode, autopilot_account: s.autopilot.account ?? "both", autopilot_every_minutes: s.autopilot.every_minutes,
-                autopilot_mandate: s.autopilot.mandate, autopilot_max_per_day: s.autopilot.max_per_day, autopilot_notify: s.autopilot.notify };
+                autopilot_mandate: s.autopilot.mandate, autopilot_max_per_day: s.autopilot.max_per_day, autopilot_notify: s.autopilot.notify,
+                ...Object.fromEntries(Object.entries(s.radar ?? {}).map(([k, v]) => [`radar_${k}`, v])) };
     if (d.autopilot_mode !== "off") lastMode.current = d.autopilot_mode;
     setDraft(d);
     setSaved(JSON.stringify(d));
@@ -252,6 +303,7 @@ export default function AssistantSettings() {
                       {r.state === "ok" ? <CircleCheck size={16} aria-label="In place" /> : r.state === "missing" ? <CircleAlert size={16} aria-label="To do" /> : <Info size={16} aria-label="Good to know" />}
                       <div><strong>{r.title}</strong><span>{r.detail}</span></div>
                       {r.state !== "ok" && r.fix === "access" && <button className="small do" disabled={busy} onClick={() => save({ access: "full" })}>Give Full access</button>}
+                      {r.state !== "ok" && r.fix === "radar" && <button className="small do" disabled={busy} onClick={() => save({ radar_on: true })}>Switch the radar on</button>}
                       {r.state !== "ok" && r.href && <Link className="btn small do" href={r.href}>Set up</Link>}
                     </li>
                   ))}
@@ -262,6 +314,50 @@ export default function AssistantSettings() {
                 </p>
               </>
             )}
+          </div>
+
+          <div className="card" id="as-radar" style={{ scrollMarginTop: 76 }}>
+            <div className="card-head"><h2>Radar</h2>
+              <span className={`badge ${!draft.radar_on ? "" : !on ? "warn" : "ok"}`}>{!draft.radar_on ? "off" : !on ? "waits for a schedule" : draft.autopilot_mode === "after_close" ? "on · tells the next review" : "on · wakes it"}</span></div>
+            <p className="lead">
+              The app watches the live prices for the assistant by itself: once a minute during the session, in code and at no cost. It looks for a sharp move,
+              unusual volume, a break of the recent high or low, and a holding coming close to its stop-loss or take-profit. What stands out wakes the assistant
+              for a short review, inside the most reviews in one day you set above. It sees the market once a minute, not every trade, and only with the live feed.
+            </p>
+            <label className="check" style={{ marginBottom: 14 }}>
+              <input type="checkbox" checked={!!draft.radar_on} onChange={(e) => set({ radar_on: e.target.checked })} />
+              <span>Watch the live prices for the assistant</span>
+            </label>
+            {draft.radar_on && (
+              <>
+                <Pick name="as-radar-scope" legend="What it watches" value={draft.radar_market ? "market" : "mine"} onPick={(v) => set({ radar_market: v === "market" })}
+                  options={[
+                    { value: "market", title: "My stocks and the whole market", about: "Your own stocks closely, and every other listed stock loosely: only what is large enough to be an opportunity, or a sign that the market itself is moving.", badge: <span className="badge paper">recommended</span> },
+                    { value: "mine", title: "My stocks only", about: "What you hold, the watchlist and, for the brokerage account's owner, the real holdings and the automatic box. The fewest wake-ups." },
+                  ]} />
+                <label className="check">
+                  <input type="checkbox" checked={!!draft.radar_triage} aria-describedby="as-radar-sort-about" onChange={(e) => set({ radar_triage: e.target.checked })} />
+                  <span>Have a small model sort the finds first</span>
+                </label>
+                <p className="foot-note" id="as-radar-sort-about" style={{ margin: "6px 0 14px" }}>
+                  Claude Haiku looks at what the radar found, with your brief and your holdings, and wakes the model that trades only for what is worth it. A fraction of a
+                  cent a look; what it sets aside is still told to the next full review. Without it every find wakes the model that trades.
+                </p>
+                <h3 className="sec">How much it takes to be told</h3>
+                <div className="grid cols-4">
+                  {RADAR.filter(([key]) => draft.radar_market || !key.includes("market")).map(([key, label, unit, min, max, step]) => (
+                    <div className="field" key={key}>
+                      <label htmlFor={`as-${key}`}>{label}</label>
+                      <input id={`as-${key}`} type="number" min={min} max={max} step={step} value={draft[key]} aria-describedby={`as-${key}-unit`} onChange={(e) => set({ [key]: e.target.value })} />
+                      <p className="foot-note" id={`as-${key}-unit`} style={{ marginTop: 6 }}>{unit}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="foot-note">A break of the 20-session high or low is told for your stocks, and of the 60-session high for the rest of the market. Each is said once in a session. Lower figures mean more wake-ups.</p>
+              </>
+            )}
+            <h3 className="sec">What it found lately</h3>
+            <RadarFinds stamp={saved} />
           </div>
 
           <div className="card">
@@ -394,8 +490,8 @@ export default function AssistantSettings() {
               <div className="note info" style={{ marginBottom: 0 }}>
                 <strong>What a day of the autopilot can cost.</strong>{" "}
                 {spend.autopilot.mode === "events"
-                  ? <>The schedule saved now runs one review after the close, and a short one each time something it watches for happens: at most {spend.autopilot.reviews_at_most} a day in all.</>
-                  : <>The schedule saved now runs at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day by the clock{spend.autopilot.reviews_at_most > spend.autopilot.reviews_a_day ? <>, and up to {spend.autopilot.reviews_at_most} when its watches wake it too</> : null}.</>}{" "}
+                  ? <>The schedule saved now runs one review after the close, and a short one each time something it watches for happens or the radar finds something worth it: at most {spend.autopilot.reviews_at_most} a day in all.</>
+                  : <>The schedule saved now runs at most {spend.autopilot.reviews_a_day} review{spend.autopilot.reviews_a_day === 1 ? "" : "s"} a day by the clock{spend.autopilot.reviews_at_most > spend.autopilot.reviews_a_day ? <>, and up to {spend.autopilot.reviews_at_most} when its watches and the radar wake it too</> : null}.</>}{" "}
                 {spend.autopilot.reviews_asked > spend.autopilot.reviews_a_day && <>It asks for about {spend.autopilot.reviews_asked}, and your limit for one day holds the rest back: the last checks of the session will not run (the review after the close always does).{" "}</>}
                 {spend.autopilot.review_usd != null
                   ? <>{spend.autopilot.reviews_counted === 1 ? "Your one review this week cost" : `Your ${spend.autopilot.reviews_counted} reviews this week cost on average`} about {usd(spend.autopilot.review_usd)}
@@ -421,13 +517,13 @@ export default function AssistantSettings() {
                     ))}
                   </div>
                 </div>
-                <div className="grid cols-3" aria-live="polite">
+                <div className="grid cols-4" aria-live="polite">
                   {USES.map(([k, title, unit, about]) => (
                     <Use key={k} title={title} unit={unit} about={about} n={Number(use[k]?.n ?? 0)} cost={Number(use[k]?.usd ?? 0)} of={useCost} />
                   ))}
                 </div>
                 <p className="foot-note">
-                  {period === "today" && ran && ran.mode !== "off" && <>By itself today: {Number(use.review.n) + Number(use.watch.n)} of at most {ran.max_per_day} review{ran.max_per_day === 1 ? "" : "s"} in one day. </>}
+                  {period === "today" && ran && ran.mode !== "off" && <>By itself today: {Number(use.review.n) + Number(use.watch.n)} of at most {ran.max_per_day} review{ran.max_per_day === 1 ? "" : "s"} in one day (a sort is not a review). </>}
                   {!use.whole && <>Part of this period is from before these were counted: its questions are in the cost but not in the number, and its wake-ups are counted with the reviews. </>}
                   A question or a review is counted when the assistant starts working on it; the cost is an estimate, as above.
                 </p>

@@ -38,7 +38,7 @@ def test_it_says_what_is_missing_for_the_paper_portfolio_step_by_step(tmp_path, 
     with desk(tmp_path, monkeypatch, Script([]), owner=False) as c:
         st, rows = told(c)
         assert st["level"] == "off" and rows["schedule"]["state"] == "missing" and st["missing"] == 1
-        assert set(rows) == {"schedule", "access", "budget", "closed"}             # nothing about real money for anyone else
+        assert set(rows) == {"schedule", "access", "budget", "closed", "radar"}    # nothing about real money for anyone else
 
         choose(c, autopilot_mode="events", access="confirm")
         st, rows = told(c)

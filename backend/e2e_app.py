@@ -85,10 +85,11 @@ def _now():
 
 import app.assistant as _assistant  # noqa: E402
 import app.background as _background  # noqa: E402
+import app.radar as _radar  # noqa: E402
 
-for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto, _background, _assistant):
+for _module in (_calendar, _feed, _market, _services, _broker, _real_orders, _real_auto, _background, _assistant, _radar):
     _module.cairo_now = _now
-for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker, _background, _assistant):
+for _module in (_feed, _services, _main, _market, _real_orders, _real_auto, _broker, _background, _assistant, _radar):
     _module.market_open = lambda *a, **k: True
 
 _younit = MovingYounit()
@@ -112,6 +113,10 @@ class StandInModel:
 
     def turn(self, *, system, tools, messages):
         text = "This is the local stand-in for the assistant: no model is behind it here."
+        if not tools:   # the radar's quick sort: every other batch of finds is passed on, so both outcomes can be seen
+            StandInModel.sorts = getattr(StandInModel, "sorts", 0) + 1
+            text = json.dumps({"wake": [1] if StandInModel.sorts % 2 else [],
+                               "why": "Stand-in sort: no model looked at this."})
         yield {"type": "text", "text": text}
         yield {"type": "final", "message": {
             "content": [{"type": "text", "text": text}], "tool_calls": [], "model": self.name, "refusal_category": None,

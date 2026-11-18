@@ -11,6 +11,11 @@ having the assistant look again every so many minutes, it can leave the watching
 - The automation's own way out of a real position (a stop-loss or take-profit sale it sent) is queued the
   same way, so the assistant hears that the position is going. Not when the owner set the autopilot to the
   paper portfolio only: the real account is then none of a review's business, and waking it would cost for nothing.
+- A stop-loss or take-profit the app carried out on the paper portfolio is queued too, unless the autopilot is set
+  to the real account only.
+- What the radar found by itself in the live prices (radar.py) joins the same queue, marked `radar`. Those are
+  sorted first by a small, cheap model (assistant.py): the ones it judges minor stay in the queue marked so, start
+  no review of their own, and are told to the next full review as what the app saw meanwhile.
 
 Nothing here calls the model or sends an order: it only remembers what happened until a review reads it.
 """
@@ -50,18 +55,60 @@ def listening(core: App) -> bool:
     return prefs(core)["autopilot"]["mode"] != "off"
 
 
+def minor(event: dict) -> bool:
+    """Whether the quick sort judged a find of the radar's not worth a review of its own."""
+    return event.get("sorted") == "minor"
+
+
+def fresh(events: list[dict]) -> list[dict]:
+    """What still asks for a review: everything but the radar's finds that were sorted as minor."""
+    return [e for e in events if not minor(e)]
+
+
+def _bounded(events: list[dict]) -> list[dict]:
+    """The queue at its most. What gives way first is what matters least: a find sorted as minor, then any other
+    find of the radar's, and only then the oldest of what the assistant or the person asked to be told."""
+    events = list(events)
+    for least in (minor, lambda e: e.get("kind") == "radar", lambda e: True):
+        while len(events) > MAX_PENDING:
+            n = next((i for i, e in enumerate(events) if least(e)), None)
+            if n is None:
+                break
+            del events[n]
+    return events
+
+
 def add(core: App, events: list[dict]) -> None:
     """Queue what happened. Called inside the caller's own unit of work, so it is kept or dropped with it."""
     if events:
-        core.store.put(*QUEUE, {"pending": [*pending(core), *events][-MAX_PENDING:]})
+        core.store.put(*QUEUE, {"pending": _bounded([*pending(core), *events])})
 
 
-def take(core: App) -> list[dict]:
-    """What waits, handed to the review that claims it: called inside the claim, so two reviews never both get it."""
+def take(core: App, *, only_fresh: bool = False) -> list[dict]:
+    """What waits, handed to the review that claims it: called inside the claim, so two reviews never both get it.
+
+    `only_fresh` is for the short review an event starts: it is handed what woke it, and the radar's finds that
+    were sorted as minor stay where they are for the next full review."""
     waiting = pending(core)
-    if (core.store.get(*QUEUE) or {}).get("pending"):
-        core.store.put(*QUEUE, {"pending": []})   # the stale ones go with it
-    return waiting
+    handed = fresh(waiting) if only_fresh else waiting
+    kept = [e for e in waiting if minor(e)] if only_fresh else []
+    if ((core.store.get(*QUEUE) or {}).get("pending") or []) != kept:
+        core.store.put(*QUEUE, {"pending": kept})   # the stale ones go with it
+    return handed
+
+
+def mark_minor(core: App, events: list[dict], why: str) -> int:
+    """The quick sort judged these finds of the radar's minor: they stay in the queue, marked, and start no review."""
+    def same(a: dict, b: dict) -> bool:
+        return all(a.get(k) == b.get(k) for k in ("ts", "kind", "symbol", "message"))
+    waiting, done = pending(core), 0
+    for e in waiting:
+        if not minor(e) and any(same(e, x) for x in events):
+            e.update(sorted="minor", sorted_why=str(why or "")[:200])
+            done += 1
+    if done:
+        core.store.put(*QUEUE, {"pending": waiting})
+    return done
 
 
 def give_back(core: App, events: list[dict]) -> None:
@@ -99,6 +146,24 @@ def note_exits(core: App, result: dict) -> int:
         return 0
 
 
+def note_paper_fills(core: App, filled: list[dict]) -> int:
+    """A stop-loss or take-profit the app carried out on the paper portfolio is queued for the assistant, when
+    events wake it and its reviews have the paper portfolio in them. Never raises: it runs after the sale is
+    written, and must not undo or hide it."""
+    try:
+        chosen = prefs(core)
+        if not filled or chosen["autopilot"]["mode"] not in WOKEN or chosen["autopilot"]["account"] == "real":
+            return 0
+        events = [{"ts": now_iso(), "kind": "paper_exit", "symbol": o["symbol"], "note": "",
+                   "message": f"The app carried out an order of the paper portfolio's by itself: {o['message']}"}
+                  for o in filled]
+        retry_conflict(add)(core, events)
+        return len(events)
+    except Exception:  # noqa: BLE001
+        log.exception("wakes: the paper portfolio's fills could not be queued for the assistant")
+        return 0
+
+
 def lines(events: list[dict]) -> list[str]:
     """What happened, one line each, for the assistant's brief."""
     out = []
@@ -108,5 +173,9 @@ def lines(events: list[dict]) -> list[str]:
         except (KeyError, TypeError, ValueError):
             when = "a moment ago"
         note = f" Your note when you set it: “{e['note']}”" if e.get("note") else ""
-        out.append(f"- {when}: {e.get('message') or e.get('kind')}.{note}")
+        by = "the radar saw: " if e.get("kind") == "radar" else ""
+        text = str(e.get("message") or e.get("kind")).rstrip(".")
+        sort = (f" (a quick sort judged this minor{': ' + e['sorted_why'].rstrip('.') if e.get('sorted_why') else ''})"
+                if minor(e) else "")
+        out.append(f"- {when}: {by}{text}{sort}.{note}")
     return out

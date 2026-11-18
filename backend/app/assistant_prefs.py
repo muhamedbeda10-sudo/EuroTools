@@ -29,6 +29,15 @@ DEFAULT_AUTOPILOT = {"mode": "off", "account": "both", "every_minutes": 30, "man
                      # the most reviews in one day, whether to tell the owner's devices after one that changed something,
                      # and how many ran on which day
                      "max_per_day": 12, "notify": True, "day": None, "count": 0}
+# The radar (radar.py): the app's own watching of the live prices for the assistant, which nobody has to ask for.
+# `market` widens it from the stocks the person holds or follows to every listed stock, with the wider thresholds.
+# The thresholds: a day's move in percent, volume as a multiple of the 20-session average, and how close (percent)
+# a holding may come to its stop-loss or take-profit before it is said. `triage` has a small, cheap model sort what
+# the radar found before the model that trades is woken for it.
+DEFAULT_RADAR = {"on": True, "market": True, "triage": True, "move_pct": 3.0, "market_move_pct": 7.0,
+                 "volume_x": 2.0, "market_volume_x": 4.0, "near_pct": 1.5}
+RADAR_RANGES = {"move_pct": (1.0, 15.0), "market_move_pct": (3.0, 20.0), "volume_x": (1.5, 20.0),
+                "market_volume_x": (2.0, 50.0), "near_pct": (0.5, 5.0)}
 LANGUAGES = ("auto", "ar", "en")
 # The model for the reviews the assistant makes by itself, when none was chosen for them: whatever the conversations use.
 # That is how it worked before the two could be chosen apart, so a setting saved before then means what it meant.
@@ -69,6 +78,14 @@ class PrefsIn(BaseModel):
     autopilot_account: Literal["paper", "real", "both"] | None = None
     autopilot_every_minutes: int | None = Field(default=None, ge=15, le=240)
     autopilot_mandate: str | None = Field(default=None, max_length=4000)
+    radar_on: bool | None = None
+    radar_market: bool | None = None
+    radar_triage: bool | None = None
+    radar_move_pct: float | None = Field(default=None, ge=1, le=15)
+    radar_market_move_pct: float | None = Field(default=None, ge=3, le=20)
+    radar_volume_x: float | None = Field(default=None, ge=1.5, le=20)
+    radar_market_volume_x: float | None = Field(default=None, ge=2, le=50)
+    radar_near_pct: float | None = Field(default=None, ge=0.5, le=5)
 
     @field_validator("model")
     @classmethod
@@ -96,6 +113,14 @@ def prefs(core: App) -> dict:
     autopilot = {**DEFAULT_AUTOPILOT, **{k: v for k, v in (doc.get("autopilot") or {}).items() if k in DEFAULT_AUTOPILOT}}
     if autopilot["account"] not in AUTOPILOT_ACCOUNTS:
         autopilot["account"] = DEFAULT_AUTOPILOT["account"]
+    radar = dict(DEFAULT_RADAR)
+    for key, value in (doc.get("radar") or {}).items():
+        if key in RADAR_RANGES:
+            low, high = RADAR_RANGES[key]
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high:
+                radar[key] = float(value)
+        elif key in radar and isinstance(value, bool):
+            radar[key] = value
     return {
         "access": doc.get("access") if doc.get("access") in ACCESS_LEVELS else "full",
         "model": model, "effort": effort,
@@ -107,6 +132,7 @@ def prefs(core: App) -> dict:
         "real_proposals_per_day": int(proposals) if isinstance(proposals, int) and 0 <= proposals <= 50 else DEFAULT_REAL_PROPOSALS,
         "limits": {**DEFAULT_LIMITS, **{k: v for k, v in (doc.get("limits") or {}).items() if k in DEFAULT_LIMITS}},
         "autopilot": autopilot,
+        "radar": radar,
     }
 
 
@@ -158,6 +184,13 @@ def save_prefs(core: App, change: PrefsIn) -> dict:
                            ("mandate", "autopilot_mandate"), ("max_per_day", "autopilot_max_per_day"), ("notify", "autopilot_notify")):
             if field in given:
                 current["autopilot"][key] = given[field].strip() if key == "mandate" else given[field]
+        for key in DEFAULT_RADAR:
+            if f"radar_{key}" in given:
+                current["radar"][key] = given[f"radar_{key}"]
+        if current["radar"]["market_move_pct"] < current["radar"]["move_pct"]:
+            raise PrefsError("The radar's move for the rest of the market cannot be smaller than the one for your own stocks.")
+        if current["radar"]["market_volume_x"] < current["radar"]["volume_x"]:
+            raise PrefsError("The radar's volume level for the rest of the market cannot be smaller than the one for your own stocks.")
         core.store.put("settings", "assistant", current)
         core.audit("update", "assistant_settings", {k: v for k, v in given.items() if k not in ("autopilot_mandate", "instructions")})
     return current

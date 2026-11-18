@@ -34,7 +34,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import broker, orders, paper, real_auto, real_orders, wakes
+from . import broker, orders, paper, radar, real_auto, real_orders, wakes
 from .assistant_prefs import check_trade, model_for, prefs
 from .data.calendar import cairo_now, market_open
 from .domain import indicators as ind
@@ -622,6 +622,10 @@ def _alerts(core: App, a: NoArgs) -> dict:
     return {"alerts": out["alerts"], "recent_events": out["events"][:15], "kinds": ALERT_KINDS}
 
 
+def _radar(core: App, a: NoArgs) -> dict:
+    return radar.view(core)
+
+
 class SaveAlert(Args):
     id: str | None = Field(default=None, max_length=40, description="Give it to change an existing alert")
     kind: Literal["price_above", "price_below", "change_pct_above", "change_pct_below", "volume_ratio_above",
@@ -771,7 +775,9 @@ def _settings(core: App, a: NoArgs) -> dict:
                           "real_proposals_per_day": own["real_proposals_per_day"],
                           "autopilot": {k: auto[k] for k in ("mode", "account", "every_minutes", "max_per_day", "notify", "last_run")},
                           # what was spent, and on what: questions asked (chat), the reviews you make by yourself
-                          # (review) and the short ones a watch started (watch), each a number and its cost in USD
+                          # (review), the short ones a watch or the radar started (watch) and the small model's sorting
+                          # of what the radar found (sort), each a number and its cost in USD
+                          "radar": own["radar"],
                           "used": {"today_usd": spend["today_usd"], "month_usd": spend["month_usd"], **spend["use"]},
                           "trading_by_itself": self_trading.report(core, spend)}}
 
@@ -1135,6 +1141,12 @@ TOOLS: list[Tool] = [
          SaveAlert, _save_alert, kind="write",
          label=lambda a: (f"{'Set a watch' if a.wake_me else 'Save an alert'}"
                           f"{f' on {a.symbol.upper()}' if a.symbol else ''}")),
+    Tool("radar", "The app's radar, which watches the live prices for you without being asked: its `settings` (on or off, "
+         "whether it covers the whole market, the thresholds, whether a small model sorts its finds first), `standing` (what it "
+         "is doing now), `own` (the stocks it watches closely) and `events`, newest first: each find, and how each batch of "
+         "finds was sorted (how many of them woke you, and why). Read it when asked what the radar saw, why you were or were "
+         "not woken, or how the radar is set. The user changes it in Settings → Assistant → Radar; you cannot.", NoArgs, _radar,
+         label=lambda a: "Reading the radar"),
     Tool("research", "The research and news items the user saved, filtered by stock, text or category.", Research, _research,
          label=lambda a: "Reading saved research"),
     Tool("save_research", "Save or change a research or news item, linked to stocks and sectors.", SaveResearch,
@@ -1149,8 +1161,8 @@ TOOLS: list[Tool] = [
          "the market-data feed and data quality. Also your own settings as the user saved them in Settings → Assistant "
          "(access, limits, ceilings, the autopilot's schedule and account, and `models`: which Claude model answers in a "
          "conversation and which one runs the reviews you make by yourself), `used`: what you were used for today, over the "
-         "last seven days and this month (questions asked, your own reviews, the short reviews a watch started: how many "
-         "of each and what they cost in USD), and `trading_by_itself`: what is in place for "
+         "last seven days and this month (questions asked, your own reviews, the short reviews a watch or the radar started, "
+         "the small model's sorting of what the radar found: how many of each and what they cost in USD), and `trading_by_itself`: what is in place for "
          "you to trade by yourself and what is still missing, each with where the user sets it. Read it when asked why "
          "you did or did not act by yourself, how to set that up, which model is in use, or how much you were used and what "
          "it cost.", NoArgs, _settings,

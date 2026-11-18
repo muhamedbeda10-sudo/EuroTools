@@ -335,7 +335,12 @@ def test_every_tool_works_on_real_service_calls(tmp_path):
     assert run("audit_log", limit=5)["entries"]
     refs = run("knowledge")["references"]
     assert refs[0]["name"] == "app-guide" and "How EGX Intelligence works" in refs[0]["title"] and refs[0]["sections"] >= 6
-    assert "Accounting rules" in run("knowledge", name="app-guide")["text"]
+    # the guide has grown past what one answer carries: its outline comes back, and the sections are read by number
+    guide = run("knowledge", name="app-guide")
+    titles = [part["title"] for part in guide["outline"]]
+    assert "text" not in guide and "Accounting rules" in titles and any(t.startswith("The radar") for t in titles)
+    rules = run("knowledge", name="app-guide", sections=[titles.index("Accounting rules") + 1])["sections"][0]
+    assert rules["title"] == "Accounting rules" and "Average cost" in rules["text"]
     assert run("knowledge", name="App-Guide.md", sections=[2])["sections"][0]["title"] == "Screens"
     assert run("knowledge", query="fee schedule placeholder")["matches"][0]["title"] == "Accounting rules"
     # the trading references: each has a title and a summary to choose by, and its sections can be read and searched

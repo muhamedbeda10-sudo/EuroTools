@@ -112,8 +112,8 @@ export default function Alerts() {
             {draft.wake && (
               <p className="foot-note" style={{ marginTop: 6 }}>
                 {wakes ? "During the session the assistant then makes a short review of this event alone, with your note in front of it. That review costs what a review costs; the watching costs nothing."
-                  : mode === "after_close" ? "Your autopilot reviews after the close only, so the assistant is told of this at that review, not at the moment. Choose “When a watch fires” in Settings → Assistant to have it woken at once."
-                  : "Your autopilot is off, so nothing wakes the assistant: you are told, as with any alert. Switch the autopilot to “When a watch fires” in Settings → Assistant."}
+                  : mode === "after_close" ? "Your autopilot reviews after the close only, so the assistant is told of this at that review, not at the moment. Choose “When something happens” in Settings → Assistant to have it woken at once."
+                  : "Your autopilot is off, so nothing wakes the assistant: you are told, as with any alert. Switch the autopilot to “When something happens” in Settings → Assistant."}
                 {" "}It fires once and is then switched off.
               </p>
             )}

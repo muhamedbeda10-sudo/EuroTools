@@ -4,8 +4,9 @@ Automatic real orders (real_auto.py) run from the owner's open app. This module 
 happen with the app closed. A timer on the hosting platform calls one address every minute during
 the session (`vercel.json`, `crons`); the server then does what the open app would have done: reads
 the live prices, takes the automation's look, carries out the paper portfolio's stop-losses and
-take-profits and brings its automatic runs up to date, runs the assistant's review when one is due, and
-tells the owner's devices what happened (push.py).
+take-profits and brings its automatic runs up to date, checks the alerts and lets the radar go over the
+prices for the assistant (radar.py), runs the assistant's review when one is due, and tells the owner's
+devices what happened (push.py).
 
 Whose hands the server works with
     The API holds no database credentials: every request reads and writes the signed-in person's own
@@ -46,7 +47,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import assistant, orders, paper, push, real_auto, real_orders, wakes
+from . import assistant, orders, paper, push, radar, real_auto, real_orders, wakes
 from .config import Settings
 from .data.calendar import cairo_now, is_trading_day, market_open
 from .extras import Extras
@@ -308,6 +309,9 @@ def _alerts(core: App, out: dict, pushed: dict) -> None:
     except Exception as exc:  # noqa: BLE001
         log.exception("background: the alerts could not be checked")
         out["alerts"] = {"problem": type(exc).__name__}
+    # The radar's own look at the same prices: what it finds is queued for the review that follows in this look.
+    seen = radar.scan(core)
+    out["radar"] = {"events": seen["events"], **({} if seen["ran"] else {"why": seen["why"]})}
 
 
 def _paper(core: App, out: dict, pushed: dict) -> None:

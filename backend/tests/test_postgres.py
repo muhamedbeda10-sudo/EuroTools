@@ -317,3 +317,36 @@ def test_the_schema_is_brought_up_to_date_once_and_a_server_that_starts_later_fi
         assert seen == []
     finally:
         later.close()
+
+
+def test_the_radars_notes_and_queue_hold_on_the_deployed_store(db, uid):
+    """What the radar writes at a look goes together, and two looks in the same moment do not both tell a find."""
+    from types import SimpleNamespace
+
+    from app import radar, wakes
+    from app.services import now_iso
+    from app.store.errors import ConflictError
+    finds = [{"ts": now_iso(), "kind": "radar", "symbol": s, "message": f"{s} is at 1: down 3.0% today"} for s in ("COMI", "TMGH")]
+    browser, timer = SimpleNamespace(store=store(db, uid)), SimpleNamespace(store=store(db, uid))
+    assert browser.store.get(*radar.STATE) is None and timer.store.get(*radar.STATE) is None   # both looked before either wrote
+    with timer.store.transaction():
+        timer.store.put(*radar.STATE, {"session": "2026-11-17", "seen": {"COMI|down": 1, "TMGH|down": 1}})
+        wakes.add(timer, finds)
+        for e in finds:
+            timer.store.append(radar.LOG, {**e, "type": "find"})
+    with pytest.raises(ConflictError), browser.store.transaction():
+        browser.store.put(*radar.STATE, {"session": "2026-11-17", "seen": {"COMI|down": 1}})
+        wakes.add(browser, finds[:1])
+    later = SimpleNamespace(store=store(db, uid))
+    assert [e["symbol"] for e in wakes.pending(later)] == ["COMI", "TMGH"]              # each find once
+    assert [e["symbol"] for e in later.store.recent(radar.LOG, 5)] == ["TMGH", "COMI"]
+    # the quick sort marks one as minor: it stays for the next full review, and a short review is handed the other
+    assert wakes.mark_minor(later, finds[:1], "noise") == 1
+    short = SimpleNamespace(store=store(db, uid))
+    with short.store.transaction():
+        assert [e["symbol"] for e in wakes.take(short, only_fresh=True)] == ["TMGH"]
+    full = SimpleNamespace(store=store(db, uid))
+    with full.store.transaction():
+        handed = wakes.take(full)
+    assert [(e["symbol"], wakes.minor(e), e["sorted_why"]) for e in handed] == [("COMI", True, "noise")]
+    assert wakes.pending(SimpleNamespace(store=store(db, uid))) == []
